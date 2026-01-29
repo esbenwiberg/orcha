@@ -6,6 +6,7 @@
 import { Command } from 'commander'
 import { StatusMonitor } from '../core/index.js'
 import { formatStatus } from './format.js'
+import { startMcpServer } from '../mcp/index.js'
 
 const program = new Command()
 
@@ -101,6 +102,29 @@ program
 
     console.log('\nDemo running. Edit files in /tmp/orcha/agents/ to see changes.')
     console.log('Press Ctrl+C to exit.')
+  })
+
+program
+  .command('mcp')
+  .description('Start the MCP server (for AI agent status reporting)')
+  .action(async () => {
+    await startMcpServer()
+  })
+
+program
+  .command('mcp-config')
+  .description('Output MCP server configuration for claude_desktop_config.json')
+  .action(() => {
+    const config = {
+      mcpServers: {
+        orcha: {
+          command: 'orcha-mcp',
+          args: [],
+        },
+      },
+    }
+    console.log(JSON.stringify(config, null, 2))
+    console.log('\nAdd the "orcha" entry to your claude_desktop_config.json mcpServers section.')
   })
 
 program.parse()
