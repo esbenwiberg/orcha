@@ -2,8 +2,9 @@
  * Status formatting for CLI output
  */
 
-import type { SessionStatus, SessionState } from '../core/types.js'
+import type { SessionStatus, SessionState, SessionMode } from '../core/types.js'
 import { STATE_ICONS } from '../core/types.js'
+import type { SessionMetadata } from '../core/session-store.js'
 
 // ANSI color codes
 const colors = {
@@ -42,8 +43,19 @@ function padRight(str: string, len: number): string {
   return str.length >= len ? str.slice(0, len) : str + ' '.repeat(len - str.length)
 }
 
-export function formatStatus(statuses: Map<string, SessionStatus>): string {
+export function formatStatus(
+  statuses: Map<string, SessionStatus>,
+  metadata?: SessionMetadata[]
+): string {
   const lines: string[] = []
+
+  // Build metadata lookup by session ID
+  const metadataMap = new Map<string, SessionMetadata>()
+  if (metadata) {
+    for (const m of metadata) {
+      metadataMap.set(m.id, m)
+    }
+  }
 
   // Header
   lines.push(
@@ -58,9 +70,10 @@ export function formatStatus(statuses: Map<string, SessionStatus>): string {
     const icon = STATE_ICONS[status.state]
     const color = stateColors[status.state]
 
-    // Extract branch from sessionId or use placeholder
-    const branch = sessionId.replace('session-', 'feature/task-')
-    const mode = 'claude'
+    // Get real branch/mode from metadata, fall back to session ID
+    const meta = metadataMap.get(sessionId)
+    const branch = meta?.branch || sessionId
+    const mode = meta?.mode || 'claude'
     const activity = formatRelativeTime(status.lastActivity)
 
     // Count states
@@ -72,9 +85,12 @@ export function formatStatus(statuses: Map<string, SessionStatus>): string {
       case 'error': error++; break
     }
 
+    // Truncate branch for display
+    const branchDisplay = branch.length > 18 ? branch.slice(0, 15) + '...' : branch
+
     lines.push(
       `#${displayId}  ${color}${icon} ${padRight(status.state, 10)}${colors.reset} ` +
-      `${padRight(branch, 18)}  ${padRight(mode, 6)}  ` +
+      `${padRight(branchDisplay, 18)}  ${padRight(mode, 6)}  ` +
       `${padRight(status.message, 32)}  ${colors.dim}${activity}${colors.reset}`
     )
 
