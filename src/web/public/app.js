@@ -34,10 +34,27 @@ async function fetchSessions() {
 }
 
 /**
- * Create session key for terminal mapping
+ * Create session key for terminal mapping - keyed by tmux session (not individual panes)
  */
 function getSessionKey(session) {
-  return `${session.instanceId}-${session.id}`;
+  return session.tmuxSession;
+}
+
+/**
+ * Deduplicate sessions by tmux session - only one panel per tmux session
+ * Returns array of "representative" sessions (first session per tmux session)
+ * with paneCount added
+ */
+function dedupeByTmuxSession(sessions) {
+  const byTmux = new Map();
+  for (const session of sessions) {
+    if (!byTmux.has(session.tmuxSession)) {
+      byTmux.set(session.tmuxSession, { ...session, paneCount: 1 });
+    } else {
+      byTmux.get(session.tmuxSession).paneCount++;
+    }
+  }
+  return Array.from(byTmux.values());
 }
 
 /**
@@ -60,12 +77,10 @@ function createTerminalPanel(session) {
 
   const title = document.createElement('div');
   title.className = 'panel-title';
-  // Show instance name (shortened) + session number + branch
-  const shortInstance = session.instanceId.replace('orcha-', '');
-  title.textContent = session.branch
-    ? `#${session.displayId} ${session.branch}`
-    : `#${session.displayId}`;
-  title.title = `${session.instanceId} - ${session.branch || 'no branch'}`;
+  // Show tmux session name and pane count if multi-pane
+  const paneInfo = session.paneCount > 1 ? ` (${session.paneCount} panes)` : '';
+  title.textContent = `${session.tmuxSession}${paneInfo}`;
+  title.title = `${session.instanceId} - ${session.tmuxSession}`;
 
   const status = document.createElement('div');
   status.className = 'panel-status';
@@ -144,9 +159,9 @@ function initTerminal(session) {
   // Fit to container
   setTimeout(() => fitAddon.fit(), 0);
 
-  // Connect WebSocket
+  // Connect WebSocket - attach to tmux session (shows all panes via tmux's native layout)
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}?session=${key}&tmux=${session.tmuxSession}&pane=${session.paneIndex}`;
+  const wsUrl = `${protocol}//${window.location.host}?session=${key}&tmux=${session.tmuxSession}`;
 
   const ws = new WebSocket(wsUrl);
 
@@ -371,20 +386,23 @@ function applyGridLayout(count) {
 async function render() {
   const { sessions, summary } = await fetchSessions();
 
-  // Store sessions
+  // Store all sessions (for sidebar)
   state.sessions = sessions;
 
-  // Update sidebar
+  // Dedupe by tmux session for terminal panels (1 panel per tmux session)
+  const tmuxSessions = dedupeByTmuxSession(sessions);
+
+  // Update sidebar (shows all individual sessions)
   updateSidebar(sessions);
   updateSummary(summary);
 
-  if (sessions.length === 0) {
+  if (tmuxSessions.length === 0) {
     showEmptyState();
     return;
   }
 
-  // Apply optimal grid layout
-  applyGridLayout(sessions.length);
+  // Apply optimal grid layout based on tmux session count
+  applyGridLayout(tmuxSessions.length);
 
   // Find sessions that need terminal panels
   const existingKeys = new Set(
@@ -392,7 +410,7 @@ async function render() {
       .map(p => p.dataset.sessionKey)
   );
 
-  const currentKeys = new Set(sessions.map(s => getSessionKey(s)));
+  const currentKeys = new Set(tmuxSessions.map(s => getSessionKey(s)));
 
   // Remove panels for sessions that no longer exist
   for (const key of existingKeys) {
@@ -410,8 +428,8 @@ async function render() {
     }
   }
 
-  // Add panels for new sessions
-  for (const session of sessions) {
+  // Add panels for new tmux sessions (1 panel per tmux session)
+  for (const session of tmuxSessions) {
     const key = getSessionKey(session);
     if (!existingKeys.has(key)) {
       const panel = createTerminalPanel(session);
@@ -423,11 +441,11 @@ async function render() {
   }
 
   // Update existing panel headers
-  updatePanelHeaders(sessions);
+  updatePanelHeaders(tmuxSessions);
 
   // Auto-focus first terminal if none focused
-  if (!state.focusedSession && sessions.length > 0) {
-    focusPanel(getSessionKey(sessions[0]));
+  if (!state.focusedSession && tmuxSessions.length > 0) {
+    focusPanel(getSessionKey(tmuxSessions[0]));
   }
 }
 

@@ -100,17 +100,16 @@ export class WebDashboardServer {
       const url = new URL(req.url || '', `http://localhost:${this.port}`)
       const sessionKey = url.searchParams.get('session')
       const tmuxSession = url.searchParams.get('tmux')
-      const paneIndex = parseInt(url.searchParams.get('pane') || '0', 10)
 
       if (!sessionKey || !tmuxSession) {
         ws.close(1008, 'Missing session or tmux parameter')
         return
       }
 
-      console.log(`[WS] Client connected: ${sessionKey} (tmux=${tmuxSession}, pane=${paneIndex})`)
+      console.log(`[WS] Client connected: ${sessionKey} (tmux=${tmuxSession})`)
 
-      // Create PTY attached to tmux pane
-      const ptyProcess = this.createTmuxPty(tmuxSession, paneIndex)
+      // Create PTY attached to tmux session (shows all panes via tmux's native layout)
+      const ptyProcess = this.createTmuxPty(tmuxSession)
 
       if (!ptyProcess) {
         ws.close(1011, 'Failed to create PTY')
@@ -161,11 +160,8 @@ export class WebDashboardServer {
     })
   }
 
-  private createTmuxPty(tmuxSession: string, paneIndex: number): pty.IPty | null {
+  private createTmuxPty(tmuxSession: string): pty.IPty | null {
     try {
-      // Attach to specific tmux pane
-      const target = `${tmuxSession}:0.${paneIndex}`
-
       // Check if session exists
       try {
         execSync(`tmux has-session -t ${tmuxSession} 2>/dev/null`, { stdio: 'ignore' })
@@ -174,8 +170,8 @@ export class WebDashboardServer {
         return null
       }
 
-      // Create PTY that attaches to tmux session with target pane selected
-      const ptyProcess = pty.spawn('tmux', ['attach-session', '-t', target], {
+      // Create PTY that attaches to tmux session (shows all panes via tmux's native layout)
+      const ptyProcess = pty.spawn('tmux', ['attach-session', '-t', tmuxSession], {
         name: 'xterm-256color',
         cols: 120,
         rows: 30,
@@ -203,20 +199,23 @@ export class WebDashboardServer {
 
       const metadata = await loadSessionStore(inst.instanceId)
 
-      let paneIdx = 0
       for (const [sessionId, status] of statuses) {
         const meta = metadata.find(m => m.id === sessionId)
+        // Skip sessions without metadata (orphaned status files)
+        if (!meta) continue
+        // Skip sessions where paneIndex is undefined (legacy data)
+        if (meta.paneIndex === undefined) continue
+
         sessions.push({
           id: sessionId,
-          displayId: meta?.displayId ?? paneIdx + 1,
+          displayId: meta.displayId,
           instanceId: inst.instanceId,
           tmuxSession: inst.tmuxSession,
-          paneIndex: paneIdx,
-          branch: meta?.branch?.replace(/^orcha\//, ''),
+          paneIndex: meta.paneIndex,
+          branch: meta.branch?.replace(/^orcha\//, ''),
           state: status.state,
           message: status.message,
         })
-        paneIdx++
       }
     }
 

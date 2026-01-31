@@ -13,6 +13,7 @@ import type { SessionMode } from './types.js'
 export interface SessionMetadata {
   id: string
   displayId: number
+  paneIndex: number
   branch: string | null
   mode: SessionMode
   worktreePath: string | null

@@ -225,6 +225,7 @@ program
     const sessionMetadata: SessionMetadata[] = sessions.map((s, idx) => ({
       id: s.id,
       displayId: s.displayId,
+      paneIndex: idx,
       branch: s.branch,
       mode: s.mode,
       worktreePath: s.worktreePath,
@@ -872,9 +873,11 @@ program
 
       // Update session metadata store
       const existingMetadata = await loadSessionStore(targetInstance.instanceId)
+      const newPaneIndex = existingMetadata.length
       existingMetadata.push({
         id: session.id,
         displayId: session.displayId,
+        paneIndex: newPaneIndex,
         branch: session.branch,
         mode: session.mode,
         worktreePath: session.worktreePath,
@@ -1293,9 +1296,10 @@ presetCmd
       console.log(`\nStarted ${sessions.length} session(s) from preset "${name}"`)
 
       // Save session metadata for status display
-      const sessionMetadata: SessionMetadata[] = sessions.map((s) => ({
+      const sessionMetadata: SessionMetadata[] = sessions.map((s, idx) => ({
         id: s.id,
         displayId: s.displayId,
+        paneIndex: idx,
         branch: s.branch,
         mode: s.mode,
         worktreePath: s.worktreePath,
