@@ -173,3 +173,21 @@ export type EventHandler<T> = (event: T) => void
 export interface Disposable {
   dispose(): void
 }
+
+// ============================================================================
+// Instance Types (Multi-Repo Support)
+// ============================================================================
+
+export interface InstanceInfo {
+  instanceId: string // "orcha-myproject"
+  repoPath: string // Absolute path to repository
+  tmuxSession: string // tmux session name (same as instanceId)
+  pid: number // orcha process PID
+  startedAt: string // ISO 8601 timestamp
+  sessionCount: number // Number of AI sessions
+}
+
+export interface InstanceRegistry {
+  version: number // Schema version
+  instances: Record<string, InstanceInfo> // keyed by instanceId
+}

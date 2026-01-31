@@ -21,10 +21,24 @@ import type {
   StatusEvent,
 } from './types.js'
 
+const DEFAULT_STATUS_DIR = '/tmp/orcha/agents'
+
 const DEFAULT_CONFIG: StatusMonitorConfig = {
-  statusDir: '/tmp/orcha/agents',
+  statusDir: DEFAULT_STATUS_DIR,
   pollInterval: 1000,
   idleTimeout: 30000,
+}
+
+/**
+ * Get the status directory for an instance
+ * @param instanceId - Optional instance ID (e.g., "orcha-myproject")
+ * @returns Status directory path
+ */
+export function getStatusDirForInstance(instanceId?: string): string {
+  if (instanceId) {
+    return `/tmp/orcha/${instanceId}/agents`
+  }
+  return DEFAULT_STATUS_DIR
 }
 
 interface StatusEntry {
@@ -227,12 +241,63 @@ export class StatusMonitor extends EventEmitter {
 
   private handleFileRemove(filePath: string): void {
     const sessionId = this.getSessionIdFromPath(filePath)
-    // Don't remove from statuses - session might still be running
-    // Just mark as unknown state if we had it
-    const entry = this.statuses.get(sessionId)
-    if (entry) {
-      entry.status.message = 'Status file removed'
+    // Remove the session when its status file is deleted
+    this.statuses.delete(sessionId)
+    const timer = this.idleTimers.get(sessionId)
+    if (timer) {
+      clearTimeout(timer)
+      this.idleTimers.delete(sessionId)
     }
+    this.emit('status-change', {
+      type: 'status-change',
+      sessionId,
+      status: { state: 'done', message: 'Session closed', lastActivity: new Date() },
+      previousState: undefined,
+      timestamp: new Date(),
+    })
+  }
+
+  /**
+   * Sync statuses with a set of active session IDs
+   * Removes any sessions not in the active set
+   */
+  syncWithActiveSessions(activeSessionIds: Set<string>): void {
+    const toRemove: string[] = []
+
+    for (const sessionId of this.statuses.keys()) {
+      if (!activeSessionIds.has(sessionId)) {
+        toRemove.push(sessionId)
+      }
+    }
+
+    for (const sessionId of toRemove) {
+      this.statuses.delete(sessionId)
+      const timer = this.idleTimers.get(sessionId)
+      if (timer) {
+        clearTimeout(timer)
+        this.idleTimers.delete(sessionId)
+      }
+    }
+
+    if (toRemove.length > 0) {
+      this.emit('status-change', {
+        type: 'status-change',
+        sessionId: toRemove[0],
+        status: { state: 'done', message: 'Session removed', lastActivity: new Date() },
+        previousState: undefined,
+        timestamp: new Date(),
+      })
+    }
+  }
+
+  /**
+   * Force reload all statuses from disk
+   */
+  async rescanStatuses(): Promise<void> {
+    // Clear existing
+    this.statuses.clear()
+    // Reload from disk
+    await this.loadExistingStatuses()
   }
 
   private async setStatus(sessionId: string, status: SessionStatus): Promise<void> {

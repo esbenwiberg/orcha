@@ -94,8 +94,11 @@ export class TmuxRenderer {
     let paneId: string
 
     if (paneCount === 1 && this.panes.size === 0) {
-      // Use the first pane
+      // Use the first pane but change to correct directory
       paneId = `${this.sessionName}:0.0`
+      execSync(`tmux send-keys -t "${paneId}" "cd '${workingDir}' && clear" Enter`, {
+        stdio: 'pipe',
+      })
     } else {
       // Split horizontally or vertically based on layout
       const splitDir = paneCount % 2 === 0 ? '-v' : '-h'
@@ -191,6 +194,18 @@ export class TmuxRenderer {
   }
 
   /**
+   * Focus on a pane by its index (0-based)
+   */
+  focusPaneByIndex(index: number): void {
+    if (!this.sessionExists()) {
+      throw new Error(`tmux session '${this.sessionName}' does not exist`)
+    }
+
+    const paneId = `${this.sessionName}:0.${index}`
+    execSync(`tmux select-pane -t "${paneId}"`, { stdio: 'pipe' })
+  }
+
+  /**
    * Attach to the orcha tmux session
    */
   attach(): void {
@@ -256,6 +271,67 @@ export class TmuxRenderer {
    */
   getPanes(): Map<string, string> {
     return new Map(this.panes)
+  }
+
+  /**
+   * Discover existing panes by reading their titles
+   * This rebuilds the sessionId -> paneId mapping for panes created in previous runs
+   */
+  discoverExistingPanes(): Map<string, string> {
+    if (!this.sessionExists()) {
+      return this.panes
+    }
+
+    try {
+      const output = execSync(
+        `tmux list-panes -t "${this.sessionName}" -F "#{pane_index}:#{pane_title}"`,
+        { encoding: 'utf8', stdio: 'pipe' }
+      )
+
+      for (const line of output.trim().split('\n')) {
+        if (!line) continue
+        const [indexStr, title] = line.split(':')
+        const index = parseInt(indexStr, 10)
+
+        // Only add if title looks like a session ID and not already tracked
+        if (title && title.startsWith('session-') && !this.panes.has(title)) {
+          const paneId = `${this.sessionName}:0.${index}`
+          this.panes.set(title, paneId)
+        }
+      }
+    } catch {
+      // Session might not exist or tmux error
+    }
+
+    return this.panes
+  }
+
+  /**
+   * Get list of active pane session IDs (for cleanup detection)
+   */
+  getActivePaneSessionIds(): Set<string> {
+    const active = new Set<string>()
+
+    if (!this.sessionExists()) {
+      return active
+    }
+
+    try {
+      const output = execSync(
+        `tmux list-panes -t "${this.sessionName}" -F "#{pane_title}"`,
+        { encoding: 'utf8', stdio: 'pipe' }
+      )
+
+      for (const line of output.trim().split('\n')) {
+        if (line && line.startsWith('session-')) {
+          active.add(line)
+        }
+      }
+    } catch {
+      // Ignore errors
+    }
+
+    return active
   }
 
   /**

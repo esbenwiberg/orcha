@@ -8,7 +8,7 @@
 import { simpleGit, SimpleGit } from 'simple-git'
 import { mkdir, rm, readdir } from 'fs/promises'
 import { existsSync } from 'fs'
-import { join, basename } from 'path'
+import { join, basename, relative } from 'path'
 import { homedir } from 'os'
 import type { WorktreeInfo, WorktreeConfig } from './types.js'
 
@@ -60,6 +60,9 @@ export class WorktreeManager {
       throw new Error(`Worktree already exists at ${worktreePath}`)
     }
 
+    // Use relative path so worktrees work across Windows/WSL
+    const relativeWorktreePath = relative(this.repoPath, worktreePath)
+
     // Check if branch exists
     const branches = await this.git.branch()
     const branchExists = branches.all.includes(branch) ||
@@ -67,10 +70,10 @@ export class WorktreeManager {
 
     if (branchExists) {
       // Use existing branch
-      await this.git.raw(['worktree', 'add', worktreePath, branch])
+      await this.git.raw(['worktree', 'add', relativeWorktreePath, branch])
     } else {
       // Create new branch from current HEAD
-      await this.git.raw(['worktree', 'add', '-b', branch, worktreePath])
+      await this.git.raw(['worktree', 'add', '-b', branch, relativeWorktreePath])
     }
 
     return worktreePath
@@ -86,8 +89,11 @@ export class WorktreeManager {
       return // Already removed
     }
 
+    // Use relative path for cross-platform compatibility
+    const relativeWorktreePath = relative(this.repoPath, worktreePath)
+
     // Remove from git
-    await this.git.raw(['worktree', 'remove', worktreePath, '--force'])
+    await this.git.raw(['worktree', 'remove', relativeWorktreePath, '--force'])
   }
 
   /**

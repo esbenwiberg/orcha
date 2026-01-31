@@ -269,9 +269,9 @@ export class SessionManager extends EventEmitter {
   // =========================================================================
 
   private generateSessionId(): string {
-    const timestamp = Date.now().toString(36)
+    // Use display ID + short random suffix for readable, unique IDs
     const random = Math.random().toString(36).slice(2, 6)
-    return `session-${timestamp}-${random}`
+    return `session-${this.nextDisplayId}-${random}`
   }
 
   private setupEventForwarding(): void {
