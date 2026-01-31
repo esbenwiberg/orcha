@@ -28,6 +28,7 @@ import {
   generateInstanceId,
   saveSessionStore,
   loadSessionStore,
+  clearSessionStore,
 } from '../core/index.js'
 import type { SessionMetadata } from '../core/index.js'
 import type { InstanceInfo } from '../core/index.js'
@@ -35,13 +36,30 @@ import { formatStatus } from './format.js'
 import { TmuxRenderer } from './tmux-renderer.js'
 import { startMcpServer } from '../mcp/index.js'
 import { runDashboard } from './dashboard.js'
+import { runBlessedDashboard } from './blessed-dashboard.js'
 import { StatusBar } from './status-bar.js'
 import { WorktreeManager } from '../core/worktree-manager.js'
+
+import { rm } from 'fs/promises'
+import { existsSync } from 'fs'
 
 const program = new Command()
 
 // State file for persisting session info across CLI invocations
 const ORCHA_STATE_FILE = '/tmp/orcha/state.json'
+
+/**
+ * Clean up all status files in a status directory
+ */
+async function cleanupStatusDir(statusDir: string): Promise<void> {
+  if (existsSync(statusDir)) {
+    try {
+      await rm(statusDir, { recursive: true, force: true })
+    } catch {
+      // Ignore errors during cleanup
+    }
+  }
+}
 
 /**
  * Helper to get the current instance from cwd or require explicit specification
@@ -128,8 +146,20 @@ program
       tmux.killSession()
     }
 
-    // Create session manager with instance-specific status directory
+    // Always clean up old status files and session store for fresh start
+    await clearSessionStore(instanceId)
     const statusDir = getStatusDirForInstance(instanceId)
+    await cleanupStatusDir(statusDir)
+
+    // Clean up orphaned worktrees from previous runs
+    const worktrees = new WorktreeManager(repoPath)
+    const removedWorktrees = await worktrees.cleanup([])
+    if (removedWorktrees.length > 0) {
+      console.log(`Cleaned up ${removedWorktrees.length} orphaned worktree(s)`)
+    }
+    await worktrees.prune()
+
+    // Create session manager with instance-specific status directory
     const manager = new SessionManager({ repoPath, statusDir })
     await manager.start()
 
@@ -162,16 +192,22 @@ program
 
         sessions.push(session)
 
+        // Write status file so dashboard can see it
+        const status = manager.status.getStatus(session.id)
+        if (status) {
+          await manager.status.writeStatusFile(session.id, status)
+        }
+
         // Use worktree path if available, otherwise repo path
         const workDir = session.worktreePath || repoPath
 
-        // Create tmux pane at the correct working directory
-        tmux.createPane(`session-${i}`, workDir)
+        // Create tmux pane at the correct working directory (use actual session ID)
+        tmux.createPane(session.id, workDir)
 
         // Run the AI command in the tmux pane
         const cmd = mode === 'shell' ? '' : mode
         if (cmd) {
-          tmux.runInPane(`session-${i}`, cmd)
+          tmux.runInPane(session.id, cmd)
         }
 
         if (session.worktreePath) {
@@ -478,9 +514,8 @@ program
       idx++
     }
 
-    await monitor.stop()
-
     if (!targetSessionId) {
+      await monitor.stop()
       console.error(`Error: Session #${displayId} not found`)
       process.exit(1)
     }
@@ -488,10 +523,21 @@ program
     // Kill the pane
     try {
       tmux.killPane(targetSessionId)
+
+      // Clean up the status file so dashboard doesn't show stale entry
+      await monitor.unregisterSession(targetSessionId)
+
+      // Also update the session store to remove this session
+      const metadata = await loadSessionStore(targetInstance.instanceId)
+      const updatedMetadata = metadata.filter((m) => m.id !== targetSessionId)
+      await saveSessionStore(targetInstance.instanceId, updatedMetadata)
+
       console.log(`Killed session #${displayId}`)
     } catch (err) {
       console.error(`Error killing session:`, (err as Error).message)
     }
+
+    await monitor.stop()
   })
 
 // =============================================================================
@@ -596,31 +642,11 @@ program
       return
     }
 
-    // Find session by display ID
-    const statusDir = getStatusDirForInstance(targetInstance.instanceId)
-    const monitor = new StatusMonitor({ statusDir })
-    await monitor.start()
-    const statuses = monitor.getAllStatuses()
-
-    let targetSessionId: string | null = null
-    let idx = 1
-    for (const sessionId of statuses.keys()) {
-      if (idx === displayId) {
-        targetSessionId = sessionId
-        break
-      }
-      idx++
-    }
-
-    await monitor.stop()
-
-    if (!targetSessionId) {
-      console.error(`Error: Session #${displayId} not found`)
-      process.exit(1)
-    }
+    // Use index-based focus (displayId is 1-based, pane index is 0-based)
+    const paneIndex = displayId - 1
 
     try {
-      tmux.focusPane(targetSessionId)
+      tmux.focusPaneByIndex(paneIndex)
       // Attach if not already in tmux
       if (!TmuxRenderer.isInsideTmux()) {
         tmux.attach()
@@ -825,17 +851,22 @@ program
         repoPath: targetInstance.repoPath,
       })
 
+      // Write status file so dashboard can see it
+      const status = manager.status.getStatus(session.id)
+      if (status) {
+        await manager.status.writeStatusFile(session.id, status)
+      }
+
       // Use worktree path if available
       const workDir = session.worktreePath || targetInstance.repoPath
-      const sessionId = `session-${sessionIdx}`
 
-      // Create tmux pane at correct location
-      tmux.createPane(sessionId, workDir)
+      // Create tmux pane at correct location (use actual session ID)
+      tmux.createPane(session.id, workDir)
 
       // Run the AI command in the tmux pane
       const cmd = mode === 'shell' ? '' : mode || 'claude'
       if (cmd) {
-        tmux.runInPane(sessionId, cmd)
+        tmux.runInPane(session.id, cmd)
       }
 
       // Update session metadata store
@@ -918,9 +949,44 @@ program
 program
   .command('watch')
   .alias('dashboard')
-  .description('Launch interactive TUI dashboard')
-  .action(async () => {
-    await runDashboard()
+  .description('Launch interactive TUI dashboard (shows all instances by default)')
+  .option('-r, --repo', 'Show only current repo instance')
+  .option('-i, --instance <id>', 'Target specific instance')
+  .option('-u, --ui <type>', 'Dashboard UI: blessed (Maestro-style) or ink (default)', 'blessed')
+  .action(async (options) => {
+    const { instance: instanceId, repo: repoOnly, ui } = options
+
+    // Find target instance if filtering
+    let singleInstance: InstanceInfo | undefined = undefined
+
+    if (instanceId) {
+      // Specific instance requested
+      const instances = await listInstances()
+      const found = instances.find((i) => i.instanceId === instanceId)
+      if (!found) {
+        console.log(`Instance not found: ${instanceId}`)
+        console.log('Run "orcha list" to see running instances.')
+        return
+      }
+      singleInstance = found
+    } else if (repoOnly) {
+      // Current repo only
+      const current = await getCurrentInstance()
+      if (!current) {
+        console.log('No orcha instance found for current directory.')
+        console.log('Use "orcha watch" without -r to see all instances.')
+        return
+      }
+      singleInstance = current
+    }
+    // Otherwise: show all instances (singleInstance remains undefined)
+
+    if (ui === 'ink') {
+      await runDashboard({ singleInstance })
+    } else {
+      // Default to Blessed (Maestro-style)
+      await runBlessedDashboard({ singleInstance })
+    }
   })
 
 // =============================================================================
@@ -1138,8 +1204,20 @@ presetCmd
         tmux.killSession()
       }
 
-      // Create session manager with instance-specific status directory
+      // Always clean up old status files and session store for fresh start
+      await clearSessionStore(instanceId)
       const statusDir = getStatusDirForInstance(instanceId)
+      await cleanupStatusDir(statusDir)
+
+      // Clean up orphaned worktrees from previous runs
+      const worktreeMgr = new WorktreeManager(repoPath)
+      const removedWorktrees = await worktreeMgr.cleanup([])
+      if (removedWorktrees.length > 0) {
+        console.log(`Cleaned up ${removedWorktrees.length} orphaned worktree(s)`)
+      }
+      await worktreeMgr.prune()
+
+      // Create session manager with instance-specific status directory
       const manager = new SessionManager({ repoPath, statusDir })
       await manager.start()
 
@@ -1172,13 +1250,19 @@ presetCmd
 
           sessions.push(session)
 
+          // Write status file so dashboard can see it
+          const status = manager.status.getStatus(session.id)
+          if (status) {
+            await manager.status.writeStatusFile(session.id, status)
+          }
+
           // Use worktree path if available
           const workDir = session.worktreePath || repoPath
-          tmux.createPane(`session-${i}`, workDir)
+          tmux.createPane(session.id, workDir)
 
           const cmd = presetSession.mode === 'shell' ? '' : presetSession.mode || 'claude'
           if (cmd) {
-            tmux.runInPane(`session-${i}`, cmd)
+            tmux.runInPane(session.id, cmd)
           }
 
           if (session.worktreePath) {

@@ -17,15 +17,21 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@types/blessed": "^0.1.27",
+    "blessed": "^0.1.81",
     "chalk": "^5.3.0",
     "chokidar": "^3.6.0",
     "commander": "^12.1.0",
+    "ink": "^6.6.0",
+    "ink-box": "^1.0.0",
+    "react": "^19.2.4",
     "simple-git": "^3.27.0",
     "tree-kill": "^1.2.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",
+    "@types/react": "^19.2.10",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   },
