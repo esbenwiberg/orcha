@@ -1,0 +1,10 @@
+{
+  "name": "default",
+  "description": "Default preset with 3 Claude sessions",
+  "sessions": [
+    { "branch": "feature/session-1", "mode": "claude" },
+    { "branch": "feature/session-2", "mode": "claude" },
+    { "branch": "feature/session-3", "mode": "claude" }
+  ],
+  "repoPath": "."
+}
