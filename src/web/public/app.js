@@ -252,13 +252,13 @@ function groupByInstance(sessions) {
 }
 
 /**
- * Update sidebar session list
+ * Update sidebar session list - shows one entry per tmux session
  */
-function updateSidebar(sessions) {
+function updateSidebar(tmuxSessions) {
   sessionList.innerHTML = '';
 
-  // Group sessions by instance
-  const groups = groupByInstance(sessions);
+  // Group by instance for headers
+  const groups = groupByInstance(tmuxSessions);
 
   for (const [instanceId, instanceSessions] of groups) {
     // Instance header
@@ -267,7 +267,7 @@ function updateSidebar(sessions) {
     header.textContent = instanceId;
     sessionList.appendChild(header);
 
-    // Sessions for this instance
+    // One entry per tmux session
     for (const session of instanceSessions) {
       const key = getSessionKey(session);
 
@@ -286,11 +286,13 @@ function updateSidebar(sessions) {
 
       const name = document.createElement('div');
       name.className = 'session-name';
-      name.textContent = `#${session.displayId}`;
+      // Show tmux session name with pane count if multi-pane
+      const paneInfo = session.paneCount > 1 ? ` (${session.paneCount})` : '';
+      name.textContent = session.tmuxSession.replace('orcha-', '') + paneInfo;
 
       const branch = document.createElement('div');
       branch.className = 'session-branch';
-      branch.textContent = session.branch || session.message || session.state;
+      branch.textContent = session.message || session.state;
 
       info.appendChild(name);
       info.appendChild(branch);
@@ -392,8 +394,8 @@ async function render() {
   // Dedupe by tmux session for terminal panels (1 panel per tmux session)
   const tmuxSessions = dedupeByTmuxSession(sessions);
 
-  // Update sidebar (shows all individual sessions)
-  updateSidebar(sessions);
+  // Update sidebar (1 entry per tmux session, matching panels)
+  updateSidebar(tmuxSessions);
   updateSummary(summary);
 
   if (tmuxSessions.length === 0) {
