@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orcha Dashboard</title>
+
+  <!-- xterm.js from CDN -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <h1>orcha</h1>
+        <span class="subtitle">parallel AI sessions</span>
+      </div>
+      <div id="session-list"></div>
+      <div class="sidebar-footer">
+        <div id="summary"></div>
+      </div>
+    </aside>
+
+    <!-- Main terminal grid -->
+    <main id="terminal-grid"></main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -35,6 +35,7 @@ import type { InstanceInfo } from '../core/index.js'
 import { formatStatus } from './format.js'
 import { TmuxRenderer } from './tmux-renderer.js'
 import { startMcpServer } from '../mcp/index.js'
+import { startWebDashboard } from '../web/server.js'
 import { runDashboard } from './dashboard.js'
 import { runBlessedDashboard } from './blessed-dashboard.js'
 import { StatusBar } from './status-bar.js'
@@ -987,6 +988,22 @@ program
       // Default to Blessed (Maestro-style)
       await runBlessedDashboard({ singleInstance })
     }
+  })
+
+// =============================================================================
+// orcha web
+// =============================================================================
+program
+  .command('web')
+  .description('Launch web-based dashboard with interactive terminals')
+  .option('-p, --port <port>', 'Server port', '3847')
+  .option('--no-open', 'Do not open browser automatically')
+  .action(async (options) => {
+    const port = parseInt(options.port, 10)
+    const open = options.open !== false
+
+    console.log('Starting Orcha Web Dashboard...')
+    await startWebDashboard(port, open)
   })
 
 // =============================================================================
