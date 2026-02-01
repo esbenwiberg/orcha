@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/web/public/logo.png" alt="Orcha Logo" width="120">
+  <img src="src/web/public/logo.png" alt="Orcha Logo" width="200">
 </p>
 
 # Orcha
