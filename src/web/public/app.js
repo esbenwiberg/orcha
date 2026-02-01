@@ -406,7 +406,7 @@ function openFileManager(instanceId) {
   overlay.innerHTML = `
     <div class="file-manager-dialog">
       <div class="file-manager-header">
-        <span class="file-manager-title">📁 ${instanceId}</span>
+        <span class="file-manager-title"><svg class="file-manager-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg> ${instanceId}</span>
         <button class="file-manager-close">×</button>
       </div>
       <div class="file-manager-terminal"></div>
@@ -426,9 +426,6 @@ function openFileManager(instanceId) {
   closeBtn.addEventListener('click', closeDialog);
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) closeDialog();
-  });
-  overlay.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeDialog();
   });
 
   document.body.appendChild(overlay);
@@ -452,6 +449,15 @@ function openFileManager(instanceId) {
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(termContainer);
+
+  // Intercept Escape key to close dialog (before xterm processes it)
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.key === 'Escape' && e.type === 'keydown') {
+      closeDialog();
+      return false; // Prevent xterm from processing this key
+    }
+    return true; // Let xterm handle all other keys
+  });
 
   // Connect via WebSocket to yazi
   const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -953,7 +959,26 @@ function showAddRepoDialog() {
     }
   });
 
-  const closeDialog = () => overlay.remove();
+  // Close dialog with cleanup
+  const closeDialog = () => {
+    document.removeEventListener('keydown', handleKeydown);
+    overlay.remove();
+  };
+
+  // Keyboard handling (document-level for reliable escape)
+  function handleKeydown(e) {
+    if (!document.body.contains(overlay)) {
+      document.removeEventListener('keydown', handleKeydown);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeDialog();
+    }
+    if (e.key === 'Enter' && !submitBtn.disabled) submitBtn.click();
+  }
+  document.addEventListener('keydown', handleKeydown);
 
   // Submit handler
   submitBtn.addEventListener('click', async () => {
@@ -1022,12 +1047,6 @@ function showAddRepoDialog() {
   // Close on overlay click
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) closeDialog();
-  });
-
-  // Keyboard handling
-  overlay.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeDialog();
-    if (e.key === 'Enter' && !submitBtn.disabled) submitBtn.click();
   });
 
   document.body.appendChild(overlay);

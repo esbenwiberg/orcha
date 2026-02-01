@@ -899,6 +899,13 @@ body {
   font-size: 0.9rem;
   font-weight: 500;
   color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-manager-icon {
+  color: var(--accent-purple);
 }
 
 .file-manager-close {
