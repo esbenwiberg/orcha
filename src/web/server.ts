@@ -11,11 +11,14 @@ import { WebSocketServer, WebSocket } from 'ws'
 import * as pty from 'node-pty'
 import { join, dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import { execSync, exec } from 'child_process'
+import { execSync } from 'child_process'
 import { existsSync } from 'fs'
 import { listInstances, getInstance, getInstanceByPath, registerInstance } from '../core/instance-registry.js'
 import { StatusMonitor, getStatusDirForInstance } from '../core/status-monitor.js'
-import { loadSessionStore } from '../core/session-store.js'
+import { loadSessionStore, updateSessionName, saveSessionStore } from '../core/session-store.js'
+import type { SessionMetadata } from '../core/session-store.js'
+import { SessionManager } from '../core/session-manager.js'
+import { TmuxRenderer } from '../cli/tmux-renderer.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -40,11 +43,19 @@ interface SessionInfo {
   branch?: string
   state: string
   message: string
+  customName?: string // User-defined name
 }
 
 interface PtySession {
   pty: pty.IPty
   ws: WebSocket
+}
+
+interface UsageStats {
+  date: string
+  tokens: number
+  messages: number
+  sessions: number
 }
 
 export class WebDashboardServer {
@@ -94,81 +105,228 @@ export class WebDashboardServer {
       }
     })
 
-    // API: Kill a session (tmux session)
-    this.app.delete('/api/sessions/:sessionKey', async (req, res) => {
-      const { sessionKey } = req.params
-
+    // API: Get Claude usage stats
+    this.app.get('/api/usage', async (_req, res) => {
       try {
-        // Close any active PTY connection
-        const ptySession = this.ptySessions.get(sessionKey)
-        if (ptySession) {
-          ptySession.pty.kill()
-          ptySession.ws?.close()
-          this.ptySessions.delete(sessionKey)
-        }
-
-        // Kill the tmux session
-        try {
-          execSync(`tmux kill-session -t "${sessionKey}"`, { stdio: 'ignore' })
-        } catch {
-          // Session may already be dead
-        }
-
-        res.json({ success: true, message: `Session ${sessionKey} killed` })
+        const usage = await this.getClaudeUsage()
+        res.json(usage)
       } catch (err) {
         res.status(500).json({ error: (err as Error).message })
       }
     })
 
-    // API: Create new session (placeholder - requires orcha CLI integration)
+    // API: Rename a session
     this.app.use(express.json())
-    this.app.post('/api/sessions', async (req, res) => {
-      const { action, repo } = req.body
-
+    this.app.put('/api/sessions/:instanceId/:sessionId/name', async (req, res) => {
       try {
-        if (action === 'new') {
-          // Add a new pane to an existing tmux session
-          // For now, find the first active instance and add a pane
-          const instances = await listInstances()
-          if (instances.length === 0) {
-            return res.status(400).json({ error: 'No active orcha instances. Start one with: orcha start' })
-          }
+        const { instanceId, sessionId } = req.params
+        const { name } = req.body as { name?: string }
 
-          const inst = instances[0]
-          // Create new pane in the tmux session
-          execSync(`tmux split-window -t "${inst.tmuxSession}" -v`, { stdio: 'ignore' })
-          execSync(`tmux select-layout -t "${inst.tmuxSession}" tiled`, { stdio: 'ignore' })
+        const success = await updateSessionName(instanceId, sessionId, name ?? null)
 
-          res.json({ success: true, message: 'New pane created' })
-        } else if (action === 'repo' && repo) {
-          // Clone/create worktree for a repo - would need deeper integration
-          res.status(501).json({ error: 'Repo creation via web not yet implemented. Use CLI: orcha add <repo>' })
-        } else {
-          res.status(400).json({ error: 'Invalid action. Use action: "new" or "repo"' })
+        if (!success) {
+          res.status(404).json({ error: 'Session not found' })
+          return
         }
+
+        res.json({ success: true, name: name || null })
       } catch (err) {
         res.status(500).json({ error: (err as Error).message })
       }
     })
 
-    // API: Register a new instance (add local repo to dashboard)
+    // API: Close/delete a session
+    this.app.delete('/api/sessions/:instanceId/:sessionId', async (req, res) => {
+      try {
+        const { instanceId, sessionId } = req.params
+
+        // Load session metadata to get tmux info
+        const metadata = await loadSessionStore(instanceId)
+        const session = metadata.find(m => m.id === sessionId)
+
+        if (!session) {
+          res.status(404).json({ error: 'Session not found' })
+          return
+        }
+
+        // Kill tmux session/pane if it exists
+        const tmuxSession = session.tmuxSession
+        if (tmuxSession) {
+          try {
+            // Check if it's a dedicated UI session (orcha-ui-*)
+            if (tmuxSession.startsWith('orcha-ui-')) {
+              // Kill the entire tmux session
+              execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`, { stdio: 'ignore' })
+            } else {
+              // It's a pane in a shared tmux session - kill just the pane
+              const target = `${tmuxSession}:0.${session.paneIndex}`
+              execSync(`tmux kill-pane -t "${target}" 2>/dev/null`, { stdio: 'ignore' })
+            }
+          } catch {
+            // Tmux session/pane may already be gone
+          }
+        }
+
+        // Remove worktree if exists
+        if (session.worktreePath) {
+          try {
+            const instance = await getInstance(instanceId)
+            if (instance) {
+              execSync(`git -C "${instance.repoPath}" worktree remove --force "${session.worktreePath}" 2>/dev/null`, { stdio: 'ignore' })
+            }
+          } catch {
+            // Worktree may not exist
+          }
+        }
+
+        // Remove from session store
+        const { removeSession } = await import('../core/session-store.js')
+        await removeSession(instanceId, sessionId)
+
+        // Remove status file
+        const statusDir = getStatusDirForInstance(instanceId)
+        const statusFile = join(statusDir, `${sessionId}.json`)
+        try {
+          const { unlink } = await import('fs/promises')
+          await unlink(statusFile)
+        } catch {
+          // Status file may not exist
+        }
+
+        console.log(`[API] Session closed: ${instanceId}/${sessionId}`)
+        res.json({ success: true })
+      } catch (err) {
+        console.error('[API] Error closing session:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Create a new session
+    this.app.post('/api/sessions', async (req, res) => {
+      try {
+        const { instanceId, branch, mode } = req.body as {
+          instanceId: string
+          branch?: string
+          mode?: 'claude' | 'gemini' | 'codex' | 'shell'
+        }
+
+        if (!instanceId) {
+          res.status(400).json({ error: 'instanceId is required' })
+          return
+        }
+
+        // Get instance info
+        const instance = await getInstance(instanceId)
+        if (!instance) {
+          res.status(404).json({ error: 'Instance not found' })
+          return
+        }
+
+        // Check tmux session exists
+        const tmux = new TmuxRenderer({ sessionName: instance.tmuxSession })
+        if (!tmux.sessionExists()) {
+          res.status(404).json({ error: 'Tmux session not found' })
+          return
+        }
+
+        // Create session manager
+        const statusDir = getStatusDirForInstance(instanceId)
+        const manager = new SessionManager({ repoPath: instance.repoPath, statusDir })
+        await manager.start()
+
+        // Determine branch name
+        let sessionBranch = branch?.trim() || undefined
+        if (!sessionBranch) {
+          // Auto-generate branch name
+          const existingMetadata = await loadSessionStore(instanceId)
+          const sessionIdx = existingMetadata.length
+          const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+          sessionBranch = `orcha/session-${sessionIdx + 1}-${timestamp}`
+        }
+
+        console.log(`[API] Creating session: ${sessionBranch} (mode=${mode || 'claude'})`)
+
+        // Create session (this creates worktree)
+        const session = await manager.createSession({
+          branch: sessionBranch,
+          mode: mode || 'claude',
+          workingDirectory: instance.repoPath,
+          repoPath: instance.repoPath,
+        })
+
+        // Write status file
+        const status = manager.status.getStatus(session.id)
+        if (status) {
+          await manager.status.writeStatusFile(session.id, status)
+        }
+
+        // Create a NEW tmux session for this UI-created session (separate panel)
+        const sessionTmuxName = `orcha-ui-${session.id}`
+        const sessionTmux = new TmuxRenderer({ sessionName: sessionTmuxName })
+        const workDir = session.worktreePath || instance.repoPath
+        sessionTmux.createPane(session.id, workDir)
+
+        // Run AI command
+        const cmd = (mode || 'claude') === 'shell' ? '' : (mode || 'claude')
+        if (cmd) {
+          sessionTmux.runInPane(session.id, cmd)
+        }
+
+        // Update session metadata store
+        const existingMetadata = await loadSessionStore(instanceId)
+        const newMetadata: SessionMetadata = {
+          id: session.id,
+          displayId: session.displayId,
+          paneIndex: 0, // Always pane 0 in its own tmux session
+          branch: session.branch,
+          mode: session.mode,
+          worktreePath: session.worktreePath,
+          createdAt: session.createdAt.toISOString(),
+          tmuxSession: sessionTmuxName, // Store its own tmux session
+        }
+        existingMetadata.push(newMetadata)
+        await saveSessionStore(instanceId, existingMetadata)
+
+        console.log(`[API] Session created: ${session.id}`)
+
+        res.json({
+          success: true,
+          session: {
+            id: session.id,
+            displayId: session.displayId,
+            branch: session.branch,
+            mode: session.mode,
+            worktreePath: session.worktreePath,
+          },
+        })
+      } catch (err) {
+        console.error('[API] Error creating session:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Register a new instance (add repo to dashboard)
     this.app.post('/api/instances', async (req, res) => {
       try {
         const { repoPath } = req.body as { repoPath: string }
 
+        // Validate input
         if (!repoPath) {
           res.status(400).json({ error: 'repoPath is required' })
           return
         }
 
+        // Resolve to absolute path
         const absolutePath = resolve(repoPath)
 
+        // Check path exists
         if (!existsSync(absolutePath)) {
           res.status(400).json({ error: `Path does not exist: ${absolutePath}` })
           return
         }
 
         // Check it's a git repository
+        // Use spawnSync for safety (avoids shell injection)
         const { spawnSync } = await import('child_process')
         const gitCheck = spawnSync('git', ['-C', absolutePath, 'rev-parse', '--git-dir'], { stdio: 'pipe' })
         if (gitCheck.status !== 0) {
@@ -176,22 +334,23 @@ export class WebDashboardServer {
           return
         }
 
+        // Check not already registered
         const existing = await getInstanceByPath(absolutePath)
         if (existing) {
           res.status(409).json({ error: `Repository already registered as: ${existing.instanceId}` })
           return
         }
 
+        // Register instance (sessionCount=0 initially)
         const instance = await registerInstance(absolutePath, 0)
 
-        // Create tmux session
-        try {
-          execSync(`tmux has-session -t "${instance.tmuxSession}" 2>/dev/null`, { stdio: 'ignore' })
-        } catch {
-          execSync(`tmux new-session -d -s "${instance.tmuxSession}" -x 200 -y 50`, { stdio: 'pipe' })
+        // Create tmux session (empty, ready for future sessions)
+        const tmux = new TmuxRenderer({ sessionName: instance.tmuxSession })
+        if (!tmux.sessionExists()) {
+          tmux.createSession()
         }
 
-        console.log(`[API] Instance registered: ${instance.instanceId}`)
+        console.log(`[API] Instance registered: ${instance.instanceId} (${absolutePath})`)
 
         res.json({
           success: true,
@@ -208,17 +367,19 @@ export class WebDashboardServer {
       }
     })
 
-    // API: Clone from GitHub and register as instance
+    // API: Clone a GitHub repo and register as instance
     this.app.post('/api/instances/clone', async (req, res) => {
       try {
         const { githubUrl } = req.body as { githubUrl: string }
 
+        // Validate input
         if (!githubUrl) {
           res.status(400).json({ error: 'githubUrl is required' })
           return
         }
 
-        // Parse GitHub URL
+        // Parse GitHub URL to extract owner/repo
+        // Supports: https://github.com/owner/repo, github.com/owner/repo, owner/repo
         const urlPatterns = [
           /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/.*)?$/,
           /^github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/.*)?$/,
@@ -242,34 +403,43 @@ export class WebDashboardServer {
           return
         }
 
+        // Build clone path
         const cloneBaseDir = '/mnt/c/repos/.workspace/clones'
         const clonePath = join(cloneBaseDir, repo)
 
+        // Ensure base directory exists
         const { mkdir: mkdirAsync } = await import('fs/promises')
         await mkdirAsync(cloneBaseDir, { recursive: true })
 
+        // Check if already cloned
         let cloned = false
         if (!existsSync(clonePath)) {
+          // Clone using gh CLI (safer than git clone for auth)
           const { spawnSync } = await import('child_process')
           console.log(`[API] Cloning ${owner}/${repo} to ${clonePath}...`)
 
           const cloneResult = spawnSync('gh', ['repo', 'clone', `${owner}/${repo}`, clonePath], {
             stdio: 'pipe',
-            timeout: 300000,
+            timeout: 300000, // 5 minute timeout for large repos
           })
 
           if (cloneResult.status !== 0) {
             const stderr = cloneResult.stderr?.toString() || 'Unknown error'
+            console.error(`[API] Clone failed:`, stderr)
             res.status(500).json({ error: `Clone failed: ${stderr.slice(0, 200)}` })
             return
           }
 
           cloned = true
           console.log(`[API] Clone complete: ${clonePath}`)
+        } else {
+          console.log(`[API] Repository already exists at ${clonePath}, skipping clone`)
         }
 
+        // Check not already registered (by path)
         const existing = await getInstanceByPath(clonePath)
         if (existing) {
+          // Already registered - return it (not an error)
           res.json({
             success: true,
             cloned,
@@ -284,12 +454,13 @@ export class WebDashboardServer {
           return
         }
 
+        // Register instance
         const instance = await registerInstance(clonePath, 0)
 
-        try {
-          execSync(`tmux has-session -t "${instance.tmuxSession}" 2>/dev/null`, { stdio: 'ignore' })
-        } catch {
-          execSync(`tmux new-session -d -s "${instance.tmuxSession}" -x 200 -y 50`, { stdio: 'pipe' })
+        // Create tmux session
+        const tmux = new TmuxRenderer({ sessionName: instance.tmuxSession })
+        if (!tmux.sessionExists()) {
+          tmux.createSession()
         }
 
         console.log(`[API] Instance registered: ${instance.instanceId} (cloned from ${owner}/${repo})`)
@@ -316,16 +487,18 @@ export class WebDashboardServer {
       const url = new URL(req.url || '', `http://localhost:${this.port}`)
       const sessionKey = url.searchParams.get('session')
       const tmuxSession = url.searchParams.get('tmux')
+      const paneIndexStr = url.searchParams.get('pane')
+      const paneIndex = paneIndexStr !== null ? parseInt(paneIndexStr, 10) : undefined
 
       if (!sessionKey || !tmuxSession) {
         ws.close(1008, 'Missing session or tmux parameter')
         return
       }
 
-      console.log(`[WS] Client connected: ${sessionKey} (tmux=${tmuxSession})`)
+      console.log(`[WS] Client connected: ${sessionKey} (tmux=${tmuxSession}, pane=${paneIndex})`)
 
-      // Create PTY attached to tmux session (shows all panes via tmux's native layout)
-      const ptyProcess = this.createTmuxPty(tmuxSession)
+      // Create PTY attached to specific tmux pane
+      const ptyProcess = this.createTmuxPty(tmuxSession, paneIndex)
 
       if (!ptyProcess) {
         ws.close(1011, 'Failed to create PTY')
@@ -376,7 +549,7 @@ export class WebDashboardServer {
     })
   }
 
-  private createTmuxPty(tmuxSession: string): pty.IPty | null {
+  private createTmuxPty(tmuxSession: string, paneIndex?: number): pty.IPty | null {
     try {
       // Check if session exists
       try {
@@ -386,8 +559,13 @@ export class WebDashboardServer {
         return null
       }
 
-      // Create PTY that attaches to tmux session (shows all panes via tmux's native layout)
-      const ptyProcess = pty.spawn('tmux', ['attach-session', '-t', tmuxSession], {
+      // Target specific pane if index provided, otherwise whole session
+      const target = paneIndex !== undefined
+        ? `${tmuxSession}:0.${paneIndex}`  // session:window.pane
+        : tmuxSession
+
+      // Create PTY that attaches to specific tmux pane
+      const ptyProcess = pty.spawn('tmux', ['attach-session', '-t', target], {
         name: 'xterm-256color',
         cols: 120,
         rows: 30,
@@ -426,16 +604,51 @@ export class WebDashboardServer {
           id: sessionId,
           displayId: meta.displayId,
           instanceId: inst.instanceId,
-          tmuxSession: inst.tmuxSession,
+          // UI-created sessions have their own tmux session; CLI-created use instance tmux
+          tmuxSession: meta.tmuxSession || inst.tmuxSession,
           paneIndex: meta.paneIndex,
           branch: meta.branch?.replace(/^orcha\//, ''),
           state: status.state,
           message: status.message,
+          customName: meta.customName,
         })
       }
     }
 
     return sessions
+  }
+
+  private async getClaudeUsage(): Promise<UsageStats | { error: string }> {
+    const statsPath = join(process.env.HOME || '', '.claude', 'stats-cache.json')
+
+    try {
+      const { readFile } = await import('fs/promises')
+      const data = JSON.parse(await readFile(statsPath, 'utf-8'))
+
+      const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+
+      // Find today's activity
+      const activity = data.dailyActivity?.find((d: { date: string }) => d.date === today)
+      const tokenData = data.dailyModelTokens?.find((d: { date: string }) => d.date === today)
+
+      // Sum tokens across all models
+      const tokens = tokenData?.tokensByModel
+        ? Object.values(tokenData.tokensByModel as Record<string, number>).reduce(
+            (sum: number, t: number) => sum + (t || 0),
+            0
+          )
+        : 0
+
+      return {
+        date: today,
+        tokens,
+        messages: activity?.messageCount || 0,
+        sessions: activity?.sessionCount || 0,
+      }
+    } catch {
+      // File missing or unreadable
+      return { error: 'Usage stats not available' }
+    }
   }
 
   async start(): Promise<void> {
