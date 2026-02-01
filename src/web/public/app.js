@@ -125,6 +125,49 @@ async function handleGitAction(action, session) {
 }
 
 /**
+ * Show keyboard shortcuts help dialog
+ */
+function showHelpDialog() {
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;';
+
+  overlay.innerHTML = `
+    <div class="help-dialog" style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:320px;max-width:400px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+      <h3 style="margin:0 0 16px;font-size:1rem;color:#e0e0e0;display:flex;align-items:center;gap:8px;">
+        <span style="color:#9b59b6;">⌨</span> Keyboard Shortcuts
+      </h3>
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:0.85rem;">
+        <div style="color:#888;margin-bottom:4px;">All shortcuts use <kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A</kbd> prefix:</div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:#888;">File manager (yazi)</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, F</kbd></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Git actions menu</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, G</kbd></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Toggle fullscreen</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, Enter</kbd></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Focus panel 1-9</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, 1-9</kbd></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Show this help</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, H</kbd></div>
+        <div style="border-top:1px solid #333;margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;"><span style="color:#888;">Exit fullscreen</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Escape</kbd></div>
+      </div>
+      <div style="margin-top:16px;text-align:right;">
+        <button class="help-close" style="background:#9b59b6;border:none;color:white;font-size:0.85rem;padding:8px 16px;border-radius:4px;cursor:pointer;">Close</button>
+      </div>
+    </div>
+  `;
+
+  const closeBtn = overlay.querySelector('.help-close');
+  const closeDialog = () => overlay.remove();
+
+  closeBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDialog();
+  });
+
+  document.body.appendChild(overlay);
+  closeBtn.focus();
+}
+
+/**
  * Show commit dialog
  */
 function showCommitDialog(instanceId) {
@@ -1187,7 +1230,7 @@ function createTerminalPanel(session) {
   const actionsBtn = document.createElement('button');
   actionsBtn.className = 'panel-actions-btn';
   actionsBtn.innerHTML = '⋮';
-  actionsBtn.title = 'Git actions (Ctrl+G)';
+  actionsBtn.title = 'Git actions (Ctrl+A, G)';
   actionsBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     toggleActionsMenu(panel, session);
@@ -1197,7 +1240,7 @@ function createTerminalPanel(session) {
   const folderBtn = document.createElement('button');
   folderBtn.className = 'panel-folder-btn';
   folderBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>';
-  folderBtn.title = 'Open in file manager (yazi)';
+  folderBtn.title = 'Open in file manager (Ctrl+A, F)';
   folderBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     openFileManager(session.instanceId);
@@ -1207,7 +1250,7 @@ function createTerminalPanel(session) {
   const fullscreenBtn = document.createElement('button');
   fullscreenBtn.className = 'panel-fullscreen-btn';
   fullscreenBtn.innerHTML = '⛶';
-  fullscreenBtn.title = 'Toggle fullscreen (double-click panel or Ctrl+Enter)';
+  fullscreenBtn.title = 'Toggle fullscreen (double-click panel or Ctrl+A, Enter)';
   fullscreenBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     toggleFullscreen(key);
@@ -1867,43 +1910,92 @@ async function init() {
     addRepoBtn.addEventListener('click', showAddRepoDialog);
   }
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts with Ctrl+A prefix (tmux-style)
+  // Use capture phase (true) to intercept before xterm.js handles the event
+  let prefixActive = false;
+  let prefixTimeout = null;
+
   document.addEventListener('keydown', (e) => {
-    // Escape to exit fullscreen
+
+    // Escape to exit fullscreen (always works, no prefix needed)
     if (e.key === 'Escape' && state.fullscreenKey) {
       exitFullscreen();
       e.preventDefault();
+      e.stopPropagation();
       return;
     }
 
-    // Ctrl+Enter to toggle fullscreen on focused panel
-    if (e.ctrlKey && e.key === 'Enter' && state.focusedSession) {
-      toggleFullscreen(state.focusedSession);
+    // Ctrl+A activates prefix mode
+    if (e.ctrlKey && e.key.toLowerCase() === 'a') {
       e.preventDefault();
+      e.stopPropagation();
+      prefixActive = true;
+      // Clear prefix after 2 seconds if no follow-up key
+      clearTimeout(prefixTimeout);
+      prefixTimeout = setTimeout(() => {
+        prefixActive = false;
+      }, 2000);
       return;
     }
 
-    // Ctrl+1-9 to focus panel by number
-    if (e.ctrlKey && e.key >= '1' && e.key <= '9') {
-      const idx = parseInt(e.key) - 1;
-      if (state.sessions[idx]) {
-        focusPanel(getSessionKey(state.sessions[idx]));
+    // If prefix is active, handle the action key
+    if (prefixActive) {
+      prefixActive = false;
+      clearTimeout(prefixTimeout);
+
+      // Enter to toggle fullscreen on focused panel
+      if (e.key === 'Enter' && state.focusedSession) {
+        toggleFullscreen(state.focusedSession);
         e.preventDefault();
+        e.stopPropagation();
+        return;
       }
-    }
 
-    // Ctrl+G to open git actions menu on focused panel
-    if (e.ctrlKey && e.key.toLowerCase() === 'g' && state.focusedSession) {
-      e.preventDefault();
-      const panel = document.querySelector(`.terminal-panel[data-session-key="${state.focusedSession}"]`);
-      if (panel) {
+      // 1-9 to focus panel by number
+      if (e.key >= '1' && e.key <= '9') {
+        const idx = parseInt(e.key) - 1;
+        if (state.sessions[idx]) {
+          focusPanel(getSessionKey(state.sessions[idx]));
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+
+      // G to open git actions menu on focused panel
+      if (e.key.toLowerCase() === 'g' && state.focusedSession) {
+        e.preventDefault();
+        e.stopPropagation();
+        const panel = document.querySelector(`.terminal-panel[data-session-key="${state.focusedSession}"]`);
+        if (panel) {
+          const session = state.sessions.find(s => getSessionKey(s) === state.focusedSession);
+          if (session) {
+            toggleActionsMenu(panel, session);
+          }
+        }
+        return;
+      }
+
+      // F to open file manager (yazi) on focused panel
+      if (e.key.toLowerCase() === 'f' && state.focusedSession) {
+        e.preventDefault();
+        e.stopPropagation();
         const session = state.sessions.find(s => getSessionKey(s) === state.focusedSession);
         if (session) {
-          toggleActionsMenu(panel, session);
+          openFileManager(session.instanceId);
         }
+        return;
+      }
+
+      // H to show help dialog
+      if (e.key.toLowerCase() === 'h') {
+        e.preventDefault();
+        e.stopPropagation();
+        showHelpDialog();
+        return;
       }
     }
-  });
+  }, true);  // true = capture phase
 }
 
 // Rotating catchphrases
