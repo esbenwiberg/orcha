@@ -9,11 +9,11 @@ import express from 'express'
 import { createServer } from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 import * as pty from 'node-pty'
-import { join, dirname } from 'path'
+import { join, dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { execSync, exec } from 'child_process'
 import { existsSync } from 'fs'
-import { listInstances } from '../core/instance-registry.js'
+import { listInstances, getInstance, getInstanceByPath, registerInstance } from '../core/instance-registry.js'
 import { StatusMonitor, getStatusDirForInstance } from '../core/status-monitor.js'
 import { loadSessionStore } from '../core/session-store.js'
 
@@ -147,6 +147,165 @@ export class WebDashboardServer {
           res.status(400).json({ error: 'Invalid action. Use action: "new" or "repo"' })
         }
       } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Register a new instance (add local repo to dashboard)
+    this.app.post('/api/instances', async (req, res) => {
+      try {
+        const { repoPath } = req.body as { repoPath: string }
+
+        if (!repoPath) {
+          res.status(400).json({ error: 'repoPath is required' })
+          return
+        }
+
+        const absolutePath = resolve(repoPath)
+
+        if (!existsSync(absolutePath)) {
+          res.status(400).json({ error: `Path does not exist: ${absolutePath}` })
+          return
+        }
+
+        // Check it's a git repository
+        const { spawnSync } = await import('child_process')
+        const gitCheck = spawnSync('git', ['-C', absolutePath, 'rev-parse', '--git-dir'], { stdio: 'pipe' })
+        if (gitCheck.status !== 0) {
+          res.status(400).json({ error: `Not a git repository: ${absolutePath}` })
+          return
+        }
+
+        const existing = await getInstanceByPath(absolutePath)
+        if (existing) {
+          res.status(409).json({ error: `Repository already registered as: ${existing.instanceId}` })
+          return
+        }
+
+        const instance = await registerInstance(absolutePath, 0)
+
+        // Create tmux session
+        try {
+          execSync(`tmux has-session -t "${instance.tmuxSession}" 2>/dev/null`, { stdio: 'ignore' })
+        } catch {
+          execSync(`tmux new-session -d -s "${instance.tmuxSession}" -x 200 -y 50`, { stdio: 'pipe' })
+        }
+
+        console.log(`[API] Instance registered: ${instance.instanceId}`)
+
+        res.json({
+          success: true,
+          instance: {
+            instanceId: instance.instanceId,
+            repoPath: instance.repoPath,
+            tmuxSession: instance.tmuxSession,
+            sessionCount: instance.sessionCount,
+          },
+        })
+      } catch (err) {
+        console.error('[API] Error creating instance:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Clone from GitHub and register as instance
+    this.app.post('/api/instances/clone', async (req, res) => {
+      try {
+        const { githubUrl } = req.body as { githubUrl: string }
+
+        if (!githubUrl) {
+          res.status(400).json({ error: 'githubUrl is required' })
+          return
+        }
+
+        // Parse GitHub URL
+        const urlPatterns = [
+          /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/.*)?$/,
+          /^github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/.*)?$/,
+          /^([^/]+)\/([^/]+)$/,
+        ]
+
+        let owner: string | null = null
+        let repo: string | null = null
+
+        for (const pattern of urlPatterns) {
+          const match = githubUrl.match(pattern)
+          if (match) {
+            owner = match[1]
+            repo = match[2]
+            break
+          }
+        }
+
+        if (!owner || !repo) {
+          res.status(400).json({ error: `Invalid GitHub URL: ${githubUrl}` })
+          return
+        }
+
+        const cloneBaseDir = '/mnt/c/repos/.workspace/clones'
+        const clonePath = join(cloneBaseDir, repo)
+
+        const { mkdir: mkdirAsync } = await import('fs/promises')
+        await mkdirAsync(cloneBaseDir, { recursive: true })
+
+        let cloned = false
+        if (!existsSync(clonePath)) {
+          const { spawnSync } = await import('child_process')
+          console.log(`[API] Cloning ${owner}/${repo} to ${clonePath}...`)
+
+          const cloneResult = spawnSync('gh', ['repo', 'clone', `${owner}/${repo}`, clonePath], {
+            stdio: 'pipe',
+            timeout: 300000,
+          })
+
+          if (cloneResult.status !== 0) {
+            const stderr = cloneResult.stderr?.toString() || 'Unknown error'
+            res.status(500).json({ error: `Clone failed: ${stderr.slice(0, 200)}` })
+            return
+          }
+
+          cloned = true
+          console.log(`[API] Clone complete: ${clonePath}`)
+        }
+
+        const existing = await getInstanceByPath(clonePath)
+        if (existing) {
+          res.json({
+            success: true,
+            cloned,
+            message: 'Repository already registered',
+            instance: {
+              instanceId: existing.instanceId,
+              repoPath: existing.repoPath,
+              tmuxSession: existing.tmuxSession,
+              sessionCount: existing.sessionCount,
+            },
+          })
+          return
+        }
+
+        const instance = await registerInstance(clonePath, 0)
+
+        try {
+          execSync(`tmux has-session -t "${instance.tmuxSession}" 2>/dev/null`, { stdio: 'ignore' })
+        } catch {
+          execSync(`tmux new-session -d -s "${instance.tmuxSession}" -x 200 -y 50`, { stdio: 'pipe' })
+        }
+
+        console.log(`[API] Instance registered: ${instance.instanceId} (cloned from ${owner}/${repo})`)
+
+        res.json({
+          success: true,
+          cloned,
+          instance: {
+            instanceId: instance.instanceId,
+            repoPath: instance.repoPath,
+            tmuxSession: instance.tmuxSession,
+            sessionCount: instance.sessionCount,
+          },
+        })
+      } catch (err) {
+        console.error('[API] Error cloning repository:', err)
         res.status(500).json({ error: (err as Error).message })
       }
     })

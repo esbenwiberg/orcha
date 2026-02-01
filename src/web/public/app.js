@@ -22,6 +22,70 @@ const terminalGrid = document.getElementById('terminal-grid');
 const summaryEl = document.getElementById('summary');
 
 /**
+ * Show a toast notification
+ */
+function showToast(message, type = 'success') {
+  const existing = document.querySelector('.toast-notification');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.className = `toast-notification toast-${type}`;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  requestAnimationFrame(() => toast.classList.add('visible'));
+
+  setTimeout(() => {
+    toast.classList.remove('visible');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
+/**
+ * Parse GitHub URL to extract owner/repo
+ */
+function parseGitHubUrl(url) {
+  const patterns = [
+    /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/.*)?$/,
+    /^github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/.*)?$/,
+    /^([^/]+)\/([^/]+)$/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return { owner: match[1], repo: match[2] };
+  }
+  return null;
+}
+
+/**
+ * Create a new instance (local folder) via API
+ */
+async function createInstance(repoPath) {
+  const res = await fetch('/api/instances', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repoPath }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Unknown error');
+  return data;
+}
+
+/**
+ * Clone from GitHub and create instance via API
+ */
+async function cloneAndCreateInstance(githubUrl) {
+  const res = await fetch('/api/instances/clone', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ githubUrl }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Unknown error');
+  return data;
+}
+
+/**
  * Fetch sessions from server
  */
 async function fetchSessions() {
@@ -570,26 +634,139 @@ async function newSession() {
 }
 
 /**
- * Create new repo/worktree
+ * Show the add repository dialog (Ctrl+A r shortcut)
  */
-async function newRepo() {
-  const repoUrl = prompt('Enter repo URL or path:');
-  if (!repoUrl) return;
+function newRepo() {
+  showAddRepoDialog();
+}
 
-  try {
-    const res = await fetch('/api/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'repo', repo: repoUrl })
+/**
+ * Show the add repository dialog
+ */
+function showAddRepoDialog() {
+  const existing = document.querySelector('.add-repo-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'add-repo-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;';
+
+  overlay.innerHTML = `
+    <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:380px;max-width:450px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+      <h3 style="margin:0 0 16px;font-size:1rem;color:#e0e0e0;">Add Repository</h3>
+      <div class="dialog-tabs" style="display:flex;gap:0;margin-bottom:16px;border-bottom:1px solid #333;">
+        <button class="dialog-tab active" data-tab="local" style="flex:1;padding:10px 16px;background:transparent;border:none;color:#9b59b6;font-size:0.85rem;cursor:pointer;border-bottom:2px solid #9b59b6;">Local Folder</button>
+        <button class="dialog-tab" data-tab="github" style="flex:1;padding:10px 16px;background:transparent;border:none;color:#888;font-size:0.85rem;cursor:pointer;border-bottom:2px solid transparent;">GitHub URL</button>
+      </div>
+      <div class="tab-content active" data-tab="local">
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <div>
+            <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Repository path</label>
+            <input type="text" class="local-path-input" placeholder="/home/user/projects/myrepo" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+            <div class="local-error" style="font-size:0.75rem;color:#e74c3c;margin-top:8px;"></div>
+          </div>
+        </div>
+      </div>
+      <div class="tab-content" data-tab="github" style="display:none;">
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <div>
+            <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">GitHub URL or owner/repo</label>
+            <input type="text" class="github-url-input" placeholder="https://github.com/owner/repo" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+            <div class="github-preview" style="font-size:0.75rem;color:#9b59b6;margin-top:8px;min-height:1.2em;"></div>
+            <div class="github-error" style="font-size:0.75rem;color:#e74c3c;margin-top:4px;"></div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+        <button class="cancel-btn" style="background:transparent;border:1px solid #333;color:#888;font-size:0.85rem;padding:8px 16px;border-radius:4px;cursor:pointer;">Cancel</button>
+        <button class="submit-btn" style="background:#9b59b6;border:none;color:white;font-size:0.85rem;padding:8px 16px;border-radius:4px;cursor:pointer;">Add</button>
+      </div>
+    </div>
+  `;
+
+  const tabs = overlay.querySelectorAll('.dialog-tab');
+  const tabContents = overlay.querySelectorAll('.tab-content');
+  const localPathInput = overlay.querySelector('.local-path-input');
+  const githubUrlInput = overlay.querySelector('.github-url-input');
+  const githubPreview = overlay.querySelector('.github-preview');
+  const localError = overlay.querySelector('.local-error');
+  const githubError = overlay.querySelector('.github-error');
+  const submitBtn = overlay.querySelector('.submit-btn');
+  const cancelBtn = overlay.querySelector('.cancel-btn');
+
+  let activeTab = 'local';
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const tabName = tab.dataset.tab;
+      activeTab = tabName;
+      tabs.forEach(t => {
+        t.style.color = t.dataset.tab === tabName ? '#9b59b6' : '#888';
+        t.style.borderBottomColor = t.dataset.tab === tabName ? '#9b59b6' : 'transparent';
+      });
+      tabContents.forEach(c => c.style.display = c.dataset.tab === tabName ? 'block' : 'none');
+      submitBtn.textContent = tabName === 'github' ? 'Clone & Add' : 'Add';
+      (tabName === 'local' ? localPathInput : githubUrlInput).focus();
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  });
 
-    // Refresh to show new session
-    await render();
-  } catch (err) {
-    console.error('Failed to create repo:', err);
-    alert('Failed to create repo: ' + err.message);
-  }
+  githubUrlInput.addEventListener('input', () => {
+    const parsed = parseGitHubUrl(githubUrlInput.value.trim());
+    if (parsed) {
+      githubPreview.textContent = `Will clone: ${parsed.owner}/${parsed.repo}`;
+      githubError.textContent = '';
+    } else if (githubUrlInput.value.trim()) {
+      githubPreview.textContent = '';
+      githubError.textContent = 'Invalid GitHub URL format';
+    } else {
+      githubPreview.textContent = '';
+      githubError.textContent = '';
+    }
+  });
+
+  const closeDialog = () => overlay.remove();
+
+  submitBtn.addEventListener('click', async () => {
+    submitBtn.disabled = true;
+    cancelBtn.disabled = true;
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = activeTab === 'github' ? 'Cloning...' : 'Adding...';
+
+    try {
+      let successMessage;
+      if (activeTab === 'local') {
+        const path = localPathInput.value.trim();
+        if (!path) throw new Error('Please enter a path');
+        if (!path.startsWith('/')) throw new Error('Please enter an absolute path (starting with /)');
+        const result = await createInstance(path);
+        successMessage = `Added: ${result.instance.instanceId}`;
+      } else {
+        const url = githubUrlInput.value.trim();
+        if (!url) throw new Error('Please enter a GitHub URL');
+        if (!parseGitHubUrl(url)) throw new Error('Invalid GitHub URL format');
+        const result = await cloneAndCreateInstance(url);
+        successMessage = result.cloned ? `Cloned & added: ${result.instance.instanceId}` : `Added: ${result.instance.instanceId}`;
+      }
+      closeDialog();
+      showToast(successMessage, 'success');
+      await render();
+    } catch (err) {
+      submitBtn.disabled = false;
+      cancelBtn.disabled = false;
+      submitBtn.textContent = originalText;
+      (activeTab === 'local' ? localError : githubError).textContent = err.message;
+    }
+  });
+
+  cancelBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDialog(); });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDialog();
+    if (e.key === 'Enter' && !submitBtn.disabled) submitBtn.click();
+  });
+
+  document.body.appendChild(overlay);
+  localPathInput.focus();
 }
 
 /**

@@ -455,3 +455,32 @@ body.fullscreen-mode .terminal-panel.focused {
   border-radius: 3px;
   font-family: 'SF Mono', Monaco, 'Courier New', monospace;
 }
+
+/* Toast notifications */
+.toast-notification {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 12px 20px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: white;
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  z-index: 1001;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+.toast-notification.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toast-success {
+  background: var(--status-done);
+}
+
+.toast-error {
+  background: var(--status-error);
+}
