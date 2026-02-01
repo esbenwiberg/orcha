@@ -54,18 +54,43 @@ body {
   border-bottom: 1px solid var(--border-color);
 }
 
-.sidebar-header h1 {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: var(--accent-purple);
-  margin-bottom: 4px;
+.logo-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.logo {
+  width: 140px;
+  height: auto;
+}
+
+#add-repo-btn {
+  background: var(--accent-purple);
+  border: none;
+  color: white;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  font-size: 1.2rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#add-repo-btn:hover {
+  background: #8e44ad;
 }
 
 .sidebar-header .subtitle {
   font-size: 0.75rem;
-  color: var(--text-secondary);
+  color: var(--accent-purple);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  text-align: center;
+  cursor: pointer;
 }
 
 #session-list {
@@ -74,20 +99,52 @@ body {
   padding: 8px 0;
 }
 
-.instance-header {
+.instance-header-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 8px 16px 4px;
+  border-top: 1px solid var(--border-color);
+  margin-top: 8px;
+}
+
+.instance-header-container:first-child {
+  border-top: none;
+  margin-top: 0;
+}
+
+.instance-header {
   font-size: 0.7rem;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  border-top: 1px solid var(--border-color);
-  margin-top: 8px;
+  cursor: pointer;
 }
 
-.instance-header:first-child {
-  border-top: none;
-  margin-top: 0;
+.instance-header:hover {
+  color: var(--text-secondary);
+}
+
+.add-session-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.add-session-btn:hover {
+  background: var(--accent-purple);
+  border-color: var(--accent-purple);
+  color: white;
 }
 
 .session-item {

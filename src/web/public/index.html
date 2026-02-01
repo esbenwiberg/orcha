@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Orcha Dashboard</title>
+  <link rel="icon" type="image/png" href="favicon.png">
 
   <!-- xterm.js from CDN -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
@@ -11,18 +12,22 @@
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
 
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
   <div id="app">
     <!-- Sidebar -->
     <aside id="sidebar">
       <div class="sidebar-header">
-        <h1>orcha</h1>
-        <span class="subtitle">parallel AI sessions</span>
+        <div class="logo-row">
+          <img src="logo.png" alt="Orcha" class="logo">
+          <button id="add-repo-btn" title="Add repository (Ctrl+A r)">+</button>
+        </div>
+        <span class="subtitle" id="catchphrase">herd your AI agents</span>
       </div>
       <div id="session-list"></div>
       <div class="sidebar-footer">
+        <div id="usage-stats"></div>
         <div id="summary"></div>
       </div>
     </aside>

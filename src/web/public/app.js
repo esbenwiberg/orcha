@@ -328,11 +328,29 @@ function updateSidebar(tmuxSessions) {
   const groups = groupByInstance(tmuxSessions);
 
   for (const [instanceId, instanceSessions] of groups) {
+    // Instance header container
+    const headerContainer = document.createElement('div');
+    headerContainer.className = 'instance-header-container';
+
     // Instance header
     const header = document.createElement('div');
     header.className = 'instance-header';
     header.textContent = instanceId;
-    sessionList.appendChild(header);
+    header.title = 'Click to filter by this repo';
+
+    // Add session button
+    const addBtn = document.createElement('button');
+    addBtn.className = 'add-session-btn';
+    addBtn.innerHTML = '+';
+    addBtn.title = 'Add new session (Ctrl+A c)';
+    addBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      newSession();
+    });
+
+    headerContainer.appendChild(header);
+    headerContainer.appendChild(addBtn);
+    sessionList.appendChild(headerContainer);
 
     // One entry per tmux session
     for (const session of instanceSessions) {
@@ -539,6 +557,12 @@ async function init() {
 
   // Handle window resize
   window.addEventListener('resize', handleResize);
+
+  // Add Repo button
+  const addRepoBtn = document.getElementById('add-repo-btn');
+  if (addRepoBtn) {
+    addRepoBtn.addEventListener('click', showAddRepoDialog);
+  }
 
   // Keyboard shortcuts - tmux style with Ctrl+A prefix
   setupKeyboardShortcuts();
