@@ -9,7 +9,8 @@ import express from 'express'
 import { createServer } from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 import * as pty from 'node-pty'
-import { join, dirname, resolve } from 'path'
+import { join, dirname, resolve, isAbsolute } from 'path'
+import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
 import { existsSync } from 'fs'
@@ -222,11 +223,10 @@ export class WebDashboardServer {
           return
         }
 
-        // Check tmux session exists
+        // Ensure tmux session exists (create if needed)
         const tmux = new TmuxRenderer({ sessionName: instance.tmuxSession })
         if (!tmux.sessionExists()) {
-          res.status(404).json({ error: 'Tmux session not found' })
-          return
+          tmux.createSession()
         }
 
         // Create session manager
@@ -305,6 +305,17 @@ export class WebDashboardServer {
       }
     })
 
+    // API: List all registered instances
+    this.app.get('/api/instances', async (_req, res) => {
+      try {
+        const instances = await listInstances()
+        res.json({ instances })
+      } catch (err) {
+        console.error('[API] Error listing instances:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Register a new instance (add repo to dashboard)
     this.app.post('/api/instances', async (req, res) => {
       try {
@@ -316,8 +327,17 @@ export class WebDashboardServer {
           return
         }
 
-        // Resolve to absolute path
-        const absolutePath = resolve(repoPath)
+        // Expand tilde to home directory
+        let absolutePath = repoPath
+        if (repoPath.startsWith('~/')) {
+          absolutePath = join(homedir(), repoPath.slice(2))
+        } else if (repoPath === '~') {
+          absolutePath = homedir()
+        } else if (!isAbsolute(repoPath)) {
+          // Reject relative paths - don't resolve against cwd
+          res.status(400).json({ error: 'Please enter an absolute path (starting with / or ~)' })
+          return
+        }
 
         // Check path exists
         if (!existsSync(absolutePath)) {
@@ -334,10 +354,26 @@ export class WebDashboardServer {
           return
         }
 
-        // Check not already registered
+        // Check if already registered - reuse existing instance
         const existing = await getInstanceByPath(absolutePath)
         if (existing) {
-          res.status(409).json({ error: `Repository already registered as: ${existing.instanceId}` })
+          // Ensure tmux session exists (may have been killed)
+          const tmux = new TmuxRenderer({ sessionName: existing.tmuxSession })
+          if (!tmux.sessionExists()) {
+            tmux.createSession()
+          }
+
+          console.log(`[API] Reusing existing instance: ${existing.instanceId} (${absolutePath})`)
+          res.json({
+            success: true,
+            existing: true,
+            instance: {
+              instanceId: existing.instanceId,
+              repoPath: existing.repoPath,
+              tmuxSession: existing.tmuxSession,
+              sessionCount: existing.sessionCount,
+            },
+          })
           return
         }
 

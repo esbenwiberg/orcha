@@ -187,7 +187,7 @@ body {
   padding: 8px 16px 4px;
   font-size: 0.7rem;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--accent-purple);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   border-top: 1px solid var(--border-color);
@@ -418,7 +418,7 @@ body {
 
 /* Clickable instance headers */
 .instance-header:hover {
-  color: var(--accent-purple);
+  color: var(--text-primary);
   background: var(--bg-tertiary);
 }
 
@@ -633,7 +633,6 @@ body {
 .panel-title {
   font-size: 0.85rem;
   font-weight: 500;
-  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -641,10 +640,23 @@ body {
   padding: 2px 4px;
   border-radius: 4px;
   transition: background 0.15s;
+  flex: 0 1 auto;
+  max-width: 150px;
 }
 
 .panel-title:hover {
   background: var(--bg-tertiary);
+}
+
+.panel-repo {
+  font-size: 0.75rem;
+  color: var(--accent-purple);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  text-align: center;
+  min-width: 40px;
 }
 
 .panel-title-input {

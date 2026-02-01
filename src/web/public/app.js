@@ -545,6 +545,21 @@ async function fetchSessions() {
 }
 
 /**
+ * Fetch all registered instances from server
+ */
+async function fetchInstances() {
+  try {
+    const res = await fetch('/api/instances');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return data.instances || [];
+  } catch (err) {
+    console.error('Failed to fetch instances:', err);
+    return [];
+  }
+}
+
+/**
  * Fetch Claude usage stats from server
  */
 async function fetchUsage() {
@@ -1003,12 +1018,26 @@ function showAddRepoDialog() {
         if (!path) {
           throw new Error('Please enter a path');
         }
-        if (!path.startsWith('/')) {
-          throw new Error('Please enter an absolute path (starting with /)');
+        // Accept Unix absolute paths and tilde paths
+        const isUnixAbsolute = path.startsWith('/');
+        const isTildePath = path.startsWith('~');
+        const isWindowsAbsolute = /^[a-zA-Z]:[\\/]/.test(path);
+
+        if (isWindowsAbsolute) {
+          // Convert Windows path to WSL path (e.g., C:\Users -> /mnt/c/Users)
+          const drive = path[0].toLowerCase();
+          const rest = path.slice(2).replace(/\\/g, '/');
+          throw new Error(`On WSL, use: /mnt/${drive}${rest}`);
+        }
+
+        if (!isUnixAbsolute && !isTildePath) {
+          throw new Error('Please enter an absolute path (starting with / or ~)');
         }
 
         const result = await createInstance(path);
-        successMessage = `Added: ${result.instance.instanceId}`;
+        successMessage = result.existing
+          ? `Using existing: ${result.instance.instanceId}`
+          : `Added: ${result.instance.instanceId}`;
       } else {
         const url = githubUrlInput.value.trim();
         if (!url) {
@@ -1179,6 +1208,12 @@ function createTerminalPanel(session) {
     makeEditableTitle(title, session);
   });
 
+  // Repo name (centered in header)
+  const repo = document.createElement('div');
+  repo.className = 'panel-repo';
+  repo.textContent = session.instanceId;
+  repo.title = session.instanceId;
+
   const status = document.createElement('div');
   status.className = 'panel-status';
   status.textContent = session.state;
@@ -1229,6 +1264,7 @@ function createTerminalPanel(session) {
 
   header.appendChild(dot);
   header.appendChild(title);
+  header.appendChild(repo);
   header.appendChild(status);
   header.appendChild(actionsBtn);
   header.appendChild(folderBtn);
@@ -1582,8 +1618,9 @@ function groupByInstance(sessions) {
 
 /**
  * Update sidebar session list - shows one entry per tmux session
+ * Also shows instances with 0 sessions
  */
-function updateSidebar(tmuxSessions) {
+function updateSidebar(tmuxSessions, instances = []) {
   // Don't rebuild sidebar if a form is open (would destroy it)
   if (document.querySelector('.new-session-form')) {
     return;
@@ -1591,8 +1628,15 @@ function updateSidebar(tmuxSessions) {
 
   sessionList.innerHTML = '';
 
-  // Group by instance for headers
+  // Group sessions by instance
   const groups = groupByInstance(tmuxSessions);
+
+  // Add empty instances (those with no sessions)
+  for (const inst of instances) {
+    if (!groups.has(inst.instanceId)) {
+      groups.set(inst.instanceId, []);
+    }
+  }
 
   for (const [instanceId, instanceSessions] of groups) {
     // Instance header container
@@ -1760,21 +1804,24 @@ function applyGridLayout(count) {
  * Main render function
  */
 async function render() {
-  // Fetch sessions and usage in parallel
-  const [{ sessions, summary }, usage] = await Promise.all([
+  // Fetch sessions, instances, and usage in parallel
+  const [{ sessions, summary }, instances, usage] = await Promise.all([
     fetchSessions(),
+    fetchInstances(),
     fetchUsage(),
   ]);
 
   // Store all sessions (for sidebar)
   state.sessions = sessions;
+  state.instances = instances;
   state.usage = usage;
 
   // Dedupe by tmux session for terminal panels (1 panel per tmux session)
   const tmuxSessions = dedupeByTmuxSession(sessions);
 
   // Update sidebar (1 entry per tmux session, matching panels)
-  updateSidebar(tmuxSessions);
+  // Pass instances to show empty repos too
+  updateSidebar(tmuxSessions, instances);
   updateSummary(summary);
   updateUsageDisplay(usage);
 
