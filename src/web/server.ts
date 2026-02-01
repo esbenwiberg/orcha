@@ -53,10 +53,10 @@ interface PtySession {
 }
 
 interface UsageStats {
-  date: string
-  tokens: number
-  messages: number
-  sessions: number
+  totalSessions: number
+  totalMessages: number
+  cacheReadTokens: number
+  firstSessionDate: string
 }
 
 export class WebDashboardServer {
@@ -1055,25 +1055,19 @@ export class WebDashboardServer {
       const { readFile } = await import('fs/promises')
       const data = JSON.parse(await readFile(statsPath, 'utf-8'))
 
-      const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-
-      // Find today's activity
-      const activity = data.dailyActivity?.find((d: { date: string }) => d.date === today)
-      const tokenData = data.dailyModelTokens?.find((d: { date: string }) => d.date === today)
-
-      // Sum tokens across all models
-      const tokens = tokenData?.tokensByModel
-        ? Object.values(tokenData.tokensByModel as Record<string, number>).reduce(
-            (sum: number, t: number) => sum + (t || 0),
-            0
-          )
-        : 0
+      // Sum cache read tokens across all models
+      let cacheReadTokens = 0
+      if (data.modelUsage) {
+        for (const model of Object.values(data.modelUsage) as Array<{ cacheReadInputTokens?: number }>) {
+          cacheReadTokens += model.cacheReadInputTokens || 0
+        }
+      }
 
       return {
-        date: today,
-        tokens,
-        messages: activity?.messageCount || 0,
-        sessions: activity?.sessionCount || 0,
+        totalSessions: data.totalSessions || 0,
+        totalMessages: data.totalMessages || 0,
+        cacheReadTokens,
+        firstSessionDate: data.firstSessionDate || '',
       }
     } catch {
       // File missing or unreadable

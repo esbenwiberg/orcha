@@ -633,26 +633,42 @@ function formatNumber(num) {
 }
 
 /**
- * Update usage stats display
+ * Calculate days since a date
+ */
+function daysSince(dateStr) {
+  if (!dateStr) return 0;
+  const start = new Date(dateStr);
+  const now = new Date();
+  return Math.floor((now - start) / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Update usage stats display - shows fun all-time stats
  */
 function updateUsageDisplay(usage) {
-  if (!usage || !usageStatsEl) {
+  if (!usage || !usageStatsEl || usage.error) {
     if (usageStatsEl) usageStatsEl.innerHTML = '';
     return;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
-  const dateLabel = usage.date === today ? 'Today' : usage.date;
+  const days = daysSince(usage.firstSessionDate);
 
   usageStatsEl.innerHTML = `
-    <div class="usage-label">${dateLabel}</div>
+    <div class="usage-label">All Time</div>
     <div class="usage-row">
-      <span class="usage-value">${formatNumber(usage.tokens)}</span>
-      <span class="usage-unit">tokens</span>
+      <span class="usage-value">${formatNumber(usage.totalSessions)}</span>
+      <span class="usage-unit">sessions</span>
     </div>
     <div class="usage-row">
-      <span class="usage-value">${usage.messages}</span>
+      <span class="usage-value">${formatNumber(usage.totalMessages)}</span>
       <span class="usage-unit">messages</span>
+    </div>
+    <div class="usage-row">
+      <span class="usage-value">${formatNumber(usage.cacheReadTokens)}</span>
+      <span class="usage-unit">cache tokens</span>
+    </div>
+    <div class="usage-row usage-days">
+      <span class="usage-unit">${days} days of Claude</span>
     </div>
   `;
 }

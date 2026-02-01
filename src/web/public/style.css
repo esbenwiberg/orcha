@@ -291,6 +291,12 @@ body {
   margin-bottom: 2px;
 }
 
+.usage-row.usage-days {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color);
+}
+
 .usage-value {
   font-size: 1.1rem;
   font-weight: 600;
