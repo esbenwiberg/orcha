@@ -11,7 +11,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import * as pty from 'node-pty'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { execSync } from 'child_process'
+import { execSync, exec } from 'child_process'
 import { existsSync } from 'fs'
 import { listInstances } from '../core/instance-registry.js'
 import { StatusMonitor, getStatusDirForInstance } from '../core/status-monitor.js'
@@ -89,6 +89,63 @@ export class WebDashboardServer {
           error: sessions.filter(s => s.state === 'error').length,
         }
         res.json({ sessions, summary })
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Kill a session (tmux session)
+    this.app.delete('/api/sessions/:sessionKey', async (req, res) => {
+      const { sessionKey } = req.params
+
+      try {
+        // Close any active PTY connection
+        const ptySession = this.ptySessions.get(sessionKey)
+        if (ptySession) {
+          ptySession.pty.kill()
+          ptySession.ws?.close()
+          this.ptySessions.delete(sessionKey)
+        }
+
+        // Kill the tmux session
+        try {
+          execSync(`tmux kill-session -t "${sessionKey}"`, { stdio: 'ignore' })
+        } catch {
+          // Session may already be dead
+        }
+
+        res.json({ success: true, message: `Session ${sessionKey} killed` })
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Create new session (placeholder - requires orcha CLI integration)
+    this.app.use(express.json())
+    this.app.post('/api/sessions', async (req, res) => {
+      const { action, repo } = req.body
+
+      try {
+        if (action === 'new') {
+          // Add a new pane to an existing tmux session
+          // For now, find the first active instance and add a pane
+          const instances = await listInstances()
+          if (instances.length === 0) {
+            return res.status(400).json({ error: 'No active orcha instances. Start one with: orcha start' })
+          }
+
+          const inst = instances[0]
+          // Create new pane in the tmux session
+          execSync(`tmux split-window -t "${inst.tmuxSession}" -v`, { stdio: 'ignore' })
+          execSync(`tmux select-layout -t "${inst.tmuxSession}" tiled`, { stdio: 'ignore' })
+
+          res.json({ success: true, message: 'New pane created' })
+        } else if (action === 'repo' && repo) {
+          // Clone/create worktree for a repo - would need deeper integration
+          res.status(501).json({ error: 'Repo creation via web not yet implemented. Use CLI: orcha add <repo>' })
+        } else {
+          res.status(400).json({ error: 'Invalid action. Use action: "new" or "repo"' })
+        }
       } catch (err) {
         res.status(500).json({ error: (err as Error).message })
       }

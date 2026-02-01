@@ -11,6 +11,9 @@ const state = {
   terminals: new Map(), // sessionKey -> { term, ws, fitAddon }
   focusedSession: null,
   refreshInterval: null,
+  prefixMode: false,      // Ctrl+A prefix active
+  prefixTimeout: null,    // Auto-cancel prefix after timeout
+  fullscreen: false,      // Fullscreen mode active
 };
 
 // DOM elements
@@ -473,13 +476,273 @@ async function init() {
   // Handle window resize
   window.addEventListener('resize', handleResize);
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts - tmux style with Ctrl+A prefix
+  setupKeyboardShortcuts();
+}
+
+/**
+ * Get ordered list of tmux sessions for navigation
+ */
+function getTmuxSessions() {
+  return dedupeByTmuxSession(state.sessions);
+}
+
+/**
+ * Navigate to next session
+ */
+function nextSession() {
+  const sessions = getTmuxSessions();
+  if (sessions.length === 0) return;
+
+  const currentIdx = sessions.findIndex(s => getSessionKey(s) === state.focusedSession);
+  const nextIdx = (currentIdx + 1) % sessions.length;
+  focusPanel(getSessionKey(sessions[nextIdx]));
+}
+
+/**
+ * Navigate to previous session
+ */
+function prevSession() {
+  const sessions = getTmuxSessions();
+  if (sessions.length === 0) return;
+
+  const currentIdx = sessions.findIndex(s => getSessionKey(s) === state.focusedSession);
+  const prevIdx = currentIdx <= 0 ? sessions.length - 1 : currentIdx - 1;
+  focusPanel(getSessionKey(sessions[prevIdx]));
+}
+
+/**
+ * Toggle fullscreen mode for focused panel
+ */
+function toggleFullscreen() {
+  state.fullscreen = !state.fullscreen;
+  document.body.classList.toggle('fullscreen-mode', state.fullscreen);
+
+  // Refit all terminals after layout change
+  setTimeout(() => {
+    for (const { fitAddon } of state.terminals.values()) {
+      fitAddon.fit();
+    }
+  }, 100);
+}
+
+/**
+ * Kill session with confirmation
+ */
+async function killSession() {
+  if (!state.focusedSession) return;
+
+  const confirmed = confirm(`Kill session "${state.focusedSession}"?`);
+  if (!confirmed) return;
+
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(state.focusedSession)}`, {
+      method: 'DELETE'
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    // Refresh to update UI
+    await render();
+  } catch (err) {
+    console.error('Failed to kill session:', err);
+    alert('Failed to kill session: ' + err.message);
+  }
+}
+
+/**
+ * Create new session
+ */
+async function newSession() {
+  try {
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'new' })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    // Refresh to show new session
+    await render();
+  } catch (err) {
+    console.error('Failed to create session:', err);
+    alert('Failed to create session: ' + err.message);
+  }
+}
+
+/**
+ * Create new repo/worktree
+ */
+async function newRepo() {
+  const repoUrl = prompt('Enter repo URL or path:');
+  if (!repoUrl) return;
+
+  try {
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'repo', repo: repoUrl })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    // Refresh to show new session
+    await render();
+  } catch (err) {
+    console.error('Failed to create repo:', err);
+    alert('Failed to create repo: ' + err.message);
+  }
+}
+
+/**
+ * Show/hide prefix mode indicator
+ */
+function showPrefixIndicator(show) {
+  let indicator = document.getElementById('prefix-indicator');
+
+  if (show && !indicator) {
+    indicator = document.createElement('div');
+    indicator.id = 'prefix-indicator';
+    indicator.innerHTML = '<kbd>Ctrl+A</kbd> <span>waiting for command...</span>';
+    document.body.appendChild(indicator);
+  } else if (!show && indicator) {
+    indicator.remove();
+  }
+}
+
+/**
+ * Show shortcut help overlay
+ */
+function showShortcutHelp() {
+  let help = document.getElementById('shortcut-help');
+  if (help) {
+    help.remove();
+    return;
+  }
+
+  help = document.createElement('div');
+  help.id = 'shortcut-help';
+  help.innerHTML = `
+    <div class="help-content">
+      <h3>Keyboard Shortcuts</h3>
+      <p class="help-subtitle">Press <kbd>Ctrl+A</kbd> then:</p>
+      <div class="help-grid">
+        <div class="help-item"><kbd>n</kbd> <span>Next session</span></div>
+        <div class="help-item"><kbd>p</kbd> <span>Previous session</span></div>
+        <div class="help-item"><kbd>c</kbd> <span>New session</span></div>
+        <div class="help-item"><kbd>r</kbd> <span>New repo</span></div>
+        <div class="help-item"><kbd>f</kbd> <span>Toggle fullscreen</span></div>
+        <div class="help-item"><kbd>x</kbd> <span>Kill session</span></div>
+        <div class="help-item"><kbd>?</kbd> <span>This help</span></div>
+        <div class="help-item"><kbd>Esc</kbd> <span>Cancel</span></div>
+      </div>
+      <p class="help-footer">Press <kbd>Esc</kbd> or <kbd>Ctrl+A ?</kbd> to close</p>
+    </div>
+  `;
+  help.addEventListener('click', (e) => {
+    if (e.target === help) help.remove();
+  });
+  document.body.appendChild(help);
+}
+
+/**
+ * Setup tmux-style keyboard shortcuts with Ctrl+A prefix
+ */
+function setupKeyboardShortcuts() {
   document.addEventListener('keydown', (e) => {
+    // Close help on Escape
+    if (e.key === 'Escape') {
+      const help = document.getElementById('shortcut-help');
+      if (help) {
+        help.remove();
+        e.preventDefault();
+        return;
+      }
+
+      // Exit prefix mode
+      if (state.prefixMode) {
+        state.prefixMode = false;
+        clearTimeout(state.prefixTimeout);
+        showPrefixIndicator(false);
+        e.preventDefault();
+        return;
+      }
+
+      // Exit fullscreen
+      if (state.fullscreen) {
+        toggleFullscreen();
+        e.preventDefault();
+        return;
+      }
+    }
+
+    // Ctrl+A to enter prefix mode
+    if (e.ctrlKey && e.key === 'a') {
+      // If already in prefix mode, send literal Ctrl+A to terminal
+      if (state.prefixMode) {
+        state.prefixMode = false;
+        clearTimeout(state.prefixTimeout);
+        showPrefixIndicator(false);
+        // Let it pass through to terminal
+        return;
+      }
+
+      state.prefixMode = true;
+      showPrefixIndicator(true);
+
+      // Auto-cancel after 2 seconds
+      state.prefixTimeout = setTimeout(() => {
+        state.prefixMode = false;
+        showPrefixIndicator(false);
+      }, 2000);
+
+      e.preventDefault();
+      return;
+    }
+
+    // Handle prefix commands
+    if (state.prefixMode) {
+      state.prefixMode = false;
+      clearTimeout(state.prefixTimeout);
+      showPrefixIndicator(false);
+
+      switch (e.key.toLowerCase()) {
+        case 'n':
+          nextSession();
+          break;
+        case 'p':
+          prevSession();
+          break;
+        case 'c':
+          newSession();
+          break;
+        case 'r':
+          newRepo();
+          break;
+        case 'f':
+          toggleFullscreen();
+          break;
+        case 'x':
+        case 'k':
+          killSession();
+          break;
+        case '?':
+          showShortcutHelp();
+          break;
+        default:
+          // Unknown command, ignore
+          return;
+      }
+
+      e.preventDefault();
+      return;
+    }
+
+    // Direct shortcuts (not in prefix mode)
     // Ctrl+1-9 to focus panel by number
     if (e.ctrlKey && e.key >= '1' && e.key <= '9') {
       const idx = parseInt(e.key) - 1;
-      if (state.sessions[idx]) {
-        focusPanel(getSessionKey(state.sessions[idx]));
+      const sessions = getTmuxSessions();
+      if (sessions[idx]) {
+        focusPanel(getSessionKey(sessions[idx]));
         e.preventDefault();
       }
     }
