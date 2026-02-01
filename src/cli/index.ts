@@ -29,6 +29,7 @@ import {
   saveSessionStore,
   loadSessionStore,
   clearSessionStore,
+  ensureHooksInstalled,
 } from '../core/index.js'
 import type { SessionMetadata } from '../core/index.js'
 import type { InstanceInfo } from '../core/index.js'
@@ -124,6 +125,9 @@ program
       console.error('Install with: apt install tmux (Linux) or brew install tmux (macOS)')
       process.exit(1)
     }
+
+    // Ensure Claude Code hooks are installed for status updates
+    await ensureHooksInstalled()
 
     // Parse branches if provided
     const branchList = branches ? branches.split(',').map((b: string) => b.trim()) : []

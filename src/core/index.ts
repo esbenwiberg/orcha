@@ -46,3 +46,6 @@ export {
   getSessionByDisplayId,
 } from './session-store.js'
 export type { SessionMetadata, SessionStoreData } from './session-store.js'
+
+// Hook installer for Claude Code status updates
+export { ensureHooksInstalled, isHookInstalled, installHooks } from './hook-installer.js'
