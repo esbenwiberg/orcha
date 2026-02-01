@@ -1211,8 +1211,8 @@ function createTerminalPanel(session) {
   // Repo name (centered in header)
   const repo = document.createElement('div');
   repo.className = 'panel-repo';
-  repo.textContent = session.instanceId;
-  repo.title = session.instanceId;
+  repo.textContent = session.instanceId.replace('orcha-', '');
+  repo.title = session.instanceId.replace('orcha-', '');
 
   const status = document.createElement('div');
   status.className = 'panel-status';
@@ -1646,7 +1646,7 @@ function updateSidebar(tmuxSessions, instances = []) {
     // Instance header (clickable to filter)
     const header = document.createElement('div');
     header.className = 'instance-header';
-    header.textContent = instanceId;
+    header.textContent = instanceId.replace('orcha-', '');
     header.title = 'Click to show only this repo';
     header.style.cursor = 'pointer';
     header.addEventListener('click', () => filterByInstance(instanceId));
