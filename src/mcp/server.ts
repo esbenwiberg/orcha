@@ -69,6 +69,9 @@ export function createMcpServer(statusDir = DEFAULT_STATUS_DIR): McpServer {
         }
       }
 
+      // Use env var for status dir if set, otherwise use the configured default
+      const effectiveStatusDir = process.env.ORCHA_STATUS_DIR || statusDir
+
       // Map the state
       const state = STATE_MAP[args.state] || 'idle'
 
@@ -82,10 +85,10 @@ export function createMcpServer(statusDir = DEFAULT_STATUS_DIR): McpServer {
       }
 
       // Ensure directory exists
-      await mkdir(statusDir, { recursive: true })
+      await mkdir(effectiveStatusDir, { recursive: true })
 
       // Write status file
-      const filePath = join(statusDir, `${sessionId}.json`)
+      const filePath = join(effectiveStatusDir, `${sessionId}.json`)
       await writeFile(filePath, JSON.stringify(statusContent, null, 2))
 
       return {

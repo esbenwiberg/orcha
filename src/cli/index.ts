@@ -205,10 +205,11 @@ program
         // Create tmux pane at the correct working directory (use actual session ID)
         tmux.createPane(session.id, workDir)
 
-        // Run the AI command in the tmux pane
+        // Run the AI command in the tmux pane with orcha env vars
         const cmd = mode === 'shell' ? '' : mode
         if (cmd) {
-          tmux.runInPane(session.id, cmd)
+          const envVars = `export ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}'`
+          tmux.runInPane(session.id, `${envVars} && ${cmd}`)
         }
 
         if (session.worktreePath) {
@@ -865,10 +866,11 @@ program
       // Create tmux pane at correct location (use actual session ID)
       tmux.createPane(session.id, workDir)
 
-      // Run the AI command in the tmux pane
+      // Run the AI command in the tmux pane with orcha env vars
       const cmd = mode === 'shell' ? '' : mode || 'claude'
       if (cmd) {
-        tmux.runInPane(session.id, cmd)
+        const envVars = `export ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}'`
+        tmux.runInPane(session.id, `${envVars} && ${cmd}`)
       }
 
       // Update session metadata store
@@ -1282,7 +1284,8 @@ presetCmd
 
           const cmd = presetSession.mode === 'shell' ? '' : presetSession.mode || 'claude'
           if (cmd) {
-            tmux.runInPane(session.id, cmd)
+            const envVars = `export ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}'`
+            tmux.runInPane(session.id, `${envVars} && ${cmd}`)
           }
 
           if (session.worktreePath) {

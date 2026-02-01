@@ -36,6 +36,7 @@ export class SessionManager extends EventEmitter {
   private sessions: Map<string, Session> = new Map()
   private nextDisplayId = 1
   private repoPath: string
+  private statusDir?: string
 
   readonly worktrees: WorktreeManager
   readonly processes: ProcessRegistry
@@ -44,6 +45,7 @@ export class SessionManager extends EventEmitter {
   constructor(config: SessionManagerConfig) {
     super()
     this.repoPath = config.repoPath
+    this.statusDir = config.statusDir
 
     this.worktrees = new WorktreeManager(config.repoPath)
     this.processes = new ProcessRegistry()
@@ -116,6 +118,7 @@ export class SessionManager extends EventEmitter {
           ...process.env,
           ORCHA_SESSION_ID: id,
           ORCHA_DISPLAY_ID: String(displayId),
+          ...(this.statusDir && { ORCHA_STATUS_DIR: this.statusDir }),
         },
       })
 

@@ -266,10 +266,12 @@ export class WebDashboardServer {
         const workDir = session.worktreePath || instance.repoPath
         sessionTmux.createPane(session.id, workDir)
 
-        // Run AI command
+        // Run AI command with environment variables
         const cmd = (mode || 'claude') === 'shell' ? '' : (mode || 'claude')
         if (cmd) {
-          sessionTmux.runInPane(session.id, cmd)
+          // Set environment variables for orcha status reporting
+          const envVars = `export ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}'`
+          sessionTmux.runInPane(session.id, `${envVars} && ${cmd}`)
         }
 
         // Update session metadata store
