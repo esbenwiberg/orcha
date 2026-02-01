@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src/web/public/logo.png" alt="Orcha Logo" width="120">
+</p>
+
 # Orcha
 
 **Parallel AI session orchestrator with real-time status visibility**
