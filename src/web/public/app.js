@@ -43,6 +43,482 @@ function showToast(message, type = 'success') {
     setTimeout(() => toast.remove(), 300);
   }, 3000);
 }
+
+/**
+ * Close any open actions menu
+ */
+function closeActionsMenu() {
+  const existing = document.querySelector('.actions-menu');
+  if (existing) existing.remove();
+}
+
+/**
+ * Toggle git actions menu on a panel
+ */
+function toggleActionsMenu(panel, session) {
+  // If menu already open on this panel, close it
+  const existing = panel.querySelector('.actions-menu');
+  if (existing) {
+    existing.remove();
+    return;
+  }
+
+  // Close any other open menus
+  closeActionsMenu();
+
+  const menu = document.createElement('div');
+  menu.className = 'actions-menu';
+
+  const actions = [
+    { id: 'commit', label: 'Commit...', icon: '●' },
+    { id: 'push', label: 'Push', icon: '↑' },
+    { id: 'pull-main', label: 'Merge origin/main', icon: '↓' },
+    { id: 'create-pr', label: 'Create PR...', icon: '⎇' },
+  ];
+
+  for (const action of actions) {
+    const item = document.createElement('button');
+    item.className = 'actions-menu-item';
+    item.innerHTML = `<span class="actions-menu-icon">${action.icon}</span>${action.label}`;
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeActionsMenu();
+      handleGitAction(action.id, session);
+    });
+    menu.appendChild(item);
+  }
+
+  // Position menu below the actions button
+  const header = panel.querySelector('.panel-header');
+  header.appendChild(menu);
+
+  // Close on click outside
+  const closeHandler = (e) => {
+    if (!menu.contains(e.target) && !e.target.closest('.panel-actions-btn')) {
+      closeActionsMenu();
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeHandler), 0);
+}
+
+/**
+ * Handle git action from menu
+ */
+async function handleGitAction(action, session) {
+  const instanceId = session.instanceId;
+
+  switch (action) {
+    case 'commit':
+      showCommitDialog(instanceId);
+      break;
+    case 'push':
+      await handleGitPush(instanceId);
+      break;
+    case 'pull-main':
+      await handleGitPullMain(instanceId);
+      break;
+    case 'create-pr':
+      showCreatePrDialog(instanceId);
+      break;
+  }
+}
+
+/**
+ * Show commit dialog
+ */
+function showCommitDialog(instanceId) {
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+
+  overlay.innerHTML = `
+    <div class="new-session-dialog" style="min-width:400px;">
+      <h3>Commit Changes</h3>
+      <div class="dialog-instance">${instanceId}</div>
+      <div class="new-session-form">
+        <div>
+          <label>Commit message</label>
+          <textarea class="commit-message" rows="4" placeholder="Describe your changes..." style="width:100%;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);font-size:0.85rem;padding:8px 12px;border-radius:4px;resize:vertical;font-family:inherit;"></textarea>
+          <div class="commit-error error-text"></div>
+        </div>
+      </div>
+      <div class="new-session-buttons">
+        <button class="new-session-cancel">Cancel</button>
+        <button class="new-session-create">Stage All & Commit</button>
+      </div>
+    </div>
+  `;
+
+  const messageInput = overlay.querySelector('.commit-message');
+  const errorEl = overlay.querySelector('.commit-error');
+  const submitBtn = overlay.querySelector('.new-session-create');
+  const cancelBtn = overlay.querySelector('.new-session-cancel');
+
+  const closeDialog = () => overlay.remove();
+
+  submitBtn.addEventListener('click', async () => {
+    const message = messageInput.value.trim();
+    if (!message) {
+      errorEl.textContent = 'Please enter a commit message';
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Committing...';
+    errorEl.textContent = '';
+
+    try {
+      const res = await fetch('/api/git/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instanceId, message }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Commit failed');
+
+      closeDialog();
+      showToast(`Committed: ${data.commitHash}`, 'success');
+    } catch (err) {
+      errorEl.textContent = err.message;
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Stage All & Commit';
+    }
+  });
+
+  cancelBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDialog();
+    if (e.key === 'Enter' && e.ctrlKey && !submitBtn.disabled) submitBtn.click();
+  });
+
+  document.body.appendChild(overlay);
+  messageInput.focus();
+}
+
+/**
+ * Handle git push
+ */
+async function handleGitPush(instanceId) {
+  if (!confirm('Push to origin?')) return;
+
+  showToast('Pushing...', 'info');
+
+  try {
+    const res = await fetch('/api/git/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instanceId }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Push failed');
+
+    showToast('Push successful', 'success');
+  } catch (err) {
+    showToast(`Push failed: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Handle git pull main (merge origin/main)
+ */
+async function handleGitPullMain(instanceId) {
+  if (!confirm('Fetch and merge origin/main into current branch?')) return;
+
+  showToast('Merging origin/main...', 'info');
+
+  try {
+    const res = await fetch('/api/git/pull-main', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instanceId }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Merge failed');
+
+    showToast('Merged origin/main successfully', 'success');
+  } catch (err) {
+    showToast(`Merge failed: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Show create PR dialog
+ */
+async function showCreatePrDialog(instanceId) {
+  // First fetch git status to check for uncommitted changes and get commits
+  let gitStatus;
+  try {
+    const res = await fetch('/api/git/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instanceId }),
+    });
+    gitStatus = await res.json();
+  } catch (err) {
+    showToast('Failed to fetch git status', 'error');
+    return;
+  }
+
+  // Check for uncommitted changes
+  if (gitStatus.hasChanges) {
+    showToast('You have uncommitted changes. Please commit first.', 'error');
+    return;
+  }
+
+  // Check if there are commits to create a PR from
+  if (!gitStatus.commits || gitStatus.commits.length === 0) {
+    showToast('No commits to create a PR from. Push your changes first.', 'error');
+    return;
+  }
+
+  // Generate PR body from commits
+  const commitList = gitStatus.commits.map(c => `- ${c.message}`).join('\n');
+  const firstCommitMsg = gitStatus.commits[0]?.message || '';
+
+  // Generate a smart title from first commit or branch name
+  let suggestedTitle = firstCommitMsg;
+  if (gitStatus.commits.length > 1) {
+    // If multiple commits, use branch name as title
+    const branchName = gitStatus.branch || '';
+    if (branchName && branchName !== 'main' && branchName !== 'master') {
+      // Convert branch name to title (e.g., "feat/add-git-menu" -> "Add git menu")
+      suggestedTitle = branchName
+        .replace(/^(feat|fix|chore|docs|refactor|test)[\/-]?/i, '')
+        .replace(/[-_]/g, ' ')
+        .replace(/^\w/, c => c.toUpperCase());
+    }
+  }
+
+  const prBody = `## What?
+
+${commitList}
+
+## Why?
+
+<!-- Why is this change needed? -->
+
+## How?
+
+<!-- How was this implemented? -->
+`;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+
+  overlay.innerHTML = `
+    <div class="new-session-dialog" style="min-width:500px;max-width:600px;">
+      <h3>Create Pull Request</h3>
+      <div class="dialog-instance">${instanceId} · ${gitStatus.branch} · ${gitStatus.commits.length} commit${gitStatus.commits.length > 1 ? 's' : ''}</div>
+      <div class="new-session-form">
+        <div>
+          <label>Title</label>
+          <input type="text" class="pr-title" placeholder="PR title" style="width:100%;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);font-size:0.85rem;padding:8px 12px;border-radius:4px;">
+        </div>
+        <div>
+          <label>Description</label>
+          <textarea class="pr-body" rows="12" style="width:100%;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);font-size:0.85rem;padding:8px 12px;border-radius:4px;resize:vertical;font-family:'SF Mono',Monaco,monospace;font-size:0.8rem;"></textarea>
+          <div class="pr-error error-text"></div>
+        </div>
+      </div>
+      <div class="new-session-buttons">
+        <button class="new-session-cancel">Cancel</button>
+        <button class="new-session-create">Create PR</button>
+      </div>
+    </div>
+  `;
+
+  const titleInput = overlay.querySelector('.pr-title');
+  const bodyInput = overlay.querySelector('.pr-body');
+  const errorEl = overlay.querySelector('.pr-error');
+  const submitBtn = overlay.querySelector('.new-session-create');
+  const cancelBtn = overlay.querySelector('.new-session-cancel');
+
+  // Pre-fill with generated content
+  titleInput.value = suggestedTitle;
+  bodyInput.value = prBody;
+
+  const closeDialog = () => overlay.remove();
+
+  submitBtn.addEventListener('click', async () => {
+    const title = titleInput.value.trim();
+    if (!title) {
+      errorEl.textContent = 'Please enter a PR title';
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Creating PR...';
+    errorEl.textContent = '';
+
+    try {
+      const res = await fetch('/api/git/create-pr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId,
+          title,
+          body: bodyInput.value,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create PR');
+
+      closeDialog();
+      showToast('PR created!', 'success');
+
+      // Open PR URL in new tab
+      if (data.prUrl) {
+        window.open(data.prUrl, '_blank');
+      }
+    } catch (err) {
+      errorEl.textContent = err.message;
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Create PR';
+    }
+  });
+
+  cancelBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDialog();
+  });
+
+  document.body.appendChild(overlay);
+  titleInput.focus();
+}
+
+/**
+ * Open file manager (yazi) in a modal
+ */
+function openFileManager(instanceId) {
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay file-manager-overlay';
+
+  overlay.innerHTML = `
+    <div class="file-manager-dialog">
+      <div class="file-manager-header">
+        <span class="file-manager-title">📁 ${instanceId}</span>
+        <button class="file-manager-close">×</button>
+      </div>
+      <div class="file-manager-terminal"></div>
+    </div>
+  `;
+
+  const termContainer = overlay.querySelector('.file-manager-terminal');
+  const closeBtn = overlay.querySelector('.file-manager-close');
+
+  const closeDialog = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
+    overlay.remove();
+  };
+
+  closeBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDialog();
+  });
+
+  document.body.appendChild(overlay);
+
+  // Create terminal
+  const term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: "'SF Mono', Monaco, 'Courier New', monospace",
+    theme: {
+      background: '#0f0f0f',
+      foreground: '#e0e0e0',
+      cursor: '#e0e0e0',
+      cursorAccent: '#0f0f0f',
+      selectionBackground: 'rgba(155, 89, 182, 0.3)',
+    },
+    scrollback: 1000,
+    allowProposedApi: true,
+  });
+
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(termContainer);
+
+  // Connect via WebSocket to yazi
+  const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${location.host}?mode=yazi&instanceId=${encodeURIComponent(instanceId)}`;
+  const ws = new WebSocket(wsUrl);
+
+  // Fit terminal after dialog fully renders and send size to server
+  const fitAndResize = () => {
+    fitAddon.fit();
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    }
+  };
+
+  // Multiple fit attempts to catch layout settling
+  setTimeout(fitAndResize, 50);
+  setTimeout(fitAndResize, 150);
+  setTimeout(fitAndResize, 300);
+
+  ws.onopen = () => {
+    console.log('[FileManager] Connected');
+    // Send initial size after fit
+    fitAndResize();
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'output') {
+        term.write(msg.data);
+      } else if (msg.type === 'exit') {
+        closeDialog();
+      }
+    } catch {
+      term.write(event.data);
+    }
+  };
+
+  ws.onerror = (err) => {
+    console.error('[FileManager] WebSocket error:', err);
+    term.write('\r\n\x1b[31mConnection error. Is yazi installed?\x1b[0m\r\n');
+  };
+
+  ws.onclose = () => {
+    console.log('[FileManager] Disconnected');
+  };
+
+  // Terminal input -> WebSocket
+  term.onData((data) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'input', data }));
+    }
+  });
+
+  // Handle resize
+  const resizeObserver = new ResizeObserver(() => {
+    fitAddon.fit();
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    }
+  });
+  resizeObserver.observe(termContainer);
+
+  // Focus terminal
+  term.focus();
+}
+
 const terminalGrid = document.getElementById('terminal-grid');
 const summaryEl = document.getElementById('summary');
 const usageStatsEl = document.getElementById('usage-stats');
@@ -688,6 +1164,26 @@ function createTerminalPanel(session) {
   status.className = 'panel-status';
   status.textContent = session.state;
 
+  // Git actions menu button
+  const actionsBtn = document.createElement('button');
+  actionsBtn.className = 'panel-actions-btn';
+  actionsBtn.innerHTML = '⋮';
+  actionsBtn.title = 'Git actions (Ctrl+G)';
+  actionsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleActionsMenu(panel, session);
+  });
+
+  // File manager button (yazi)
+  const folderBtn = document.createElement('button');
+  folderBtn.className = 'panel-folder-btn';
+  folderBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>';
+  folderBtn.title = 'Open in file manager (yazi)';
+  folderBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openFileManager(session.instanceId);
+  });
+
   // Fullscreen toggle button
   const fullscreenBtn = document.createElement('button');
   fullscreenBtn.className = 'panel-fullscreen-btn';
@@ -715,6 +1211,8 @@ function createTerminalPanel(session) {
   header.appendChild(dot);
   header.appendChild(title);
   header.appendChild(status);
+  header.appendChild(actionsBtn);
+  header.appendChild(folderBtn);
   header.appendChild(fullscreenBtn);
   header.appendChild(closeBtn);
 
@@ -1372,6 +1870,18 @@ async function init() {
       if (state.sessions[idx]) {
         focusPanel(getSessionKey(state.sessions[idx]));
         e.preventDefault();
+      }
+    }
+
+    // Ctrl+G to open git actions menu on focused panel
+    if (e.ctrlKey && e.key.toLowerCase() === 'g' && state.focusedSession) {
+      e.preventDefault();
+      const panel = document.querySelector(`.terminal-panel[data-session-key="${state.focusedSession}"]`);
+      if (panel) {
+        const session = state.sessions.find(s => getSessionKey(s) === state.focusedSession);
+        if (session) {
+          toggleActionsMenu(panel, session);
+        }
       }
     }
   });

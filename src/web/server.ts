@@ -480,11 +480,377 @@ export class WebDashboardServer {
         res.status(500).json({ error: (err as Error).message })
       }
     })
+
+    // =========================================================================
+    // Git Actions API
+    // =========================================================================
+
+    // Helper to execute git commands in a repo
+    const executeGit = async (instanceId: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> => {
+      const instance = await getInstance(instanceId)
+      if (!instance) {
+        throw new Error(`Instance not found: ${instanceId}`)
+      }
+
+      const { spawnSync } = await import('child_process')
+      const result = spawnSync('git', args, {
+        cwd: instance.repoPath,
+        encoding: 'utf-8',
+        timeout: 60000,
+      })
+
+      return {
+        stdout: result.stdout || '',
+        stderr: result.stderr || '',
+        code: result.status ?? 1,
+      }
+    }
+
+    // API: Get git status for an instance
+    this.app.post('/api/git/status', async (req, res) => {
+      try {
+        const { instanceId } = req.body as { instanceId: string }
+
+        if (!instanceId) {
+          res.status(400).json({ error: 'instanceId is required' })
+          return
+        }
+
+        const instance = await getInstance(instanceId)
+        if (!instance) {
+          res.status(404).json({ error: `Instance not found: ${instanceId}` })
+          return
+        }
+
+        // Get current branch
+        const branchResult = await executeGit(instanceId, ['branch', '--show-current'])
+        const branch = branchResult.stdout.trim() || 'HEAD'
+
+        // Check for uncommitted changes
+        const statusResult = await executeGit(instanceId, ['status', '--porcelain'])
+        const hasChanges = statusResult.stdout.trim().length > 0
+
+        // Get ahead/behind count
+        let ahead = 0
+        let behind = 0
+        try {
+          const trackingResult = await executeGit(instanceId, ['rev-list', '--left-right', '--count', `@{upstream}...HEAD`])
+          const parts = trackingResult.stdout.trim().split(/\s+/)
+          if (parts.length === 2) {
+            behind = parseInt(parts[0], 10) || 0
+            ahead = parseInt(parts[1], 10) || 0
+          }
+        } catch {
+          // No upstream tracking branch
+        }
+
+        // Check if gh CLI is available
+        const { spawnSync } = await import('child_process')
+        const ghCheck = spawnSync('which', ['gh'], { encoding: 'utf-8' })
+        const hasGh = ghCheck.status === 0
+
+        // Check if origin is a GitHub remote
+        let hasGitHubRemote = false
+        try {
+          const remoteResult = await executeGit(instanceId, ['remote', 'get-url', 'origin'])
+          hasGitHubRemote = remoteResult.stdout.includes('github.com')
+        } catch {
+          // No origin remote
+        }
+
+        // Get commits since main/master for PR description
+        let commits: Array<{ hash: string; message: string }> = []
+        try {
+          // Try origin/main first, then origin/master
+          let baseBranch = 'origin/main'
+          const mainCheck = await executeGit(instanceId, ['rev-parse', '--verify', 'origin/main'])
+          if (mainCheck.code !== 0) {
+            baseBranch = 'origin/master'
+          }
+
+          // Get commit log since base branch
+          const logResult = await executeGit(instanceId, ['log', `${baseBranch}..HEAD`, '--pretty=format:%h|%s', '--reverse'])
+          if (logResult.code === 0 && logResult.stdout.trim()) {
+            commits = logResult.stdout.trim().split('\n').map(line => {
+              const [hash, ...messageParts] = line.split('|')
+              return { hash, message: messageParts.join('|') }
+            })
+          }
+        } catch {
+          // Couldn't get commits - not critical
+        }
+
+        res.json({
+          branch,
+          hasChanges,
+          ahead,
+          behind,
+          hasGh,
+          hasGitHubRemote,
+          commits,
+        })
+      } catch (err) {
+        console.error('[API] Git status error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Stage all and commit
+    this.app.post('/api/git/commit', async (req, res) => {
+      try {
+        const { instanceId, message } = req.body as { instanceId: string; message: string }
+
+        if (!instanceId || !message) {
+          res.status(400).json({ error: 'instanceId and message are required' })
+          return
+        }
+
+        // Stage all changes
+        const addResult = await executeGit(instanceId, ['add', '-A'])
+        if (addResult.code !== 0) {
+          res.status(500).json({ error: `Failed to stage changes: ${addResult.stderr}` })
+          return
+        }
+
+        // Commit
+        const commitResult = await executeGit(instanceId, ['commit', '-m', message])
+        if (commitResult.code !== 0) {
+          // Check if it's "nothing to commit"
+          if (commitResult.stdout.includes('nothing to commit') || commitResult.stderr.includes('nothing to commit')) {
+            res.status(400).json({ error: 'Nothing to commit' })
+            return
+          }
+          res.status(500).json({ error: `Commit failed: ${commitResult.stderr || commitResult.stdout}` })
+          return
+        }
+
+        // Get the commit hash
+        const hashResult = await executeGit(instanceId, ['rev-parse', '--short', 'HEAD'])
+        const commitHash = hashResult.stdout.trim()
+
+        console.log(`[API] Committed ${commitHash} in ${instanceId}`)
+        res.json({ success: true, commitHash, output: commitResult.stdout })
+      } catch (err) {
+        console.error('[API] Git commit error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Push to origin
+    this.app.post('/api/git/push', async (req, res) => {
+      try {
+        const { instanceId } = req.body as { instanceId: string }
+
+        if (!instanceId) {
+          res.status(400).json({ error: 'instanceId is required' })
+          return
+        }
+
+        const pushResult = await executeGit(instanceId, ['push'])
+        if (pushResult.code !== 0) {
+          // Try push with set-upstream if no tracking branch
+          if (pushResult.stderr.includes('no upstream branch')) {
+            const branchResult = await executeGit(instanceId, ['branch', '--show-current'])
+            const branch = branchResult.stdout.trim()
+            const pushUpstreamResult = await executeGit(instanceId, ['push', '-u', 'origin', branch])
+            if (pushUpstreamResult.code !== 0) {
+              res.status(500).json({ error: `Push failed: ${pushUpstreamResult.stderr}` })
+              return
+            }
+            console.log(`[API] Pushed ${branch} with upstream in ${instanceId}`)
+            res.json({ success: true, output: pushUpstreamResult.stderr || pushUpstreamResult.stdout })
+            return
+          }
+          res.status(500).json({ error: `Push failed: ${pushResult.stderr}` })
+          return
+        }
+
+        console.log(`[API] Pushed in ${instanceId}`)
+        res.json({ success: true, output: pushResult.stderr || pushResult.stdout || 'Push successful' })
+      } catch (err) {
+        console.error('[API] Git push error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Fetch origin and merge main
+    this.app.post('/api/git/pull-main', async (req, res) => {
+      try {
+        const { instanceId } = req.body as { instanceId: string }
+
+        if (!instanceId) {
+          res.status(400).json({ error: 'instanceId is required' })
+          return
+        }
+
+        // Fetch origin
+        const fetchResult = await executeGit(instanceId, ['fetch', 'origin'])
+        if (fetchResult.code !== 0) {
+          res.status(500).json({ error: `Fetch failed: ${fetchResult.stderr}` })
+          return
+        }
+
+        // Try to merge origin/main, fallback to origin/master
+        let mergeResult = await executeGit(instanceId, ['merge', 'origin/main', '--no-edit'])
+        if (mergeResult.code !== 0 && mergeResult.stderr.includes("'origin/main'")) {
+          // Try origin/master
+          mergeResult = await executeGit(instanceId, ['merge', 'origin/master', '--no-edit'])
+        }
+
+        if (mergeResult.code !== 0) {
+          // Check for merge conflicts
+          if (mergeResult.stdout.includes('CONFLICT') || mergeResult.stderr.includes('CONFLICT')) {
+            res.status(409).json({
+              error: 'Merge conflict detected. Please resolve manually in the terminal.',
+              output: mergeResult.stdout,
+            })
+            return
+          }
+          res.status(500).json({ error: `Merge failed: ${mergeResult.stderr || mergeResult.stdout}` })
+          return
+        }
+
+        console.log(`[API] Merged origin/main in ${instanceId}`)
+        res.json({ success: true, output: mergeResult.stdout || 'Already up to date' })
+      } catch (err) {
+        console.error('[API] Git pull-main error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Create pull request using gh CLI
+    this.app.post('/api/git/create-pr', async (req, res) => {
+      try {
+        const { instanceId, title, body } = req.body as { instanceId: string; title: string; body: string }
+
+        if (!instanceId || !title) {
+          res.status(400).json({ error: 'instanceId and title are required' })
+          return
+        }
+
+        const instance = await getInstance(instanceId)
+        if (!instance) {
+          res.status(404).json({ error: `Instance not found: ${instanceId}` })
+          return
+        }
+
+        // Check gh CLI is available
+        const { spawnSync } = await import('child_process')
+        const ghCheck = spawnSync('which', ['gh'], { encoding: 'utf-8' })
+        if (ghCheck.status !== 0) {
+          res.status(400).json({ error: 'gh CLI not installed. Install it from https://cli.github.com/' })
+          return
+        }
+
+        // Create PR using gh CLI
+        const args = ['pr', 'create', '--title', title]
+        if (body) {
+          args.push('--body', body)
+        }
+
+        const prResult = spawnSync('gh', args, {
+          cwd: instance.repoPath,
+          encoding: 'utf-8',
+          timeout: 60000,
+        })
+
+        if (prResult.status !== 0) {
+          const errorMsg = prResult.stderr || prResult.stdout || 'Unknown error'
+          // Check for common issues
+          if (errorMsg.includes('no commits between')) {
+            res.status(400).json({ error: 'No commits to create a PR from. Push your commits first.' })
+            return
+          }
+          if (errorMsg.includes('already exists')) {
+            res.status(409).json({ error: 'A pull request already exists for this branch.' })
+            return
+          }
+          res.status(500).json({ error: `Failed to create PR: ${errorMsg}` })
+          return
+        }
+
+        // Extract PR URL from output
+        const prUrl = prResult.stdout.trim()
+        console.log(`[API] Created PR: ${prUrl}`)
+        res.json({ success: true, prUrl })
+      } catch (err) {
+        console.error('[API] Git create-pr error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
   }
 
   private setupWebSocket(): void {
-    this.wss.on('connection', (ws, req) => {
+    this.wss.on('connection', async (ws, req) => {
       const url = new URL(req.url || '', `http://localhost:${this.port}`)
+      const mode = url.searchParams.get('mode')
+
+      // File manager mode (yazi)
+      if (mode === 'yazi') {
+        const instanceId = url.searchParams.get('instanceId')
+        if (!instanceId) {
+          ws.close(1008, 'Missing instanceId parameter')
+          return
+        }
+
+        const instance = await getInstance(instanceId)
+        if (!instance) {
+          ws.close(1008, 'Instance not found')
+          return
+        }
+
+        console.log(`[WS] File manager connected: ${instanceId}`)
+
+        const ptyProcess = this.createYaziPty(instance.repoPath)
+        if (!ptyProcess) {
+          ws.close(1011, 'Failed to create yazi PTY')
+          return
+        }
+
+        const sessionKey = `yazi-${instanceId}-${Date.now()}`
+        this.ptySessions.set(sessionKey, { pty: ptyProcess, ws })
+
+        ptyProcess.onData((data) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'output', data }))
+          }
+        })
+
+        ptyProcess.onExit(({ exitCode }) => {
+          console.log(`[PTY] Yazi exited with code ${exitCode}`)
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'exit', code: exitCode }))
+          }
+          this.ptySessions.delete(sessionKey)
+        })
+
+        ws.on('message', (message) => {
+          try {
+            const msg = JSON.parse(message.toString())
+            if (msg.type === 'input' && msg.data) {
+              ptyProcess.write(msg.data)
+            } else if (msg.type === 'resize' && msg.cols && msg.rows) {
+              ptyProcess.resize(msg.cols, msg.rows)
+            }
+          } catch {
+            ptyProcess.write(message.toString())
+          }
+        })
+
+        ws.on('close', () => {
+          console.log(`[WS] File manager disconnected: ${instanceId}`)
+          ptyProcess.kill()
+          this.ptySessions.delete(sessionKey)
+        })
+
+        ws.on('error', (err) => {
+          console.error(`[WS] Yazi error for ${instanceId}:`, err.message)
+        })
+
+        return
+      }
+
+      // Default: tmux session mode
       const sessionKey = url.searchParams.get('session')
       const tmuxSession = url.searchParams.get('tmux')
       const paneIndexStr = url.searchParams.get('pane')
@@ -576,6 +942,32 @@ export class WebDashboardServer {
       return ptyProcess
     } catch (err) {
       console.error(`[PTY] Failed to create PTY:`, (err as Error).message)
+      return null
+    }
+  }
+
+  private createYaziPty(repoPath: string): pty.IPty | null {
+    try {
+      // Check if yazi is installed
+      try {
+        execSync('which yazi', { stdio: 'ignore' })
+      } catch {
+        console.error('[PTY] yazi not found in PATH')
+        return null
+      }
+
+      // Create PTY running yazi in the repo directory
+      const ptyProcess = pty.spawn('yazi', [repoPath], {
+        name: 'xterm-256color',
+        cols: 120,
+        rows: 30,
+        cwd: repoPath,
+        env: { ...process.env, TERM: 'xterm-256color' },
+      })
+
+      return ptyProcess
+    } catch (err) {
+      console.error(`[PTY] Failed to create yazi PTY:`, (err as Error).message)
       return null
     }
   }

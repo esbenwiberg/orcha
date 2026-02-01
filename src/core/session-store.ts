@@ -18,6 +18,8 @@ export interface SessionMetadata {
   mode: SessionMode
   worktreePath: string | null
   createdAt: string // ISO 8601
+  tmuxSession?: string // Optional: tmux session name
+  customName?: string // Optional: user-defined display name
 }
 
 export interface SessionStoreData {
@@ -129,4 +131,22 @@ export async function getSessionByDisplayId(
 ): Promise<SessionMetadata | null> {
   const sessions = await loadSessionStore(instanceId)
   return sessions.find((s) => s.displayId === displayId) || null
+}
+
+/**
+ * Update the custom name for a session
+ */
+export async function updateSessionName(
+  instanceId: string,
+  sessionId: string,
+  customName: string | null
+): Promise<boolean> {
+  const sessions = await loadSessionStore(instanceId)
+  const session = sessions.find((s) => s.id === sessionId)
+  if (session) {
+    session.customName = customName ?? undefined
+    await saveSessionStore(instanceId, sessions)
+    return true
+  }
+  return false
 }
