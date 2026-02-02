@@ -945,6 +945,151 @@ export class WebDashboardServer {
     // Work Items / Issues API (Provider-aware)
     // =========================================================================
 
+    // API: Get diff for pre-review (all changes since diverging from main)
+    this.app.post('/api/git/diff', async (req, res) => {
+      try {
+        const { instanceId } = req.body as { instanceId: string }
+
+        if (!instanceId) {
+          res.status(400).json({ error: 'instanceId is required' })
+          return
+        }
+
+        const instance = await getInstance(instanceId)
+        if (!instance) {
+          res.status(404).json({ error: `Instance not found: ${instanceId}` })
+          return
+        }
+
+        // Get current branch
+        const branchResult = await executeGit(instanceId, ['branch', '--show-current'])
+        const branch = branchResult.stdout.trim() || 'HEAD'
+
+        // Try to find merge-base with origin/main or origin/master
+        let baseBranch = 'origin/main'
+        let mergeBase = ''
+
+        const mainCheck = await executeGit(instanceId, ['rev-parse', '--verify', 'origin/main'])
+        if (mainCheck.code !== 0) {
+          const masterCheck = await executeGit(instanceId, ['rev-parse', '--verify', 'origin/master'])
+          if (masterCheck.code === 0) {
+            baseBranch = 'origin/master'
+          } else {
+            // No remote main/master, just show uncommitted changes
+            baseBranch = ''
+          }
+        }
+
+        // Get merge base if we have a base branch
+        if (baseBranch) {
+          const mergeBaseResult = await executeGit(instanceId, ['merge-base', baseBranch, 'HEAD'])
+          if (mergeBaseResult.code === 0) {
+            mergeBase = mergeBaseResult.stdout.trim()
+          }
+        }
+
+        // Get commits on branch since diverging
+        const commits: Array<{ hash: string; message: string }> = []
+        if (mergeBase) {
+          const logResult = await executeGit(instanceId, ['log', `${mergeBase}..HEAD`, '--pretty=format:%h|%s', '--reverse'])
+          if (logResult.code === 0 && logResult.stdout.trim()) {
+            for (const line of logResult.stdout.trim().split('\n')) {
+              const [hash, ...msgParts] = line.split('|')
+              commits.push({ hash, message: msgParts.join('|') })
+            }
+          }
+        }
+
+        // Get file list with status - full PR preview (all branch changes + uncommitted)
+        const files: Array<{ path: string; status: string; committed: boolean }> = []
+
+        // First get committed changes on branch
+        if (mergeBase) {
+          const committedFilesResult = await executeGit(instanceId, ['diff', '--name-status', `${mergeBase}...HEAD`])
+          if (committedFilesResult.code === 0 && committedFilesResult.stdout.trim()) {
+            for (const line of committedFilesResult.stdout.trim().split('\n')) {
+              const [status, ...pathParts] = line.split('\t')
+              const path = pathParts.join('\t') // Handle paths with tabs (rare)
+              if (path) {
+                files.push({ path, status: status[0], committed: true })
+              }
+            }
+          }
+        }
+
+        // Then add uncommitted changes (working directory + staged)
+        const uncommittedResult = await executeGit(instanceId, ['status', '--porcelain'])
+        if (uncommittedResult.code === 0 && uncommittedResult.stdout.trim()) {
+          for (const line of uncommittedResult.stdout.trim().split('\n')) {
+            const status = line.slice(0, 2).trim()
+            const path = line.slice(3)
+            // Map git status to single-char
+            let statusChar = 'M'
+            if (status.includes('A') || status === '??') statusChar = 'A'
+            else if (status.includes('D')) statusChar = 'D'
+            else if (status.includes('R')) statusChar = 'R'
+
+            // Check if already in files list (committed)
+            const existing = files.find(f => f.path === path)
+            if (existing) {
+              // Mark as having uncommitted changes
+              existing.committed = false
+            } else {
+              files.push({ path, status: statusChar, committed: false })
+            }
+          }
+        }
+
+        // Get full diff (PR preview = all branch changes + uncommitted)
+        let diff = ''
+        if (mergeBase) {
+          // Full diff from merge base to working directory
+          const diffResult = await executeGit(instanceId, ['diff', mergeBase])
+          if (diffResult.code === 0) {
+            diff = diffResult.stdout
+          }
+        } else {
+          // Just uncommitted changes
+          const diffResult = await executeGit(instanceId, ['diff', 'HEAD'])
+          if (diffResult.code === 0) {
+            diff = diffResult.stdout
+          }
+        }
+
+        // Get stats
+        let stats = { files: 0, insertions: 0, deletions: 0 }
+        if (mergeBase) {
+          const statResult = await executeGit(instanceId, ['diff', '--stat', mergeBase])
+          if (statResult.code === 0) {
+            // Parse last line: "X files changed, Y insertions(+), Z deletions(-)"
+            const lines = statResult.stdout.trim().split('\n')
+            const lastLine = lines[lines.length - 1]
+            const filesMatch = lastLine.match(/(\d+) files? changed/)
+            const insertMatch = lastLine.match(/(\d+) insertions?\(\+\)/)
+            const deleteMatch = lastLine.match(/(\d+) deletions?\(-\)/)
+            stats = {
+              files: filesMatch ? parseInt(filesMatch[1], 10) : files.length,
+              insertions: insertMatch ? parseInt(insertMatch[1], 10) : 0,
+              deletions: deleteMatch ? parseInt(deleteMatch[1], 10) : 0,
+            }
+          }
+        }
+
+        res.json({
+          branch,
+          baseBranch: baseBranch || 'HEAD',
+          commits,
+          files,
+          diff,
+          stats,
+        })
+      } catch (err) {
+        console.error('[API] Git diff error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Fetch GitHub issues for validation/preview
     // API: Fetch work items/issues for validation/preview
     // Supports both GitHub issues and Azure DevOps work items via provider abstraction
     this.app.get('/api/github/issues', async (req, res) => {

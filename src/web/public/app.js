@@ -182,6 +182,7 @@ function showHelpDialog() {
         <div style="color:#888;margin-bottom:4px;">All shortcuts use <kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A</kbd> prefix:</div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">File manager (yazi)</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, F</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Git actions menu</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, G</kbd></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Review changes</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, R</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Toggle fullscreen</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, Enter</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Focus panel 1-9</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, 1-9</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Show this help</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, H</kbd></div>
@@ -477,6 +478,207 @@ ${commitList}
 
   document.body.appendChild(overlay);
   titleInput.focus();
+}
+
+/**
+ * Show diff viewer dialog for pre-review
+ */
+async function showDiffViewerDialog(instanceId) {
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay diff-viewer-overlay';
+
+  overlay.innerHTML = `
+    <div class="diff-viewer-dialog">
+      <div class="diff-viewer-header">
+        <div class="diff-viewer-title">
+          <span class="diff-viewer-icon">📋</span>
+          <span class="diff-viewer-heading">Review Changes</span>
+          <span class="diff-viewer-branch"></span>
+        </div>
+        <button class="diff-viewer-close">×</button>
+      </div>
+      <div class="diff-viewer-content">
+        <div class="diff-viewer-sidebar">
+          <div class="diff-sidebar-section">
+            <div class="diff-sidebar-label">Commits</div>
+            <div class="diff-commits-list"></div>
+          </div>
+          <div class="diff-sidebar-section">
+            <div class="diff-sidebar-label">Files</div>
+            <div class="diff-files-list"></div>
+          </div>
+        </div>
+        <div class="diff-viewer-main">
+          <div class="diff-viewer-loading">Loading diff...</div>
+        </div>
+      </div>
+      <div class="diff-viewer-footer">
+        <span class="diff-stats"></span>
+      </div>
+    </div>
+  `;
+
+  const closeBtn = overlay.querySelector('.diff-viewer-close');
+  const branchEl = overlay.querySelector('.diff-viewer-branch');
+  const commitsListEl = overlay.querySelector('.diff-commits-list');
+  const filesListEl = overlay.querySelector('.diff-files-list');
+  const mainEl = overlay.querySelector('.diff-viewer-main');
+  const statsEl = overlay.querySelector('.diff-stats');
+
+  const closeDialog = () => overlay.remove();
+
+  closeBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDialog();
+  });
+
+  document.body.appendChild(overlay);
+
+  // Fetch diff data
+  try {
+    const res = await fetch('/api/git/diff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instanceId }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || 'Failed to fetch diff');
+    }
+
+    const data = await res.json();
+
+    // Update branch info
+    branchEl.textContent = `${data.branch} → ${data.baseBranch}`;
+
+    // Populate commits list
+    if (data.commits.length === 0) {
+      commitsListEl.innerHTML = '<div class="diff-empty">No commits</div>';
+    } else {
+      commitsListEl.innerHTML = data.commits.map(c => `
+        <div class="diff-commit-item" title="${escapeHtml(c.message)}">
+          <span class="diff-commit-hash">${c.hash}</span>
+          <span class="diff-commit-msg">${escapeHtml(c.message)}</span>
+        </div>
+      `).join('');
+    }
+
+    // Populate files list
+    if (data.files.length === 0) {
+      filesListEl.innerHTML = '<div class="diff-empty">No changes</div>';
+    } else {
+      filesListEl.innerHTML = data.files.map(f => {
+        const statusClass = f.status === 'A' ? 'added' : f.status === 'D' ? 'deleted' : 'modified';
+        const uncommittedMark = !f.committed ? ' *' : '';
+        return `
+          <div class="diff-file-item ${statusClass}" data-path="${escapeHtml(f.path)}">
+            <span class="diff-file-status">${f.status}</span>
+            <span class="diff-file-path">${escapeHtml(f.path)}${uncommittedMark}</span>
+          </div>
+        `;
+      }).join('');
+
+      // Click file to show its diff
+      filesListEl.querySelectorAll('.diff-file-item').forEach(item => {
+        item.addEventListener('click', () => {
+          // Highlight selected file
+          filesListEl.querySelectorAll('.diff-file-item').forEach(i => i.classList.remove('selected'));
+          item.classList.add('selected');
+
+          const path = item.dataset.path;
+          showFileDiff(mainEl, data.diff, path);
+        });
+      });
+    }
+
+    // Show full diff initially
+    if (data.diff) {
+      renderDiff(mainEl, data.diff);
+    } else {
+      mainEl.innerHTML = '<div class="diff-empty">No changes to display</div>';
+    }
+
+    // Update stats
+    statsEl.textContent = `${data.commits.length} commit${data.commits.length !== 1 ? 's' : ''} · ${data.stats.files} file${data.stats.files !== 1 ? 's' : ''} changed · +${data.stats.insertions} -${data.stats.deletions} lines`;
+
+  } catch (err) {
+    mainEl.innerHTML = `<div class="diff-error">Error: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+/**
+ * Escape HTML for safe rendering
+ */
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+/**
+ * Render full diff with syntax coloring
+ */
+function renderDiff(container, diffText) {
+  if (!diffText.trim()) {
+    container.innerHTML = '<div class="diff-empty">No changes to display</div>';
+    return;
+  }
+
+  const lines = diffText.split('\n');
+  const html = lines.map(line => {
+    const escaped = escapeHtml(line);
+    if (line.startsWith('+++') || line.startsWith('---')) {
+      return `<div class="diff-line diff-file-header">${escaped}</div>`;
+    } else if (line.startsWith('@@')) {
+      return `<div class="diff-line diff-hunk-header">${escaped}</div>`;
+    } else if (line.startsWith('+')) {
+      return `<div class="diff-line diff-add">${escaped}</div>`;
+    } else if (line.startsWith('-')) {
+      return `<div class="diff-line diff-del">${escaped}</div>`;
+    } else if (line.startsWith('diff ')) {
+      return `<div class="diff-line diff-meta">${escaped}</div>`;
+    } else if (line.startsWith('index ') || line.startsWith('new file') || line.startsWith('deleted file')) {
+      return `<div class="diff-line diff-meta">${escaped}</div>`;
+    } else {
+      return `<div class="diff-line diff-context">${escaped}</div>`;
+    }
+  }).join('');
+
+  container.innerHTML = `<pre class="diff-content">${html}</pre>`;
+}
+
+/**
+ * Show diff for a specific file
+ */
+function showFileDiff(container, fullDiff, filePath) {
+  const lines = fullDiff.split('\n');
+  const fileLines = [];
+  let inFile = false;
+
+  for (const line of lines) {
+    // Start of a new file diff
+    if (line.startsWith('diff --git')) {
+      if (inFile) break; // We've passed our file
+      // Check if this is our file
+      if (line.includes(filePath)) {
+        inFile = true;
+      }
+    }
+    if (inFile) {
+      fileLines.push(line);
+    }
+  }
+
+  if (fileLines.length === 0) {
+    container.innerHTML = `<div class="diff-empty">No diff available for ${escapeHtml(filePath)}</div>`;
+    return;
+  }
+
+  renderDiff(container, fileLines.join('\n'));
 }
 
 /**
@@ -1870,6 +2072,16 @@ function createTerminalPanel(session) {
     openFileManager(session.instanceId);
   });
 
+  // Review changes button
+  const reviewBtn = document.createElement('button');
+  reviewBtn.className = 'panel-review-btn';
+  reviewBtn.innerHTML = '👁';
+  reviewBtn.title = 'Review changes (Ctrl+A, R)';
+  reviewBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showDiffViewerDialog(session.instanceId);
+  });
+
   // Fullscreen toggle button
   const fullscreenBtn = document.createElement('button');
   fullscreenBtn.className = 'panel-fullscreen-btn';
@@ -1900,6 +2112,7 @@ function createTerminalPanel(session) {
   header.appendChild(status);
   header.appendChild(actionsBtn);
   header.appendChild(folderBtn);
+  header.appendChild(reviewBtn);
   header.appendChild(fullscreenBtn);
   header.appendChild(closeBtn);
 
@@ -2786,6 +2999,17 @@ async function init() {
         e.preventDefault();
         e.stopPropagation();
         showHelpDialog();
+        return;
+      }
+
+      // R to open review changes dialog on focused panel
+      if (e.key.toLowerCase() === 'r' && state.focusedSession) {
+        e.preventDefault();
+        e.stopPropagation();
+        const session = state.sessions.find(s => getSessionKey(s) === state.focusedSession);
+        if (session) {
+          showDiffViewerDialog(session.instanceId);
+        }
         return;
       }
     }
