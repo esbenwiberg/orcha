@@ -511,6 +511,8 @@ body {
 .remove-instance-btn:hover {
   color: var(--status-error);
   opacity: 1;
+}
+
 /* Batch issues button */
 .batch-issues-btn {
   background: transparent;

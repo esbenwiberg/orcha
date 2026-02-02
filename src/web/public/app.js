@@ -1156,6 +1156,7 @@ function showNewSessionDialog(instanceId) {
     }
   };
   useWorktreeCheckbox.addEventListener('change', updateBranchInputState);
+  updateBranchInputState(); // Set initial state
 
   const closeDialog = () => overlay.remove();
 
@@ -2127,8 +2128,8 @@ function createTerminalPanel(session) {
   // Focus handling (Ctrl+click toggles visibility filter)
   // Use capture phase (true) to intercept clicks before xterm.js handles them
   panel.addEventListener('click', (e) => {
-    // Don't interfere with terminal clicks
-    if (e.target.closest('.terminal-container')) {
+    // Don't interfere with Shift+click (used for text selection/copy)
+    if (e.shiftKey) {
       return;
     }
     const selection = window.getSelection();

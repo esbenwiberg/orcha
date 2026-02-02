@@ -1642,12 +1642,41 @@ export class WebDashboardServer {
   }
 
   async start(): Promise<void> {
+    // Migrate existing instances to add provider info if missing
+    await this.migrateInstanceProviderInfo()
+
     return new Promise((resolve) => {
       this.server.listen(this.port, () => {
         console.log(`Orcha Web Dashboard running at http://localhost:${this.port}`)
         resolve()
       })
     })
+  }
+
+  /**
+   * Migrate existing instances to detect provider type
+   * (for instances registered before provider detection was added)
+   */
+  private async migrateInstanceProviderInfo(): Promise<void> {
+    try {
+      const instances = await listInstances()
+      let migrated = 0
+
+      for (const instance of instances) {
+        // If instance doesn't have providerType, detect and update it
+        if (!instance.providerType) {
+          const { updateInstanceProviderInfo } = await import('../core/instance-registry.js')
+          await updateInstanceProviderInfo(instance.instanceId)
+          migrated++
+        }
+      }
+
+      if (migrated > 0) {
+        console.log(`[Migration] Updated provider info for ${migrated} instance(s)`)
+      }
+    } catch (err) {
+      console.error('[Migration] Error updating instance provider info:', err)
+    }
   }
 
   stop(): void {
