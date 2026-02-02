@@ -184,6 +184,8 @@ body {
 }
 
 .instance-header {
+  display: flex;
+  align-items: center;
   padding: 8px 16px 4px;
   font-size: 0.7rem;
   font-weight: 600;
@@ -197,6 +199,38 @@ body {
 .instance-header:first-child {
   border-top: none;
   margin-top: 0;
+}
+
+/* Provider badges */
+.provider-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-right: 6px;
+  letter-spacing: 0;
+}
+
+.provider-github {
+  background: rgba(36, 41, 47, 0.8);
+  color: #e6edf3;
+  border: 1px solid #30363d;
+}
+
+.provider-ado {
+  background: rgba(0, 120, 212, 0.2);
+  color: #58a6ff;
+  border: 1px solid rgba(0, 120, 212, 0.4);
+}
+
+.instance-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .session-item {
@@ -248,6 +282,7 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  user-select: text;
 }
 
 .session-branch {
@@ -256,6 +291,7 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  user-select: text;
 }
 
 .sidebar-footer {
@@ -461,6 +497,20 @@ body {
   color: var(--accent-purple);
 }
 
+.remove-instance-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  transition: color 0.15s;
+  opacity: 0.6;
+}
+
+.remove-instance-btn:hover {
+  color: var(--status-error);
+  opacity: 1;
 /* Batch issues button */
 .batch-issues-btn {
   background: transparent;
@@ -508,6 +558,62 @@ body {
   font-size: 0.7rem;
   color: var(--text-muted);
   margin-top: 6px;
+}
+
+.batch-options {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.batch-option-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.batch-option-row:last-child {
+  margin-bottom: 0;
+}
+
+.batch-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.batch-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.batch-input-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  min-width: 100px;
+}
+
+.batch-startup-command {
+  flex: 1;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  font-family: monospace;
+}
+
+.batch-startup-command:focus {
+  outline: none;
+  border-color: var(--accent-purple);
 }
 
 .batch-issues-preview {
@@ -588,6 +694,18 @@ body {
   color: var(--text-muted);
   font-style: italic;
   font-size: 0.75rem;
+}
+
+.batch-issue-type {
+  display: inline-block;
+  background: var(--bg-tertiary);
+  color: var(--accent-purple);
+  font-size: 0.65rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+  margin-right: 6px;
+  text-transform: uppercase;
+  font-weight: 500;
 }
 
 .batch-issues-submit {
@@ -862,6 +980,7 @@ body {
   transition: background 0.15s;
   flex: 0 1 auto;
   max-width: 150px;
+  user-select: text;
 }
 
 .panel-title:hover {

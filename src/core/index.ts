@@ -26,6 +26,7 @@ export {
   registerInstance,
   unregisterInstance,
   updateInstanceSessionCount,
+  updateInstanceProviderInfo,
   getInstance,
   getInstanceByPath,
   findInstanceFromCwd,
@@ -49,3 +50,21 @@ export type { SessionMetadata, SessionStoreData } from './session-store.js'
 
 // Hook installer for Claude Code status updates
 export { ensureHooksInstalled, isHookInstalled, installHooks } from './hook-installer.js'
+
+// VCS Provider abstraction (multi-provider support)
+export {
+  detectProvider,
+  parseRemoteUrl,
+  registerProvider,
+  getProviderByType,
+  getProvider,
+  getRegisteredProviders,
+  genericProvider,
+} from './vcs-provider.js'
+export type { VcsProvider } from './vcs-provider.js'
+
+// GitHub provider
+export { githubProvider } from './github-provider.js'
+
+// Azure DevOps provider
+export { azureDevOpsProvider } from './azure-devops-provider.js'
