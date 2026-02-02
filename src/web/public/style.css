@@ -282,6 +282,7 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  user-select: text;
 }
 
 .session-branch {
@@ -290,6 +291,7 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  user-select: text;
 }
 
 .sidebar-footer {
@@ -495,6 +497,20 @@ body {
   color: var(--accent-purple);
 }
 
+.remove-instance-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  transition: color 0.15s;
+  opacity: 0.6;
+}
+
+.remove-instance-btn:hover {
+  color: var(--status-error);
+  opacity: 1;
 /* Batch issues button */
 .batch-issues-btn {
   background: transparent;
@@ -908,6 +924,7 @@ body {
   transition: background 0.15s;
   flex: 0 1 auto;
   max-width: 150px;
+  user-select: text;
 }
 
 .panel-title:hover {

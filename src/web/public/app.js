@@ -45,6 +45,47 @@ function showToast(message, type = 'success') {
 }
 
 /**
+ * Copy text to clipboard with fallback for non-HTTPS
+ */
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('Copied to clipboard', 'success');
+    }).catch(() => {
+      copyToClipboardFallback(text);
+    });
+  } else {
+    copyToClipboardFallback(text);
+  }
+}
+
+/**
+ * Fallback copy using textarea + execCommand (works on HTTP)
+ */
+function copyToClipboardFallback(text) {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    const success = document.execCommand('copy');
+    if (success) {
+      showToast('Copied to clipboard', 'success');
+    } else {
+      showToast('Copy failed', 'error');
+    }
+  } catch (err) {
+    console.error('Copy fallback failed:', err);
+    showToast('Copy failed', 'error');
+  }
+  document.body.removeChild(textarea);
+}
+
+/**
  * Close any open actions menu
  */
 function closeActionsMenu() {
@@ -726,6 +767,37 @@ async function closeSession(instanceId, sessionId, sessionKey) {
     return true;
   } catch (err) {
     console.error('[Close] Error:', err);
+    return false;
+  }
+}
+
+/**
+ * Remove an empty instance (repo with no sessions)
+ */
+async function removeInstance(instanceId) {
+  const displayName = instanceId.replace('orcha-', '');
+  if (!confirm(`Remove repo "${displayName}" from the dashboard?`)) {
+    return false;
+  }
+
+  try {
+    const res = await fetch(`/api/instances/${instanceId}`, {
+      method: 'DELETE',
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || 'Unknown error');
+    }
+
+    // Trigger re-render to update sidebar
+    await render();
+
+    console.log(`[Remove] Instance removed: ${instanceId}`);
+    return true;
+  } catch (err) {
+    console.error('[Remove] Error:', err);
+    alert(`Failed to remove repo: ${err.message}`);
     return false;
   }
 }
@@ -1692,9 +1764,27 @@ function createTerminalPanel(session) {
   title.textContent = displayName;
   title.title = 'Click to rename';
 
-  // Make title editable on click
+  // Track if we just copied text (to skip click handler)
+  let justCopied = false;
+
+  // Handle text selection on mouseup (before click clears it)
+  title.addEventListener('mouseup', (e) => {
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim().length > 0) {
+      e.stopPropagation();
+      justCopied = true;
+      copyToClipboard(selection.toString());
+      // Reset flag after a tick (after click event fires)
+      setTimeout(() => { justCopied = false; }, 0);
+    }
+  });
+
+  // Make title editable on click (but allow text selection)
   title.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (justCopied) {
+      return; // Selection was handled by mouseup
+    }
     makeEditableTitle(title, session);
   });
 
@@ -1770,7 +1860,16 @@ function createTerminalPanel(session) {
   panel.appendChild(container);
 
   // Focus handling (Ctrl+click toggles visibility filter)
+  // Skip if clicking in terminal area (let xterm handle it)
   panel.addEventListener('click', (e) => {
+    // Don't interfere with terminal clicks
+    if (e.target.closest('.terminal-container')) {
+      return;
+    }
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim().length > 0) {
+      return; // Selection handled by child mouseup handlers
+    }
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       toggleSessionVisibility(key);
@@ -1779,10 +1878,11 @@ function createTerminalPanel(session) {
     }
   });
 
-  // Double-click to toggle fullscreen
+  // Double-click to toggle fullscreen (only on header, not terminal)
   panel.addEventListener('dblclick', (e) => {
-    // Don't trigger on header buttons
+    // Don't trigger on header buttons or terminal area
     if (e.target.closest('.panel-fullscreen-btn')) return;
+    if (e.target.closest('.terminal-container')) return;
     toggleFullscreen(key);
   });
 
@@ -1911,6 +2011,69 @@ function initTerminal(session) {
   term.onResize(({ cols, rows }) => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+    }
+  });
+
+  // Manual selection tracking since xterm.js mouse selection doesn't work with tmux
+  // Use term.element (the actual xterm DOM) to capture events
+  let selectionStart = null;
+  const termEl = term.element;
+
+  termEl.addEventListener('mousedown', (e) => {
+    if (e.shiftKey) {
+      const rect = termEl.getBoundingClientRect();
+      const cellWidth = rect.width / term.cols;
+      const cellHeight = rect.height / term.rows;
+      selectionStart = {
+        col: Math.floor((e.clientX - rect.left) / cellWidth),
+        row: Math.floor((e.clientY - rect.top) / cellHeight)
+      };
+    }
+  });
+
+  termEl.addEventListener('mouseup', (e) => {
+    if (selectionStart && e.shiftKey) {
+      const rect = termEl.getBoundingClientRect();
+      const cellWidth = rect.width / term.cols;
+      const cellHeight = rect.height / term.rows;
+      const endCol = Math.floor((e.clientX - rect.left) / cellWidth);
+      const endRow = Math.floor((e.clientY - rect.top) / cellHeight);
+
+      // Determine start and end positions
+      const startRow = Math.min(selectionStart.row, endRow);
+      const startCol = selectionStart.row < endRow ? selectionStart.col :
+                       selectionStart.row > endRow ? endCol :
+                       Math.min(selectionStart.col, endCol);
+
+      // Build selection text manually from buffer
+      let text = '';
+      const rowStart = Math.min(selectionStart.row, endRow);
+      const rowEnd = Math.max(selectionStart.row, endRow);
+
+      for (let r = rowStart; r <= rowEnd; r++) {
+        const line = term.buffer.active.getLine(r);
+        if (line) {
+          const lineText = line.translateToString();
+          if (r === rowStart && r === rowEnd) {
+            // Single line selection
+            const cStart = Math.min(selectionStart.col, endCol);
+            const cEnd = Math.max(selectionStart.col, endCol);
+            text += lineText.substring(cStart, cEnd);
+          } else if (r === rowStart) {
+            text += lineText.substring(selectionStart.row < endRow ? selectionStart.col : endCol) + '\n';
+          } else if (r === rowEnd) {
+            text += lineText.substring(0, selectionStart.row < endRow ? endCol : selectionStart.col);
+          } else {
+            text += lineText + '\n';
+          }
+        }
+      }
+
+      if (text.trim().length > 0) {
+        copyToClipboard(text.trim());
+      }
+
+      selectionStart = null;
     }
   });
 
@@ -2214,6 +2377,20 @@ function updateSidebar(tmuxSessions, instances = []) {
     headerContainer.appendChild(header);
     headerContainer.appendChild(batchBtn);
     headerContainer.appendChild(addBtn);
+
+    // Show remove button for empty instances
+    if (instanceSessions.length === 0) {
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'remove-instance-btn';
+      removeBtn.innerHTML = '×';
+      removeBtn.title = 'Remove empty repo';
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        removeInstance(instanceId);
+      });
+      headerContainer.appendChild(removeBtn);
+    }
+
     sessionList.appendChild(headerContainer);
 
     // One entry per tmux session
@@ -2253,8 +2430,26 @@ function updateSidebar(tmuxSessions, instances = []) {
       item.appendChild(dot);
       item.appendChild(info);
 
+      // Track if we just copied text (to skip click handler)
+      let justCopied = false;
+
+      // Handle text selection on mouseup (before click clears it)
+      info.addEventListener('mouseup', (e) => {
+        const selection = window.getSelection();
+        if (selection && selection.toString().trim().length > 0) {
+          e.stopPropagation();
+          justCopied = true;
+          copyToClipboard(selection.toString());
+          // Reset flag after a tick (after click event fires)
+          setTimeout(() => { justCopied = false; }, 0);
+        }
+      });
+
       // Click to focus, Ctrl+click to toggle filter
       item.addEventListener('click', (e) => {
+        if (justCopied) {
+          return; // Selection was handled by mouseup
+        }
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
           toggleSessionVisibility(key);
