@@ -13,7 +13,7 @@ import { join, dirname, resolve, isAbsolute } from 'path'
 import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { listInstances, getInstance, getInstanceByPath, registerInstance, unregisterInstance } from '../core/instance-registry.js'
 import { StatusMonitor, getStatusDirForInstance } from '../core/status-monitor.js'
 import { loadSessionStore, updateSessionName, saveSessionStore } from '../core/session-store.js'
@@ -134,6 +134,47 @@ export class WebDashboardServer {
 
         res.json({ success: true, name: name || null })
       } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Get plan content for a session
+    this.app.get('/api/sessions/:instanceId/:sessionId/plan', async (req, res) => {
+      try {
+        const { instanceId, sessionId } = req.params
+
+        // Load session metadata to get worktree path
+        const metadata = await loadSessionStore(instanceId)
+        const session = metadata.find(m => m.id === sessionId)
+
+        if (!session) {
+          res.status(404).json({ error: 'Session not found' })
+          return
+        }
+
+        // Determine base path (worktree or instance repo)
+        let basePath = session.worktreePath
+        if (!basePath) {
+          const instance = await getInstance(instanceId)
+          if (!instance) {
+            res.status(404).json({ error: 'Instance not found' })
+            return
+          }
+          basePath = instance.repoPath
+        }
+
+        // Resolve plan path
+        const planPath = this.resolvePlanPath(basePath)
+        if (!planPath) {
+          res.status(404).json({ error: 'No plan found' })
+          return
+        }
+
+        // Read plan content
+        const content = readFileSync(planPath, 'utf-8')
+        res.json({ content, path: planPath })
+      } catch (err) {
+        console.error('[API] Error reading plan:', err)
         res.status(500).json({ error: (err as Error).message })
       }
     })
@@ -1612,6 +1653,33 @@ export class WebDashboardServer {
     }
 
     return sessions
+  }
+
+  /**
+   * Resolve plan file path for a worktree/repo
+   * 1. Check for custom config in .orcha/config.json
+   * 2. Default to .claude/plan.md
+   */
+  private resolvePlanPath(basePath: string): string | null {
+    // 1. Check for custom config
+    const configPath = join(basePath, '.orcha', 'config.json')
+    if (existsSync(configPath)) {
+      try {
+        const config = JSON.parse(readFileSync(configPath, 'utf-8'))
+        if (config.planPath) {
+          const customPath = join(basePath, config.planPath)
+          if (existsSync(customPath)) return customPath
+        }
+      } catch {
+        // Invalid config, fall through to default
+      }
+    }
+
+    // 2. Default location
+    const defaultPath = join(basePath, '.claude', 'plan.md')
+    if (existsSync(defaultPath)) return defaultPath
+
+    return null
   }
 
   private async getClaudeUsage(): Promise<UsageStats | { error: string }> {

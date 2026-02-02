@@ -682,6 +682,58 @@ function showFileDiff(container, fullDiff, filePath) {
 }
 
 /**
+ * Show plan dialog - fetches and displays plan.md from session worktree
+ */
+async function showPlanDialog(session) {
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay plan-dialog-overlay';
+
+  overlay.innerHTML = `
+    <div class="plan-dialog">
+      <div class="plan-dialog-header">
+        <span class="plan-dialog-title">📋 Plan: ${getSessionDisplayName(session)}</span>
+        <button class="plan-dialog-close">×</button>
+      </div>
+      <div class="plan-dialog-content">
+        <div class="plan-loading">Loading plan...</div>
+      </div>
+    </div>
+  `;
+
+  const contentEl = overlay.querySelector('.plan-dialog-content');
+  const closeBtn = overlay.querySelector('.plan-dialog-close');
+
+  const closeDialog = () => overlay.remove();
+
+  closeBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDialog();
+  });
+
+  document.body.appendChild(overlay);
+  closeBtn.focus();
+
+  // Fetch plan content
+  try {
+    const res = await fetch(`/api/sessions/${session.instanceId}/${session.id}/plan`);
+    if (!res.ok) {
+      const data = await res.json();
+      contentEl.innerHTML = `<div class="plan-empty">${data.error || 'No plan found'}</div>`;
+      return;
+    }
+
+    const data = await res.json();
+    // Render markdown as preformatted text with basic styling
+    contentEl.innerHTML = `<pre class="plan-content">${escapeHtml(data.content)}</pre>`;
+  } catch (err) {
+    contentEl.innerHTML = `<div class="plan-error">Failed to load plan: ${err.message}</div>`;
+  }
+}
+
+/**
  * Open file manager (yazi) in a modal
  */
 function openFileManager(instanceId) {
@@ -2053,6 +2105,16 @@ function createTerminalPanel(session) {
   status.className = 'panel-status';
   status.textContent = session.state;
 
+  // Plan button (view plan.md)
+  const planBtn = document.createElement('button');
+  planBtn.className = 'panel-plan-btn';
+  planBtn.innerHTML = '📋';
+  planBtn.title = 'View plan';
+  planBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showPlanDialog(session);
+  });
+
   // Git actions menu button
   const actionsBtn = document.createElement('button');
   actionsBtn.className = 'panel-actions-btn';
@@ -2111,6 +2173,7 @@ function createTerminalPanel(session) {
   header.appendChild(title);
   header.appendChild(repo);
   header.appendChild(status);
+  header.appendChild(planBtn);
   header.appendChild(actionsBtn);
   header.appendChild(folderBtn);
   header.appendChild(reviewBtn);
