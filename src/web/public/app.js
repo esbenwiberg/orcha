@@ -2112,7 +2112,7 @@ function createTerminalPanel(session) {
   // Plan button (view plan.md)
   const planBtn = document.createElement('button');
   planBtn.className = 'panel-plan-btn';
-  planBtn.innerHTML = '📋';
+  planBtn.innerHTML = '☰';
   planBtn.title = 'View plan';
   planBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -2122,7 +2122,7 @@ function createTerminalPanel(session) {
   // Git actions menu button
   const actionsBtn = document.createElement('button');
   actionsBtn.className = 'panel-actions-btn';
-  actionsBtn.innerHTML = '⋮';
+  actionsBtn.innerHTML = '⎇';
   actionsBtn.title = 'Git actions (Ctrl+A, G)';
   actionsBtn.addEventListener('click', (e) => {
     e.stopPropagation();
