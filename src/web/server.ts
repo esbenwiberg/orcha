@@ -14,7 +14,7 @@ import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
 import { existsSync } from 'fs'
-import { listInstances, getInstance, getInstanceByPath, registerInstance } from '../core/instance-registry.js'
+import { listInstances, getInstance, getInstanceByPath, registerInstance, unregisterInstance } from '../core/instance-registry.js'
 import { StatusMonitor, getStatusDirForInstance } from '../core/status-monitor.js'
 import { loadSessionStore, updateSessionName, saveSessionStore } from '../core/session-store.js'
 import type { SessionMetadata } from '../core/session-store.js'
@@ -420,6 +420,43 @@ export class WebDashboardServer {
         })
       } catch (err) {
         console.error('[API] Error creating instance:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Remove an empty instance (no sessions)
+    this.app.delete('/api/instances/:instanceId', async (req, res) => {
+      try {
+        const { instanceId } = req.params
+
+        // Get instance info
+        const instance = await getInstance(instanceId)
+        if (!instance) {
+          res.status(404).json({ error: 'Instance not found' })
+          return
+        }
+
+        // Check if instance has sessions
+        const metadata = await loadSessionStore(instanceId)
+        if (metadata.length > 0) {
+          res.status(400).json({ error: 'Cannot remove instance with active sessions. Please close all sessions first.' })
+          return
+        }
+
+        // Kill tmux session if exists (the empty container session)
+        try {
+          execSync(`tmux kill-session -t "${instance.tmuxSession}" 2>/dev/null`, { stdio: 'ignore' })
+        } catch {
+          // Tmux session may already be gone
+        }
+
+        // Unregister instance from registry
+        await unregisterInstance(instanceId)
+
+        console.log(`[API] Instance removed: ${instanceId}`)
+        res.json({ success: true })
+      } catch (err) {
+        console.error('[API] Error removing instance:', err)
         res.status(500).json({ error: (err as Error).message })
       }
     })
