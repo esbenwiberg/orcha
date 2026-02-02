@@ -909,6 +909,12 @@ function showNewSessionDialog(instanceId) {
       <div class="dialog-instance" style="font-size:0.75rem;color:#9b59b6;margin-bottom:16px;">${instanceId}</div>
       <div class="new-session-form" style="display:flex;flex-direction:column;gap:12px;">
         <div>
+          <label style="font-size:0.75rem;color:#888;display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" class="new-session-use-worktree" checked style="width:16px;height:16px;accent-color:#9b59b6;">
+            <span>Use worktree (separate branch)</span>
+          </label>
+        </div>
+        <div class="branch-input-container">
           <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Branch name (optional)</label>
           <input type="text" class="new-session-branch" placeholder="Auto-generated if empty" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
         </div>
@@ -929,10 +935,26 @@ function showNewSessionDialog(instanceId) {
     </div>
   `;
 
+  const useWorktreeCheckbox = overlay.querySelector('.new-session-use-worktree');
+  const branchInputContainer = overlay.querySelector('.branch-input-container');
   const branchInput = overlay.querySelector('.new-session-branch');
   const modeSelect = overlay.querySelector('.new-session-mode');
   const createBtn = overlay.querySelector('.new-session-create');
   const cancelBtn = overlay.querySelector('.new-session-cancel');
+
+  // Toggle branch input visibility based on worktree checkbox
+  const updateBranchInputState = () => {
+    if (useWorktreeCheckbox.checked) {
+      branchInputContainer.style.opacity = '1';
+      branchInputContainer.style.pointerEvents = 'auto';
+      branchInput.disabled = false;
+    } else {
+      branchInputContainer.style.opacity = '0.5';
+      branchInputContainer.style.pointerEvents = 'none';
+      branchInput.disabled = true;
+    }
+  };
+  useWorktreeCheckbox.addEventListener('change', updateBranchInputState);
 
   const closeDialog = () => overlay.remove();
 
@@ -949,7 +971,7 @@ function showNewSessionDialog(instanceId) {
     }
 
     try {
-      await createSession(instanceId, branchInput.value, modeSelect.value);
+      await createSession(instanceId, branchInput.value, modeSelect.value, useWorktreeCheckbox.checked);
       closeDialog();
       // Trigger refresh to show new session
       await render();
@@ -1683,7 +1705,7 @@ async function cloneAndCreateInstance(githubUrl) {
 /**
  * Create a new session via API
  */
-async function createSession(instanceId, branch, mode) {
+async function createSession(instanceId, branch, mode, useWorktree = true) {
   const res = await fetch('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1691,6 +1713,7 @@ async function createSession(instanceId, branch, mode) {
       instanceId,
       branch: branch || undefined,
       mode: mode || 'claude',
+      useWorktree,
     }),
   });
 

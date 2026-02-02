@@ -207,10 +207,11 @@ export class WebDashboardServer {
     // API: Create a new session
     this.app.post('/api/sessions', async (req, res) => {
       try {
-        const { instanceId, branch, mode } = req.body as {
+        const { instanceId, branch, mode, useWorktree } = req.body as {
           instanceId: string
           branch?: string
           mode?: 'claude' | 'gemini' | 'codex' | 'shell'
+          useWorktree?: boolean
         }
 
         if (!instanceId) {
@@ -236,17 +237,23 @@ export class WebDashboardServer {
         const manager = new SessionManager({ repoPath: instance.repoPath, statusDir })
         await manager.start()
 
-        // Determine branch name
-        let sessionBranch = branch?.trim() || undefined
-        if (!sessionBranch) {
-          // Auto-generate branch name
-          const existingMetadata = await loadSessionStore(instanceId)
-          const sessionIdx = existingMetadata.length
-          const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-          sessionBranch = `orcha/session-${sessionIdx + 1}-${timestamp}`
+        // Determine branch name (only if using worktrees)
+        const shouldUseWorktree = useWorktree !== false // default true
+        let sessionBranch: string | undefined = undefined
+
+        if (shouldUseWorktree) {
+          sessionBranch = branch?.trim() || undefined
+          if (!sessionBranch) {
+            // Auto-generate branch name
+            const existingMetadata = await loadSessionStore(instanceId)
+            const sessionIdx = existingMetadata.length
+            const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+            sessionBranch = `orcha/session-${sessionIdx + 1}-${timestamp}`
+          }
         }
 
-        console.log(`[API] Creating session: ${sessionBranch} (mode=${mode || 'claude'})`)
+        const branchDisplay = sessionBranch || '(no worktree)'
+        console.log(`[API] Creating session: ${branchDisplay} (mode=${mode || 'claude'})`)
 
         // Create session (this creates worktree)
         const session = await manager.createSession({
