@@ -185,7 +185,6 @@ function showHelpDialog() {
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Toggle fullscreen</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, Enter</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Focus panel 1-9</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, 1-9</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Show this help</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, H</kbd></div>
-        <div style="border-top:1px solid #333;margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;"><span style="color:#888;">Exit fullscreen</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Escape</kbd></div>
       </div>
       <div style="margin-top:16px;text-align:right;">
         <button class="help-close" style="background:#9b59b6;border:none;color:white;font-size:0.85rem;padding:8px 16px;border-radius:4px;cursor:pointer;">Close</button>
@@ -2719,14 +2718,6 @@ async function init() {
   let prefixTimeout = null;
 
   document.addEventListener('keydown', (e) => {
-
-    // Escape to exit fullscreen (always works, no prefix needed)
-    if (e.key === 'Escape' && state.fullscreenKey) {
-      exitFullscreen();
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
 
     // Ctrl+A activates prefix mode
     if (e.ctrlKey && e.key.toLowerCase() === 'a') {
