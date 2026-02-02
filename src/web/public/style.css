@@ -560,6 +560,62 @@ body {
   margin-top: 6px;
 }
 
+.batch-options {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.batch-option-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.batch-option-row:last-child {
+  margin-bottom: 0;
+}
+
+.batch-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.batch-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.batch-input-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  min-width: 100px;
+}
+
+.batch-startup-command {
+  flex: 1;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  font-family: monospace;
+}
+
+.batch-startup-command:focus {
+  outline: none;
+  border-color: var(--accent-purple);
+}
+
 .batch-issues-preview {
   background: var(--bg-primary);
   border: 1px solid var(--border-color);

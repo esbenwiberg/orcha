@@ -1158,6 +1158,12 @@ owner/repo#101`;
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
 
+  // Load saved preferences from localStorage
+  const savedSkipPermissions = localStorage.getItem('orcha.batchSkipPermissions');
+  const savedStartupCommand = localStorage.getItem('orcha.batchStartupCommand');
+  const defaultSkipPermissions = savedSkipPermissions === null ? true : savedSkipPermissions === 'true';
+  const defaultStartupCommand = savedStartupCommand || '/flow-auto';
+
   overlay.innerHTML = `
     <div class="new-session-dialog batch-issues-dialog">
       <h3>🚀 Batch Process ${workItemLabel}</h3>
@@ -1171,6 +1177,18 @@ owner/repo#101`;
         <div class="batch-issues-preview">
           <div class="batch-preview-label">Preview</div>
           <div class="batch-preview-list"></div>
+        </div>
+        <div class="batch-options">
+          <div class="batch-option-row">
+            <label class="batch-checkbox-label">
+              <input type="checkbox" class="batch-skip-permissions" ${defaultSkipPermissions ? 'checked' : ''}>
+              Skip permission prompts
+            </label>
+          </div>
+          <div class="batch-option-row">
+            <label class="batch-input-label">Startup command</label>
+            <input type="text" class="batch-startup-command" value="${defaultStartupCommand}" placeholder="/flow-auto">
+          </div>
         </div>
         <div class="batch-issues-error error-text"></div>
       </div>
@@ -1186,6 +1204,16 @@ owner/repo#101`;
   const errorEl = overlay.querySelector('.batch-issues-error');
   const submitBtn = overlay.querySelector('.batch-issues-submit');
   const cancelBtn = overlay.querySelector('.new-session-cancel');
+  const skipPermissionsCheckbox = overlay.querySelector('.batch-skip-permissions');
+  const startupCommandInput = overlay.querySelector('.batch-startup-command');
+
+  // Save preferences to localStorage on change
+  skipPermissionsCheckbox.addEventListener('change', () => {
+    localStorage.setItem('orcha.batchSkipPermissions', skipPermissionsCheckbox.checked);
+  });
+  startupCommandInput.addEventListener('input', () => {
+    localStorage.setItem('orcha.batchStartupCommand', startupCommandInput.value);
+  });
 
   let parsedIssues = [];
   let fetchedTitles = new Map(); // number -> { title, state, url, type? }
@@ -1363,6 +1391,8 @@ owner/repo#101`;
         body: JSON.stringify({
           instanceId,
           issues: parsedIssues,
+          skipPermissions: skipPermissionsCheckbox.checked,
+          startupCommand: startupCommandInput.value || '/flow-auto',
         }),
       });
 

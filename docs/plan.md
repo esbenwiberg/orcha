@@ -1,274 +1,176 @@
-# Blueprint: Fix Usage Display & Add Comprehensive Stats
+# Blueprint: Conditional Skip-Permissions & Batch Dialog Enhancements
 
 ## Goal
 
-Fix the current usage display that shows nothing (because it only looks for "today" which has no data yet) and enhance it to show more comprehensive statistics similar to Claude's `/usage` command output.
+Restrict `--dangerously-skip-permissions` flag to only sessions spawned from the batch issues dialog (not regular "New Session"), and add user-configurable options to the batch dialog for:
+1. A checkbox to enable/disable skip-permissions (default: on, remembered)
+2. A command input for the startup command (default: `/flow-auto`, remembered)
 
----
+## Non-Goals
 
-## Problem Analysis
-
-The current implementation has a **critical flaw**:
-
-```typescript
-// server.ts:1056-1060
-const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-const activity = data.dailyActivity?.find((d) => d.date === today)
-const tokenData = data.dailyModelTokens?.find((d) => d.date === today)
-```
-
-**Issue**: The stats-cache.json is only updated when Claude sessions end. If today is 2026-02-01 but `lastComputedDate` is 2026-01-31, the usage display shows 0/nothing because there's no entry for today yet.
-
-**Solution**: Fall back to the most recent date if today's data doesn't exist.
-
----
-
-## Non-Goals (Out of Scope)
-
-- Real-time token streaming during active sessions
-- Cost calculation in dollars (stats-cache.json shows costUSD: 0)
-- Per-session token breakdowns
-- Exporting usage data
-- Usage alerts or limits
-
----
+- Changing the permission model for CLI-spawned sessions
+- Adding skip-permissions to the "New Session" dialog
+- Server-side persistence of user preferences (will use localStorage)
+- Refactoring the entire session creation flow
 
 ## Acceptance Criteria
 
-- [ ] Usage displays data even when today has no entries (shows yesterday/most recent)
-- [ ] Date label shows actual date when not "Today"
-- [ ] Shows cumulative/total usage alongside daily stats
-- [ ] Shows model breakdown (Opus vs Sonnet tokens)
-- [ ] Shows tool call count (available in dailyActivity)
-- [ ] Cache read tokens displayed (significantly larger than regular tokens)
-- [ ] Display is compact and doesn't overwhelm sidebar
-
----
+- [ ] Regular "New Session" dialog creates sessions **without** `--dangerously-skip-permissions`
+- [ ] Batch issues dialog creates sessions **with** `--dangerously-skip-permissions` only when checkbox is checked
+- [ ] Batch dialog has a checkbox "Skip permission prompts" (default: checked)
+- [ ] Checkbox state persists in localStorage across page reloads
+- [ ] Batch dialog has an input "Startup command" (default: `/flow-auto`)
+- [ ] Startup command persists in localStorage across page reloads
+- [ ] The actual command sent uses the user-specified startup command
+- [ ] Existing `/flow-auto` hardcoded behavior is replaced with the user's chosen command
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Frontend (app.js)                           │
-│                                                                 │
-│  state.usage = {                                                │
-│    daily: { date, tokens, messages, sessions, toolCalls },      │
-│    totals: { sessions, messages, inputTokens, cacheReadTokens },│
-│    byModel: [{ model, tokens }]                                 │
-│  }                                                              │
-│                                                                 │
-│  fetchUsage() → GET /api/usage                                  │
-│  updateUsageDisplay() → renders to #usage-stats                 │
-└────────────────────────────────────────────────────────────────┘
-                            │ HTTP
-┌───────────────────────────▼────────────────────────────────────┐
-│                    Backend (server.ts)                          │
-│                                                                 │
-│  GET /api/usage                                                 │
-│    - Reads ~/.claude/stats-cache.json                           │
-│    - Gets today OR most recent day's activity                   │
-│    - Returns { daily, totals, byModel }                         │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              ~/.claude/stats-cache.json                         │
-│                                                                 │
-│  {                                                              │
-│    "lastComputedDate": "2026-01-31",                            │
-│    "dailyActivity": [...],                                      │
-│    "dailyModelTokens": [...],                                   │
-│    "modelUsage": {                                              │
-│      "claude-opus-4-5-20251101": {                              │
-│        "inputTokens": 793093,                                   │
-│        "outputTokens": 37705,                                   │
-│        "cacheReadInputTokens": 804505318   <-- huge!            │
-│      }                                                          │
-│    },                                                           │
-│    "totalSessions": 203,                                        │
-│    "totalMessages": 34658                                       │
-│  }                                                              │
-└─────────────────────────────────────────────────────────────────┘
-```
+### Components Affected
 
-### Key Data Points Available
+1. **Frontend (app.js)** - Add new UI controls to batch dialog, localStorage persistence
+2. **Backend (server.ts)** - Accept new parameters from batch API, conditionally apply flags
+3. **API Contract** - Extend `/api/batch-issues` request body
 
-| Field | Location | Example Value |
-|-------|----------|---------------|
-| Daily messages | dailyActivity[].messageCount | 2999 |
-| Daily sessions | dailyActivity[].sessionCount | 24 |
-| Daily tool calls | dailyActivity[].toolCallCount | 633 |
-| Daily tokens (by model) | dailyModelTokens[].tokensByModel | { opus: 127804 } |
-| Total sessions | totalSessions | 203 |
-| Total messages | totalMessages | 34658 |
-| Total input tokens | modelUsage[model].inputTokens | 793093 |
-| Total output tokens | modelUsage[model].outputTokens | 37705 |
-| Cache read tokens | modelUsage[model].cacheReadInputTokens | 804M |
-
----
-
-## Proposed UI Layout
-
-Compact sidebar display:
+### Data Flow
 
 ```
-╔══════════════════════════════════╗
-║  USAGE - Jan 31                  ║
-║  ──────────────────────────       ║
-║  127K tokens (Opus)              ║
-║  2.9K messages • 633 tools       ║
-║  ──────────────────────────       ║
-║  ALL TIME                        ║
-║  203 sessions • 34.6K msgs       ║
-║  804M cache reads                ║
-╚══════════════════════════════════╝
+[Batch Dialog]
+    → User selects options (skipPermissions, startupCommand)
+    → localStorage saves preferences
+    → POST /api/batch-issues { ..., skipPermissions: boolean, startupCommand: string }
+        → Server conditionally adds --dangerously-skip-permissions
+        → Server uses custom startupCommand instead of hardcoded /flow-auto
 ```
 
----
+### Key Changes
+
+| File | Change |
+|------|--------|
+| `src/web/public/app.js` | Add checkbox + input to batch dialog, localStorage read/write |
+| `src/web/server.ts` | Remove `--dangerously-skip-permissions` from line 275 (regular sessions) |
+| `src/web/server.ts` | Accept `skipPermissions` param at line ~1152, conditionally add flag |
+| `src/web/server.ts` | Accept `startupCommand` param, use instead of hardcoded `/flow-auto` (line ~1170) |
 
 ## File Layout (Key Changes)
 
 ```
 src/web/
-├── server.ts           # FIX: fallback to most recent date
-│                       # ADD: totals and byModel in response
-└── public/
-    ├── app.js          # UPDATE: updateUsageDisplay() for new format
-    └── style.css       # UPDATE: styling for expanded display
-```
+├── public/
+│   └── app.js          # Batch dialog UI changes (lines ~1089-1110)
+└── server.ts           # API handler changes (lines ~275, ~1114, ~1132)
 
----
+dist/web/
+└── public/
+    └── app.js          # Must sync after editing src/
+```
 
 ## Milestones
 
-### Milestone 1: Fix Date Fallback (Critical Bug Fix)
+### Milestone 1: Remove skip-permissions from regular sessions
 
-**Intent**: Ensure usage always shows something when stats exist.
+**Intent:** Ensure regular "New Session" creates sessions without the dangerous flag.
 
-**Files touched**:
-- `src/web/server.ts` - getClaudeUsage() method
+**Files touched:**
+- `src/web/server.ts` (line ~275)
 
-**Changes**:
-```typescript
-// Instead of only looking for today:
-const today = new Date().toISOString().slice(0, 10)
-let activity = data.dailyActivity?.find((d) => d.date === today)
-let tokenData = data.dailyModelTokens?.find((d) => d.date === today)
-let displayDate = today
+**Changes:**
+- Remove `--dangerously-skip-permissions` from the regular session creation path
+- Keep the Down+Enter acceptance logic removal since it won't be needed
 
-// Fall back to most recent if today not found:
-if (!activity && data.dailyActivity?.length) {
-  activity = data.dailyActivity[data.dailyActivity.length - 1]
-  displayDate = activity.date
-}
-if (!tokenData && data.dailyModelTokens?.length) {
-  tokenData = data.dailyModelTokens[data.dailyModelTokens.length - 1]
-}
-```
-
-**Verification**:
+**Verification:**
 ```bash
-npm run build && cp dist/web/server.js dist/web/server.js
-curl http://localhost:3847/api/usage | jq
-# Should now return data from 2026-01-31 instead of empty
+# Search for remaining skip-permissions in regular session path
+grep -n "dangerously-skip-permissions" src/web/server.ts
+# Should only show batch-issues handler (~line 1114)
 ```
 
----
+### Milestone 2: Add UI controls to batch dialog
 
-### Milestone 2: Expand API Response
+**Intent:** Add checkbox and input field to the batch issues dialog.
 
-**Intent**: Return totals and model breakdown alongside daily stats.
+**Files touched:**
+- `src/web/public/app.js` (lines ~1089-1110)
+- `dist/web/public/app.js` (sync copy)
 
-**Files touched**:
-- `src/web/server.ts` - UsageStats interface and getClaudeUsage()
+**Changes:**
+- Add "Skip permission prompts" checkbox (default: checked)
+- Add "Startup command" input (default: `/flow-auto`)
+- Read defaults from localStorage on dialog open
+- Save to localStorage on change
 
-**New interface**:
-```typescript
-interface UsageStats {
-  daily: {
-    date: string
-    tokens: number
-    messages: number
-    sessions: number
-    toolCalls: number
-  }
-  totals: {
-    sessions: number
-    messages: number
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-  }
-  byModel: Array<{
-    model: string
-    tokens: number
-  }>
-}
-```
+**localStorage keys:**
+- `orcha.batchSkipPermissions` (boolean, default: true)
+- `orcha.batchStartupCommand` (string, default: `/flow-auto`)
 
-**Verification**:
+**Verification:**
 ```bash
-curl http://localhost:3847/api/usage | jq '.totals.cacheReadTokens'
-# Should show ~804M
+# Manual testing:
+# 1. Open batch dialog, see checkbox checked and /flow-auto in input
+# 2. Uncheck checkbox, change command, close/reopen dialog
+# 3. Should remember selections
 ```
 
----
+### Milestone 3: Pass options through API
 
-### Milestone 3: Update Frontend Display
+**Intent:** Send user preferences to server and apply them conditionally.
 
-**Intent**: Show the enhanced stats in a compact, readable format.
+**Files touched:**
+- `src/web/public/app.js` (fetch call ~line 1288)
+- `src/web/server.ts` (batch-issues handler ~line 1050+)
+- `dist/web/public/app.js` (sync copy)
 
-**Files touched**:
-- `src/web/public/app.js` - updateUsageDisplay()
-- `src/web/public/style.css` - styling tweaks
+**Changes:**
+- Frontend: Include `skipPermissions` and `startupCommand` in POST body
+- Backend: Extract params from request
+- Backend: Conditionally add `--dangerously-skip-permissions` based on `skipPermissions`
+- Backend: Replace hardcoded `/flow-auto` with `startupCommand` (line ~1132)
 
-**Display logic**:
-- Show daily stats with date label
-- Show abbreviated model name (Opus/Sonnet instead of full ID)
-- Show all-time totals
-- Format large numbers (804M cache reads)
-
-**Verification**:
+**Verification:**
 ```bash
-# Open http://localhost:3847
-# Usage section should show yesterday's stats with "Jan 31" label
-# Should show all-time totals below
+# Build and test
+npm run build
+
+# Manual testing:
+# 1. Create batch session with checkbox unchecked
+# 2. Verify Claude starts WITHOUT permission prompt acceptance
+# 3. Create batch session with custom command like "/blueprint"
+# 4. Verify that command is sent instead of /flow-auto
 ```
 
+### Milestone 4: Clean up permission acceptance logic
+
+**Intent:** Only run the Down+Enter acceptance script when skip-permissions is enabled.
+
+**Files touched:**
+- `src/web/server.ts` (lines ~1117-1146)
+
+**Changes:**
+- Wrap the permission acceptance script in conditional based on `skipPermissions`
+- If `skipPermissions` is false, skip the Down+Enter sequence entirely
+
+**Verification:**
+```bash
+# Manual testing:
+# With skip-permissions OFF: Claude should start normally, no auto-acceptance
+# With skip-permissions ON: Should auto-accept and run startup command
+```
+
+## Risks & Unknowns
+
+| Risk | Mitigation |
+|------|------------|
+| localStorage not available in some browsers | Use try/catch, fall back to defaults |
+| Startup command injection | Sanitize/validate command on server side (must start with `/`) |
+| Timing issues with permission acceptance | Existing logic already handles this with retries |
+| Sync between src/ and dist/ forgotten | Add reminder comment, or automate in build |
+
+## Quick Probes
+
+1. **Confirm regular session doesn't need permission acceptance:** After removing the flag from line 275, verify sessions still work
+2. **Test localStorage persistence:** Simple browser console test to verify read/write works
+3. **Verify command gets through to tmux:** Add console.log to confirm custom command is used
+
 ---
 
-## Risks & Mitigations
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| stats-cache.json stale for days | Shows very old data | Show date prominently; user will know |
-| Cache read tokens confusing | Users don't understand 804M | Add tooltip or label "cache reads" |
-| UI too busy | Cluttered sidebar | Use collapsible "All Time" section |
-| Model names change | Display breaks | Extract short name dynamically |
-
----
-
-## Open Questions
-
-1. **Should "All Time" be collapsible?**
-   - Recommendation: Start expanded, track if users collapse it
-
-2. **Show output tokens separately?**
-   - Recommendation: No, just show total (input + output) for simplicity
-
-3. **Refresh rate for usage?**
-   - Recommendation: Keep at 3s (same as sessions), file read is fast
-
----
-
-## Implementation Order
-
-1. **Milestone 1** - Fix the critical bug (usage shows nothing)
-2. **Milestone 2** - Expand API with totals (can be same PR)
-3. **Milestone 3** - Update frontend display
-
-Estimated scope: 1 patch for all 3 milestones (small changes).
-
----
-
-Next: /probe 'Milestone 1 - Fix Date Fallback'
+**Next: /probe 'Milestone 1 - Remove skip-permissions from regular sessions'**

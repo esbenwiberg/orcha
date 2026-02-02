@@ -272,27 +272,9 @@ export class WebDashboardServer {
         const cmd = (mode || 'claude') === 'shell' ? '' : (mode || 'claude')
         if (cmd) {
           // Use inline env var syntax: VAR=val command (sets vars just for that command)
-          const cmdWithFlags = cmd === 'claude' ? `${cmd} --dangerously-skip-permissions` : cmd
-          const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmdWithFlags}`
+          // Note: --dangerously-skip-permissions is only used for batch issue processing, not regular sessions
+          const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmd}`
           sessionTmux.runInPane(session.id, envCmd)
-
-          // Accept the bypass permissions warning by pressing Down then Enter (Claude only)
-          if (cmd === 'claude') {
-            setTimeout(() => {
-              try {
-                execSync(`tmux send-keys -t "${sessionTmuxName}:0.0" Down`, { stdio: 'pipe' })
-                setTimeout(() => {
-                  try {
-                    execSync(`tmux send-keys -t "${sessionTmuxName}:0.0" Enter`, { stdio: 'pipe' })
-                  } catch {
-                    // May already be past the prompt
-                  }
-                }, 1000)
-              } catch {
-                // May already be past the prompt
-              }
-            }, 2000)
-          }
         }
 
         // Update session metadata store
@@ -1050,10 +1032,15 @@ export class WebDashboardServer {
     // Supports both GitHub issues and Azure DevOps work items via provider abstraction
     this.app.post('/api/batch-issues', async (req, res) => {
       try {
-        const { instanceId, issues } = req.body as {
+        const { instanceId, issues, skipPermissions = true, startupCommand = '/flow-auto' } = req.body as {
           instanceId: string
           issues: Array<{ number: number; owner?: string; repo?: string; project?: string; url?: string }>
+          skipPermissions?: boolean
+          startupCommand?: string
         }
+
+        // Validate startupCommand (must start with /)
+        const safeStartupCommand = startupCommand.startsWith('/') ? startupCommand : '/flow-auto'
 
         if (!instanceId || !issues || !Array.isArray(issues) || issues.length === 0) {
           res.status(400).json({ error: 'instanceId and non-empty issues array are required' })
@@ -1148,14 +1135,16 @@ export class WebDashboardServer {
             const workDir = session.worktreePath || instance.repoPath
             sessionTmux.createPane(session.id, workDir)
 
-            // Run Claude with environment variables
-            const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' claude --dangerously-skip-permissions`
+            // Run Claude with environment variables (conditionally add --dangerously-skip-permissions)
+            const claudeFlags = skipPermissions ? ' --dangerously-skip-permissions' : ''
+            const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' claude${claudeFlags}`
             sessionTmux.runInPane(session.id, envCmd)
 
-            // Queue up the permission acceptance and /flow command in background
-            // Use spawn to run a shell script that handles timing
+            // Queue up the startup command in background
+            // If skipPermissions is enabled, also handle permission acceptance
             const { spawn: spawnBg } = await import('child_process')
-            const acceptScript = `
+            const acceptScript = skipPermissions
+              ? `
               sleep 3
               # Accept the bypass permissions prompt by pressing Down to select option 2, then Enter
               tmux send-keys -t "${sessionTmuxName}:0.0" Down
@@ -1166,11 +1155,27 @@ export class WebDashboardServer {
               for i in 1 2 3 4 5 6 7 8 9 10; do
                 CONTENT=$(tmux capture-pane -t "${sessionTmuxName}:0.0" -p -S -10 2>/dev/null || echo "")
                 if echo "$CONTENT" | grep -q "❯"; then
-                  # Send the /flow-auto command text first, then Enter after a delay
-                  tmux send-keys -t "${sessionTmuxName}:0.0" "/flow-auto ${itemUrl}"
+                  # Send the startup command text first, then Enter after a delay
+                  tmux send-keys -t "${sessionTmuxName}:0.0" "${safeStartupCommand} ${itemUrl}"
                   sleep 1
                   tmux send-keys -t "${sessionTmuxName}:0.0" Enter
-                  echo "[Batch] Sent /flow-auto for item #${issue.number}"
+                  echo "[Batch] Sent ${safeStartupCommand} for item #${issue.number}"
+                  exit 0
+                fi
+                sleep 2
+              done
+              echo "[Batch] Could not detect Claude prompt for item #${issue.number}"
+            `
+              : `
+              sleep 5
+              for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                CONTENT=$(tmux capture-pane -t "${sessionTmuxName}:0.0" -p -S -10 2>/dev/null || echo "")
+                if echo "$CONTENT" | grep -q "❯"; then
+                  # Send the startup command text first, then Enter after a delay
+                  tmux send-keys -t "${sessionTmuxName}:0.0" "${safeStartupCommand} ${itemUrl}"
+                  sleep 1
+                  tmux send-keys -t "${sessionTmuxName}:0.0" Enter
+                  echo "[Batch] Sent ${safeStartupCommand} for item #${issue.number}"
                   exit 0
                 fi
                 sleep 2
@@ -1182,7 +1187,7 @@ export class WebDashboardServer {
               stdio: 'ignore',
             })
             bg.unref()
-            console.log(`[API] Spawned background task for issue #${issue.number}`)
+            console.log(`[API] Spawned background task for issue #${issue.number} (skipPermissions: ${skipPermissions}, cmd: ${safeStartupCommand})`)
 
             // Update session metadata store with issue info
             const existingMetadata = await loadSessionStore(instanceId)
