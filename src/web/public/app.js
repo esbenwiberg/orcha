@@ -1913,7 +1913,7 @@ function createTerminalPanel(session) {
   panel.appendChild(container);
 
   // Focus handling (Ctrl+click toggles visibility filter)
-  // Skip if clicking in terminal area (let xterm handle it)
+  // Use capture phase (true) to intercept clicks before xterm.js handles them
   panel.addEventListener('click', (e) => {
     // Don't interfere with terminal clicks
     if (e.target.closest('.terminal-container')) {
@@ -1929,7 +1929,7 @@ function createTerminalPanel(session) {
     } else {
       focusPanel(key);
     }
-  });
+  }, true);
 
   // Double-click to toggle fullscreen (only on header, not terminal)
   panel.addEventListener('dblclick', (e) => {
