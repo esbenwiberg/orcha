@@ -30,19 +30,35 @@ When working on complex features, you often need to tackle multiple aspects in p
 
 ## Quick Start
 
+### Option 1: NPM (Coming Soon)
+
 ```bash
-# Install
-git clone https://github.com/esbenwiberg/orcha.git
-cd orcha
-npm install
-npm run build
-npm link  # optional, for global 'orcha' command
+npm install -g @esbenwiberg/orcha
 
 # Start 3 Claude sessions in your project
 orcha start -n 3 -r ~/myproject
 
 # Open web dashboard
 orcha web
+```
+
+> **Note**: NPM package publishing in progress. Use the installer below for now.
+
+### Option 2: One-line installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/esbenwiberg/orcha/main/install.sh | bash
+
+# Then use orcha
+orcha start -n 3 -r ~/myproject
+```
+
+### Option 3: From source
+
+```bash
+git clone https://github.com/esbenwiberg/orcha.git
+cd orcha
+npm install && npm run build && npm link
 ```
 
 ## Commands

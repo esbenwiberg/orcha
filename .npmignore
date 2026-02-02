@@ -1,0 +1,31 @@
+# Source files (compiled versions in dist/ will be included)
+src/
+tsconfig.json
+
+# Development
+node_modules/
+.git/
+.gitignore
+*.log
+*.tgz
+
+# Tests
+__tests__/
+*.test.ts
+*.spec.ts
+vitest.config.ts
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Misc
+.DS_Store
+.env
+.env.local
+
+# Don't ignore these (override gitignore)
+!dist/
+!bin/

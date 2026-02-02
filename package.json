@@ -1,5 +1,5 @@
 {
-  "name": "orcha",
+  "name": "@esbenwiberg/orcha",
   "version": "0.1.0",
   "description": "Parallel AI session orchestrator with real-time status visibility",
   "type": "module",
@@ -8,12 +8,42 @@
     "orcha": "./bin/orcha.js",
     "orcha-mcp": "./bin/orcha-mcp.js"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "src/web/public/",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "ai",
+    "claude",
+    "orchestrator",
+    "parallel",
+    "tmux",
+    "cli",
+    "worktree",
+    "git",
+    "coding-assistant",
+    "automation"
+  ],
+  "author": "Esben Wiberg",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/esbenwiberg/orcha.git"
+  },
+  "bugs": {
+    "url": "https://github.com/esbenwiberg/orcha/issues"
+  },
+  "homepage": "https://github.com/esbenwiberg/orcha#readme",
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest",
     "lint": "eslint src/",
-    "start": "node dist/cli/index.js"
+    "start": "node dist/cli/index.js",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
