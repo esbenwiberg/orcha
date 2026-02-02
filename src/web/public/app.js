@@ -731,6 +731,37 @@ async function closeSession(instanceId, sessionId, sessionKey) {
 }
 
 /**
+ * Remove an empty instance (repo with no sessions)
+ */
+async function removeInstance(instanceId) {
+  const displayName = instanceId.replace('orcha-', '');
+  if (!confirm(`Remove repo "${displayName}" from the dashboard?`)) {
+    return false;
+  }
+
+  try {
+    const res = await fetch(`/api/instances/${instanceId}`, {
+      method: 'DELETE',
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || 'Unknown error');
+    }
+
+    // Trigger re-render to update sidebar
+    await render();
+
+    console.log(`[Remove] Instance removed: ${instanceId}`);
+    return true;
+  } catch (err) {
+    console.error('[Remove] Error:', err);
+    alert(`Failed to remove repo: ${err.message}`);
+    return false;
+  }
+}
+
+/**
  * Get display name for a session (customName > branch > tmux session)
  */
 function getSessionDisplayName(session) {
@@ -1723,6 +1754,20 @@ function updateSidebar(tmuxSessions, instances = []) {
 
     headerContainer.appendChild(header);
     headerContainer.appendChild(addBtn);
+
+    // Show remove button for empty instances
+    if (instanceSessions.length === 0) {
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'remove-instance-btn';
+      removeBtn.innerHTML = '×';
+      removeBtn.title = 'Remove empty repo';
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        removeInstance(instanceId);
+      });
+      headerContainer.appendChild(removeBtn);
+    }
+
     sessionList.appendChild(headerContainer);
 
     // One entry per tmux session

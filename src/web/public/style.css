@@ -461,6 +461,22 @@ body {
   color: var(--accent-purple);
 }
 
+.remove-instance-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  transition: color 0.15s;
+  opacity: 0.6;
+}
+
+.remove-instance-btn:hover {
+  color: var(--status-error);
+  opacity: 1;
+}
+
 /* New session dialog (modal) */
 .new-session-overlay {
   position: fixed;
