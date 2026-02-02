@@ -1680,6 +1680,7 @@ function createTerminalPanel(session) {
   panel.appendChild(container);
 
   // Focus handling (Ctrl+click toggles visibility filter)
+  // Use capture phase (true) to intercept clicks before xterm.js handles them
   panel.addEventListener('click', (e) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
@@ -1687,7 +1688,7 @@ function createTerminalPanel(session) {
     } else {
       focusPanel(key);
     }
-  });
+  }, true);
 
   // Double-click to toggle fullscreen
   panel.addEventListener('dblclick', (e) => {
