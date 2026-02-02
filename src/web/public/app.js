@@ -843,7 +843,9 @@ function showNewSessionDialog(instanceId) {
         <div>
           <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Mode</label>
           <select class="new-session-mode" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;">
-            <option value="claude">Claude</option>
+            <option value="claude">Claude (Recommended)</option>
+            <option value="gemini">Gemini</option>
+            <option value="codex">Codex</option>
             <option value="shell">Shell</option>
           </select>
         </div>
@@ -929,6 +931,344 @@ function parseGitHubUrl(url) {
     }
   }
   return null;
+}
+
+/**
+ * Parse issue references from text input
+ * Supports: #123, 123, owner/repo#123, full GitHub issue URLs
+ * Returns array of { number, owner?, repo?, url? }
+ */
+function parseIssueReferences(text) {
+  const issues = [];
+  const seen = new Set();
+
+  // Split by newlines, commas, spaces
+  const tokens = text.split(/[\n,\s]+/).filter(Boolean);
+
+  for (const token of tokens) {
+    let parsed = null;
+
+    // Full GitHub URL: https://github.com/owner/repo/issues/123
+    const urlMatch = token.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
+    if (urlMatch) {
+      parsed = {
+        number: parseInt(urlMatch[3], 10),
+        owner: urlMatch[1],
+        repo: urlMatch[2],
+        url: token,
+      };
+    }
+
+    // owner/repo#123
+    if (!parsed) {
+      const crossRepoMatch = token.match(/^([^/]+)\/([^#]+)#(\d+)$/);
+      if (crossRepoMatch) {
+        parsed = {
+          number: parseInt(crossRepoMatch[3], 10),
+          owner: crossRepoMatch[1],
+          repo: crossRepoMatch[2],
+        };
+      }
+    }
+
+    // #123 or just 123
+    if (!parsed) {
+      const simpleMatch = token.match(/^#?(\d+)$/);
+      if (simpleMatch) {
+        parsed = {
+          number: parseInt(simpleMatch[1], 10),
+        };
+      }
+    }
+
+    if (parsed && !seen.has(parsed.number)) {
+      seen.add(parsed.number);
+      issues.push(parsed);
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Show the batch issues dialog for an instance
+ */
+function showBatchIssuesDialog(instanceId) {
+  console.log('[Dialog] Opening Batch Issues for:', instanceId);
+
+  // Remove any existing dialog
+  const existingDialog = document.querySelector('.new-session-overlay');
+  if (existingDialog) {
+    existingDialog.remove();
+  }
+
+  // Create overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+
+  overlay.innerHTML = `
+    <div class="new-session-dialog batch-issues-dialog">
+      <h3>🚀 Batch Process Issues</h3>
+      <div class="dialog-instance">${instanceId}</div>
+      <div class="new-session-form">
+        <div>
+          <label>Issue references (one per line or comma-separated)</label>
+          <textarea class="batch-issues-input" rows="6" placeholder="#123, #456
+https://github.com/owner/repo/issues/789
+owner/repo#101"></textarea>
+          <div class="batch-issues-hint">Supports: #123, 123, owner/repo#123, or full GitHub URLs</div>
+        </div>
+        <div class="batch-issues-preview">
+          <div class="batch-preview-label">Preview</div>
+          <div class="batch-preview-list"></div>
+        </div>
+        <div class="batch-issues-error error-text"></div>
+      </div>
+      <div class="new-session-buttons">
+        <button class="new-session-cancel">Cancel</button>
+        <button class="batch-issues-submit" disabled>Process 0 Issues</button>
+      </div>
+    </div>
+  `;
+
+  const textarea = overlay.querySelector('.batch-issues-input');
+  const previewList = overlay.querySelector('.batch-preview-list');
+  const errorEl = overlay.querySelector('.batch-issues-error');
+  const submitBtn = overlay.querySelector('.batch-issues-submit');
+  const cancelBtn = overlay.querySelector('.new-session-cancel');
+
+  let parsedIssues = [];
+  let fetchedTitles = new Map(); // number -> { title, state, url }
+  let fetchDebounce = null;
+
+  // Fetch issue titles from GitHub for preview
+  const fetchIssueTitles = async (numbers) => {
+    if (numbers.length === 0) return;
+
+    // Only fetch issues without explicit owner/repo (local repo issues)
+    const localNumbers = parsedIssues
+      .filter(i => !i.owner)
+      .map(i => i.number);
+
+    if (localNumbers.length === 0) return;
+
+    try {
+      const res = await fetch(`/api/github/issues?instanceId=${encodeURIComponent(instanceId)}&numbers=${localNumbers.join(',')}`);
+      if (res.ok) {
+        const data = await res.json();
+        for (const issue of data.issues || []) {
+          fetchedTitles.set(issue.number, { title: issue.title, state: issue.state, url: issue.url });
+        }
+        // Re-render preview with titles
+        renderPreview();
+      }
+    } catch (err) {
+      console.log('[BatchIssues] Failed to fetch titles:', err);
+    }
+  };
+
+  // Render preview (separate from parsing for async title updates)
+  const renderPreview = () => {
+    previewList.innerHTML = '';
+
+    if (parsedIssues.length === 0) {
+      previewList.innerHTML = '<div class="batch-preview-empty">No issues detected</div>';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Process 0 Issues';
+      return;
+    }
+
+    for (const issue of parsedIssues) {
+      const item = document.createElement('div');
+      item.className = 'batch-preview-item';
+
+      const fetched = fetchedTitles.get(issue.number);
+      if (issue.owner && issue.repo) {
+        item.innerHTML = `<span class="batch-issue-num">#${issue.number}</span> <span class="batch-issue-repo">${issue.owner}/${issue.repo}</span>`;
+      } else if (fetched) {
+        const stateClass = fetched.state === 'OPEN' ? 'open' : 'closed';
+        item.innerHTML = `<span class="batch-issue-num">#${issue.number}</span> <span class="batch-issue-title">${escapeHtml(fetched.title)}</span> <span class="batch-issue-state ${stateClass}">${fetched.state}</span>`;
+      } else {
+        item.innerHTML = `<span class="batch-issue-num">#${issue.number}</span> <span class="batch-issue-loading">loading...</span>`;
+      }
+      previewList.appendChild(item);
+    }
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = `Process ${parsedIssues.length} Issue${parsedIssues.length > 1 ? 's' : ''}`;
+  };
+
+  // Helper to escape HTML
+  const escapeHtml = (text) => {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  };
+
+  // Update preview on input
+  const updatePreview = () => {
+    parsedIssues = parseIssueReferences(textarea.value);
+    renderPreview();
+
+    // Debounce fetching titles
+    clearTimeout(fetchDebounce);
+    fetchDebounce = setTimeout(() => {
+      fetchIssueTitles(parsedIssues.map(i => i.number));
+    }, 300);
+  };
+
+  textarea.addEventListener('input', updatePreview);
+
+  // Close dialog with cleanup
+  const closeDialog = () => {
+    document.removeEventListener('keydown', handleKeydown);
+    overlay.remove();
+  };
+
+  // Keyboard handling
+  function handleKeydown(e) {
+    if (!document.body.contains(overlay)) {
+      document.removeEventListener('keydown', handleKeydown);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeDialog();
+    }
+  }
+  document.addEventListener('keydown', handleKeydown);
+
+  // Show results in the preview area
+  const showResults = (sessions, errors) => {
+    previewList.innerHTML = '';
+    previewList.className = 'batch-preview-list batch-results';
+
+    // Show successful sessions
+    for (const session of sessions) {
+      const item = document.createElement('div');
+      item.className = 'batch-preview-item batch-result-success';
+      item.innerHTML = `
+        <span class="batch-result-icon">✓</span>
+        <span class="batch-issue-num">#${session.issueNumber}</span>
+        <span class="batch-result-branch">${session.branch}</span>
+      `;
+      previewList.appendChild(item);
+    }
+
+    // Show errors
+    for (const err of errors) {
+      const item = document.createElement('div');
+      item.className = 'batch-preview-item batch-result-error';
+      item.innerHTML = `
+        <span class="batch-result-icon">✗</span>
+        <span class="batch-issue-num">#${err.issueNumber}</span>
+        <span class="batch-result-message">${escapeHtml(err.error)}</span>
+      `;
+      previewList.appendChild(item);
+    }
+  };
+
+  // Prevent double-submission
+  let isSubmitting = false;
+
+  // Submit handler
+  submitBtn.addEventListener('click', async () => {
+    if (parsedIssues.length === 0) return;
+    if (isSubmitting) return; // Guard against double-click
+    isSubmitting = true;
+
+    submitBtn.disabled = true;
+    cancelBtn.disabled = true;
+    textarea.disabled = true;
+    submitBtn.innerHTML = '<span class="spinner"></span> Creating sessions...';
+    errorEl.textContent = '';
+
+    // Update preview to show processing state
+    previewList.innerHTML = '';
+    for (const issue of parsedIssues) {
+      const item = document.createElement('div');
+      item.className = 'batch-preview-item batch-processing';
+      item.innerHTML = `
+        <span class="batch-result-icon"><span class="spinner-small"></span></span>
+        <span class="batch-issue-num">#${issue.number}</span>
+        <span class="batch-issue-loading">creating session...</span>
+      `;
+      previewList.appendChild(item);
+    }
+
+    try {
+      const res = await fetch('/api/batch-issues', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId,
+          issues: parsedIssues,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to start batch processing');
+      }
+
+      const sessions = data.sessions || [];
+      const errors = data.errors || [];
+
+      // Show results
+      showResults(sessions, errors);
+
+      if (sessions.length > 0) {
+        // Update button to show success and allow closing
+        submitBtn.innerHTML = `✓ Started ${sessions.length} session${sessions.length > 1 ? 's' : ''}`;
+        submitBtn.className = 'batch-issues-submit batch-success';
+        submitBtn.disabled = false;
+        submitBtn.onclick = () => {
+          closeDialog();
+          render();
+        };
+        cancelBtn.textContent = 'Close';
+        cancelBtn.disabled = false;
+
+        showToast(`Started ${sessions.length} session(s) for issue processing`, 'success');
+      }
+
+      if (errors.length > 0 && sessions.length === 0) {
+        // All failed
+        throw new Error(`All ${errors.length} issue(s) failed to process`);
+      } else if (errors.length > 0) {
+        // Partial success
+        errorEl.textContent = `${errors.length} issue(s) failed - see details above`;
+      }
+
+      // Refresh dashboard in background
+      render();
+    } catch (err) {
+      console.error('Batch issues error:', err);
+      errorEl.textContent = err.message;
+      submitBtn.disabled = false;
+      cancelBtn.disabled = false;
+      textarea.disabled = false;
+      isSubmitting = false; // Allow retry on error
+      submitBtn.innerHTML = `Process ${parsedIssues.length} Issue${parsedIssues.length > 1 ? 's' : ''}`;
+      submitBtn.className = 'batch-issues-submit';
+      // Re-render original preview
+      renderPreview();
+    }
+  });
+
+  cancelBtn.addEventListener('click', closeDialog);
+
+  // Close on overlay click
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+
+  document.body.appendChild(overlay);
+  textarea.focus();
+
+  // Initial preview update
+  updatePreview();
 }
 
 /**
@@ -1711,6 +2051,16 @@ function updateSidebar(tmuxSessions, instances = []) {
     header.style.cursor = 'pointer';
     header.addEventListener('click', () => filterByInstance(instanceId));
 
+    // Batch issues button
+    const batchBtn = document.createElement('button');
+    batchBtn.className = 'batch-issues-btn';
+    batchBtn.innerHTML = '⚡';
+    batchBtn.title = 'Batch process GitHub issues';
+    batchBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showBatchIssuesDialog(instanceId);
+    });
+
     // Add session button
     const addBtn = document.createElement('button');
     addBtn.className = 'add-session-btn';
@@ -1722,6 +2072,7 @@ function updateSidebar(tmuxSessions, instances = []) {
     });
 
     headerContainer.appendChild(header);
+    headerContainer.appendChild(batchBtn);
     headerContainer.appendChild(addBtn);
     sessionList.appendChild(headerContainer);
 
@@ -1748,9 +2099,9 @@ function updateSidebar(tmuxSessions, instances = []) {
 
       const name = document.createElement('div');
       name.className = 'session-name';
-      // Show tmux session name with pane count if multi-pane
+      // Show display name (customName > branch > tmux session) with pane count if multi-pane
       const paneInfo = session.paneCount > 1 ? ` (${session.paneCount})` : '';
-      name.textContent = session.tmuxSession.replace('orcha-', '') + paneInfo;
+      name.textContent = getSessionDisplayName(session) + paneInfo;
 
       const branch = document.createElement('div');
       branch.className = 'session-branch';

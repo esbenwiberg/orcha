@@ -270,8 +270,27 @@ export class WebDashboardServer {
         const cmd = (mode || 'claude') === 'shell' ? '' : (mode || 'claude')
         if (cmd) {
           // Use inline env var syntax: VAR=val command (sets vars just for that command)
-          const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmd}`
+          const cmdWithFlags = cmd === 'claude' ? `${cmd} --dangerously-skip-permissions` : cmd
+          const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmdWithFlags}`
           sessionTmux.runInPane(session.id, envCmd)
+
+          // Accept the bypass permissions warning by pressing Down then Enter (Claude only)
+          if (cmd === 'claude') {
+            setTimeout(() => {
+              try {
+                execSync(`tmux send-keys -t "${sessionTmuxName}:0.0" Down`, { stdio: 'pipe' })
+                setTimeout(() => {
+                  try {
+                    execSync(`tmux send-keys -t "${sessionTmuxName}:0.0" Enter`, { stdio: 'pipe' })
+                  } catch {
+                    // May already be past the prompt
+                  }
+                }, 1000)
+              } catch {
+                // May already be past the prompt
+              }
+            }, 2000)
+          }
         }
 
         // Update session metadata store
@@ -813,6 +832,255 @@ export class WebDashboardServer {
         res.json({ success: true, prUrl })
       } catch (err) {
         console.error('[API] Git create-pr error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // =========================================================================
+    // GitHub Issues API
+    // =========================================================================
+
+    // API: Fetch GitHub issues for validation/preview
+    this.app.get('/api/github/issues', async (req, res) => {
+      try {
+        const { instanceId, numbers } = req.query as { instanceId?: string; numbers?: string }
+
+        if (!instanceId || !numbers) {
+          res.status(400).json({ error: 'instanceId and numbers are required' })
+          return
+        }
+
+        const instance = await getInstance(instanceId)
+        if (!instance) {
+          res.status(404).json({ error: `Instance not found: ${instanceId}` })
+          return
+        }
+
+        // Parse issue numbers
+        const issueNumbers = numbers.split(',').map(n => parseInt(n.trim(), 10)).filter(n => !isNaN(n))
+        if (issueNumbers.length === 0) {
+          res.status(400).json({ error: 'No valid issue numbers provided' })
+          return
+        }
+
+        // Check gh CLI is available
+        const { spawnSync } = await import('child_process')
+        const ghCheck = spawnSync('which', ['gh'], { encoding: 'utf-8' })
+        if (ghCheck.status !== 0) {
+          res.status(400).json({ error: 'gh CLI not installed' })
+          return
+        }
+
+        // Get GitHub remote to determine repo
+        const remoteResult = await executeGit(instanceId, ['remote', 'get-url', 'origin'])
+        if (remoteResult.code !== 0 || !remoteResult.stdout.includes('github.com')) {
+          res.status(400).json({ error: 'Repository does not have a GitHub remote' })
+          return
+        }
+
+        // Parse owner/repo from remote URL
+        const remoteUrl = remoteResult.stdout.trim()
+        const repoMatch = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/)
+        if (!repoMatch) {
+          res.status(400).json({ error: 'Could not parse GitHub repo from remote' })
+          return
+        }
+        const [, owner, repo] = repoMatch
+
+        // Fetch issues using gh CLI (batch query)
+        const issues: Array<{ number: number; title: string; url: string; state: string }> = []
+        const errors: Array<{ number: number; error: string }> = []
+
+        // Use gh issue view for each (gh doesn't have a batch lookup)
+        for (const num of issueNumbers) {
+          const issueResult = spawnSync('gh', ['issue', 'view', String(num), '--json', 'number,title,url,state', '-R', `${owner}/${repo}`], {
+            encoding: 'utf-8',
+            timeout: 10000,
+          })
+
+          if (issueResult.status === 0) {
+            try {
+              const issueData = JSON.parse(issueResult.stdout)
+              issues.push({
+                number: issueData.number,
+                title: issueData.title,
+                url: issueData.url,
+                state: issueData.state,
+              })
+            } catch {
+              errors.push({ number: num, error: 'Failed to parse issue data' })
+            }
+          } else {
+            errors.push({ number: num, error: 'Issue not found' })
+          }
+        }
+
+        console.log(`[API] Fetched ${issues.length} issues for ${owner}/${repo}`)
+        res.json({ issues, errors, repo: `${owner}/${repo}` })
+      } catch (err) {
+        console.error('[API] GitHub issues error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Batch process GitHub issues - create sessions with /flow command
+    this.app.post('/api/batch-issues', async (req, res) => {
+      try {
+        const { instanceId, issues } = req.body as {
+          instanceId: string
+          issues: Array<{ number: number; owner?: string; repo?: string; url?: string }>
+        }
+
+        if (!instanceId || !issues || !Array.isArray(issues) || issues.length === 0) {
+          res.status(400).json({ error: 'instanceId and non-empty issues array are required' })
+          return
+        }
+
+        const instance = await getInstance(instanceId)
+        if (!instance) {
+          res.status(404).json({ error: `Instance not found: ${instanceId}` })
+          return
+        }
+
+        // Get GitHub remote to build issue URLs
+        const remoteResult = await executeGit(instanceId, ['remote', 'get-url', 'origin'])
+        let defaultOwner = ''
+        let defaultRepo = ''
+
+        if (remoteResult.code === 0 && remoteResult.stdout.includes('github.com')) {
+          const repoMatch = remoteResult.stdout.match(/github\.com[:/]([^/]+)\/([^/.]+)/)
+          if (repoMatch) {
+            defaultOwner = repoMatch[1]
+            defaultRepo = repoMatch[2]
+          }
+        }
+
+        // Ensure tmux session exists
+        const tmux = new TmuxRenderer({ sessionName: instance.tmuxSession })
+        if (!tmux.sessionExists()) {
+          tmux.createSession()
+        }
+
+        const statusDir = getStatusDirForInstance(instanceId)
+        const createdSessions: Array<{ id: string; issueNumber: number; branch: string }> = []
+        const errors: Array<{ issueNumber: number; error: string }> = []
+
+        // Process each issue
+        for (const issue of issues) {
+          try {
+            // Build issue URL
+            const issueOwner = issue.owner || defaultOwner
+            const issueRepo = issue.repo || defaultRepo
+            const issueUrl = issue.url || `https://github.com/${issueOwner}/${issueRepo}/issues/${issue.number}`
+
+            if (!issueOwner || !issueRepo) {
+              errors.push({ issueNumber: issue.number, error: 'Could not determine repository for issue' })
+              continue
+            }
+
+            // Create branch name with random suffix to avoid collision
+            const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+            const randomSuffix = Math.random().toString(36).slice(2, 6)
+            const branchName = `fix/issue-${issue.number}-${timestamp}-${randomSuffix}`
+
+            // Create session manager
+            const manager = new SessionManager({ repoPath: instance.repoPath, statusDir })
+            await manager.start()
+
+            // Create session with worktree
+            const session = await manager.createSession({
+              branch: branchName,
+              mode: 'claude',
+              workingDirectory: instance.repoPath,
+              repoPath: instance.repoPath,
+            })
+
+            // Write status file
+            const status = manager.status.getStatus(session.id)
+            if (status) {
+              await manager.status.writeStatusFile(session.id, status)
+            }
+
+            // Create dedicated tmux session for this session
+            const sessionTmuxName = `orcha-ui-${session.id}`
+            const sessionTmux = new TmuxRenderer({ sessionName: sessionTmuxName })
+            const workDir = session.worktreePath || instance.repoPath
+            sessionTmux.createPane(session.id, workDir)
+
+            // Run Claude with environment variables
+            const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' claude --dangerously-skip-permissions`
+            sessionTmux.runInPane(session.id, envCmd)
+
+            // Queue up the permission acceptance and /flow command in background
+            // Use spawn to run a shell script that handles timing
+            const { spawn: spawnBg } = await import('child_process')
+            const acceptScript = `
+              sleep 3
+              # Accept the bypass permissions prompt by pressing Down to select option 2, then Enter
+              tmux send-keys -t "${sessionTmuxName}:0.0" Down
+              sleep 1
+              tmux send-keys -t "${sessionTmuxName}:0.0" Enter
+              echo "[Batch] Sent permission acceptance for ${sessionTmuxName}"
+              sleep 8
+              for i in 1 2 3 4 5 6 7 8 9 10; do
+                CONTENT=$(tmux capture-pane -t "${sessionTmuxName}:0.0" -p -S -10 2>/dev/null || echo "")
+                if echo "$CONTENT" | grep -q "❯"; then
+                  # Send the /flow-auto command text first, then Enter after a delay
+                  tmux send-keys -t "${sessionTmuxName}:0.0" "/flow-auto ${issueUrl}"
+                  sleep 1
+                  tmux send-keys -t "${sessionTmuxName}:0.0" Enter
+                  echo "[Batch] Sent /flow-auto for issue #${issue.number}"
+                  exit 0
+                fi
+                sleep 2
+              done
+              echo "[Batch] Could not detect Claude prompt for issue #${issue.number}"
+            `
+            const bg = spawnBg('bash', ['-c', acceptScript], {
+              detached: true,
+              stdio: 'ignore',
+            })
+            bg.unref()
+            console.log(`[API] Spawned background task for issue #${issue.number}`)
+
+            // Update session metadata store with issue info
+            const existingMetadata = await loadSessionStore(instanceId)
+            const newMetadata: SessionMetadata = {
+              id: session.id,
+              displayId: session.displayId,
+              paneIndex: 0,
+              branch: session.branch,
+              mode: session.mode,
+              worktreePath: session.worktreePath,
+              createdAt: session.createdAt.toISOString(),
+              tmuxSession: sessionTmuxName,
+              customName: `#${issue.number}`, // Set issue number as session name
+            }
+            existingMetadata.push(newMetadata)
+            await saveSessionStore(instanceId, existingMetadata)
+
+            // Note: permission acceptance and /flow command are handled by the background bash script above
+
+            createdSessions.push({
+              id: session.id,
+              issueNumber: issue.number,
+              branch: branchName,
+            })
+
+            console.log(`[API] Created batch session for issue #${issue.number}: ${session.id}`)
+          } catch (err) {
+            console.error(`[API] Failed to create session for issue #${issue.number}:`, err)
+            errors.push({ issueNumber: issue.number, error: (err as Error).message })
+          }
+        }
+
+        res.json({
+          success: true,
+          sessions: createdSessions,
+          errors,
+        })
+      } catch (err) {
+        console.error('[API] Batch issues error:', err)
         res.status(500).json({ error: (err as Error).message })
       }
     })
