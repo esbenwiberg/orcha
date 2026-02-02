@@ -736,14 +736,15 @@ async function showPlanDialog(session) {
 /**
  * Open file manager (yazi) in a modal
  */
-function openFileManager(instanceId) {
+function openFileManager(instanceId, sessionId) {
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay file-manager-overlay';
 
+  const displayName = sessionId ? `${instanceId}/${sessionId}` : instanceId;
   overlay.innerHTML = `
     <div class="file-manager-dialog">
       <div class="file-manager-header">
-        <span class="file-manager-title"><svg class="file-manager-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg> ${instanceId}</span>
+        <span class="file-manager-title"><svg class="file-manager-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg> ${displayName}</span>
         <button class="file-manager-close">×</button>
       </div>
       <div class="file-manager-terminal"></div>
@@ -798,7 +799,10 @@ function openFileManager(instanceId) {
 
   // Connect via WebSocket to yazi
   const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${wsProtocol}//${location.host}?mode=yazi&instanceId=${encodeURIComponent(instanceId)}`;
+  let wsUrl = `${wsProtocol}//${location.host}?mode=yazi&instanceId=${encodeURIComponent(instanceId)}`;
+  if (sessionId) {
+    wsUrl += `&sessionId=${encodeURIComponent(sessionId)}`;
+  }
   const ws = new WebSocket(wsUrl);
 
   // Fit terminal after dialog fully renders and send size to server
@@ -2132,7 +2136,7 @@ function createTerminalPanel(session) {
   folderBtn.title = 'Open in file manager (Ctrl+A, F)';
   folderBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    openFileManager(session.instanceId);
+    openFileManager(session.instanceId, session.id);
   });
 
   // Review changes button
@@ -3053,7 +3057,7 @@ async function init() {
         e.stopPropagation();
         const session = state.sessions.find(s => getSessionKey(s) === state.focusedSession);
         if (session) {
-          openFileManager(session.instanceId);
+          openFileManager(session.instanceId, session.id);
         }
         return;
       }

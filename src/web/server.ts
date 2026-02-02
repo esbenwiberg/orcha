@@ -47,6 +47,7 @@ interface SessionInfo {
   state: string
   message: string
   customName?: string // User-defined name
+  worktreePath?: string | null // Path to worktree if using worktrees
 }
 
 interface PtySession {
@@ -1433,6 +1434,8 @@ export class WebDashboardServer {
       // File manager mode (yazi)
       if (mode === 'yazi') {
         const instanceId = url.searchParams.get('instanceId')
+        const sessionId = url.searchParams.get('sessionId')
+
         if (!instanceId) {
           ws.close(1008, 'Missing instanceId parameter')
           return
@@ -1444,9 +1447,22 @@ export class WebDashboardServer {
           return
         }
 
-        console.log(`[WS] File manager connected: ${instanceId}`)
+        // Determine path: use worktree if session exists, otherwise use main repo
+        let targetPath = instance.repoPath
+        if (sessionId) {
+          const sessions = await this.getAllSessions()
+          const session = sessions.find(s => s.id === sessionId && s.instanceId === instanceId)
+          if (session && session.worktreePath) {
+            targetPath = session.worktreePath
+            console.log(`[WS] File manager connected: ${instanceId}/${sessionId} (worktree: ${targetPath})`)
+          } else {
+            console.log(`[WS] File manager connected: ${instanceId}/${sessionId} (main repo: ${targetPath})`)
+          }
+        } else {
+          console.log(`[WS] File manager connected: ${instanceId} (main repo: ${targetPath})`)
+        }
 
-        const ptyProcess = this.createYaziPty(instance.repoPath)
+        const ptyProcess = this.createYaziPty(targetPath)
         if (!ptyProcess) {
           ws.close(1011, 'Failed to create yazi PTY')
           return
@@ -1648,6 +1664,7 @@ export class WebDashboardServer {
           state: status.state,
           message: status.message,
           customName: meta.customName,
+          worktreePath: meta.worktreePath,
         })
       }
     }
