@@ -1098,6 +1098,49 @@ export class WebDashboardServer {
           }
         }
 
+        // Add diffs for untracked/new files (git diff doesn't include them)
+        const untrackedFiles = files.filter(f => f.status === 'A' && !f.committed)
+        for (const file of untrackedFiles) {
+          // Check if file is already in the diff (staged files will be)
+          if (!diff.includes(`+++ b/${file.path}`)) {
+            // Generate diff for untracked file by comparing /dev/null to the file
+            const fileContentResult = await executeGit(instanceId, ['diff', '--no-index', '/dev/null', file.path])
+            // git diff --no-index returns exit code 1 when files differ, which is expected
+            if (fileContentResult.stdout) {
+              // Replace /dev/null path with proper a/ prefix to match standard diff format
+              let fileDiff = fileContentResult.stdout
+              fileDiff = fileDiff.replace('--- /dev/null', `--- /dev/null`)
+              fileDiff = fileDiff.replace(`+++ b/${file.path}`, `+++ b/${file.path}`)
+              // Add a separator if we already have diff content
+              if (diff) diff += '\n'
+              diff += fileDiff
+            }
+          }
+        }
+
+        // Add diffs for deleted files that aren't staged
+        const deletedFiles = files.filter(f => f.status === 'D' && !f.committed)
+        for (const file of deletedFiles) {
+          // Check if file is already in the diff
+          if (!diff.includes(`--- a/${file.path}`)) {
+            // Generate diff by showing the file content from HEAD as all deletions
+            const fileContentResult = await executeGit(instanceId, ['show', `HEAD:${file.path}`])
+            if (fileContentResult.code === 0) {
+              // Manually create a diff showing the entire file as deleted
+              const lines = fileContentResult.stdout.split('\n')
+              let fileDiff = `diff --git a/${file.path} b/${file.path}\n`
+              fileDiff += `deleted file mode 100644\n`
+              fileDiff += `--- a/${file.path}\n`
+              fileDiff += `+++ /dev/null\n`
+              fileDiff += `@@ -1,${lines.length} +0,0 @@\n`
+              fileDiff += lines.map(line => `-${line}`).join('\n')
+              // Add a separator if we already have diff content
+              if (diff) diff += '\n'
+              diff += fileDiff
+            }
+          }
+        }
+
         // Get stats
         let stats = { files: 0, insertions: 0, deletions: 0 }
         if (mergeBase) {

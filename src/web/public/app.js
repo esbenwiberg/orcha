@@ -721,7 +721,32 @@ async function showPlanDialog(session) {
     const res = await fetch(`/api/sessions/${session.instanceId}/${session.id}/plan`);
     if (!res.ok) {
       const data = await res.json();
-      contentEl.innerHTML = `<div class="plan-empty">${data.error || 'No plan found'}</div>`;
+      contentEl.innerHTML = `
+        <div class="plan-empty">
+          <div style="font-size: 64px; margin-bottom: 20px; color: #a78bfa;">☰</div>
+          <h3 style="margin: 0 0 16px 0; color: var(--text-color);">No Plan Found</h3>
+          <p style="margin: 0 0 24px 0; color: var(--text-muted); line-height: 1.6;">
+            Plans help organize implementation work. Create one to see it here.
+          </p>
+          <div style="text-align: left; background: var(--bg-darker); padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">How to create a plan:</div>
+            <div style="margin-left: 20px; color: var(--text-muted);">
+              <div style="margin-bottom: 8px;">• Ask Claude to create an implementation plan</div>
+              <div style="margin-bottom: 8px;">• Use plan mode to design your approach</div>
+              <div>• Manually create a plan file at the location below</div>
+            </div>
+          </div>
+          <div style="text-align: left; background: var(--bg-darker); padding: 16px; border-radius: 8px; font-size: 13px;">
+            <div style="font-weight: 600; margin-bottom: 8px; color: var(--text-color);">Default location:</div>
+            <div style="color: var(--text-muted); font-family: monospace; margin-left: 20px;">
+              .claude/plan.md
+            </div>
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); color: var(--text-muted);">
+              <em>Tip:</em> Customize the path in <code>.orcha/config.json</code> with <code>"planPath"</code>
+            </div>
+          </div>
+        </div>
+      `;
       return;
     }
 

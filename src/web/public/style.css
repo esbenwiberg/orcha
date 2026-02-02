@@ -1378,9 +1378,19 @@ body {
 
 .plan-empty {
   color: var(--text-muted);
-  font-style: italic;
   text-align: center;
   padding: 40px;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.plan-empty code {
+  background: var(--bg-color);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 13px;
+  color: var(--text-color);
 }
 
 .plan-error {
