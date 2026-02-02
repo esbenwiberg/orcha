@@ -248,6 +248,7 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  user-select: text;
 }
 
 .session-branch {
@@ -256,6 +257,7 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  user-select: text;
 }
 
 .sidebar-footer {
@@ -876,6 +878,7 @@ body {
   transition: background 0.15s;
   flex: 0 1 auto;
   max-width: 150px;
+  user-select: text;
 }
 
 .panel-title:hover {
