@@ -185,9 +185,51 @@ export interface InstanceInfo {
   pid: number // orcha process PID
   startedAt: string // ISO 8601 timestamp
   sessionCount: number // Number of AI sessions
+  providerType?: VcsProviderType // VCS provider type (github, azure-devops, generic)
+  repoInfo?: RepoInfo // Parsed repository information
 }
 
 export interface InstanceRegistry {
   version: number // Schema version
   instances: Record<string, InstanceInfo> // keyed by instanceId
+}
+
+// ============================================================================
+// VCS Provider Types (Multi-Provider Support)
+// ============================================================================
+
+export type VcsProviderType = 'github' | 'azure-devops' | 'generic'
+
+export interface RepoInfo {
+  type: VcsProviderType
+  owner?: string // GitHub: owner, Azure DevOps: organization
+  project?: string // Azure DevOps only: project name
+  repo: string // Repository name
+  remoteUrl: string // Original remote URL
+}
+
+export interface CreatePrOptions {
+  title: string
+  body?: string
+  sourceBranch: string
+  targetBranch: string
+  repoPath: string
+  repoInfo: RepoInfo
+}
+
+export interface PrResult {
+  success: boolean
+  prUrl?: string
+  prNumber?: number
+  error?: string
+}
+
+export interface WorkItem {
+  id: number
+  title: string
+  type: string // 'Issue' for GitHub, 'Bug'/'User Story'/'Task'/etc for ADO
+  state: string
+  url: string
+  assignee?: string
+  labels?: string[]
 }
