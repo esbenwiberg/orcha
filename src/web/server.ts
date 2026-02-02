@@ -14,12 +14,14 @@ import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
 import { existsSync } from 'fs'
-import { listInstances, getInstance, getInstanceByPath, registerInstance } from '../core/instance-registry.js'
+import { listInstances, getInstance, getInstanceByPath, registerInstance, unregisterInstance } from '../core/instance-registry.js'
 import { StatusMonitor, getStatusDirForInstance } from '../core/status-monitor.js'
 import { loadSessionStore, updateSessionName, saveSessionStore } from '../core/session-store.js'
 import type { SessionMetadata } from '../core/session-store.js'
 import { SessionManager } from '../core/session-manager.js'
 import { TmuxRenderer } from '../cli/tmux-renderer.js'
+import { getProvider, parseRemoteUrl, detectProvider } from '../core/vcs-provider.js'
+import type { RepoInfo } from '../core/types.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -205,10 +207,11 @@ export class WebDashboardServer {
     // API: Create a new session
     this.app.post('/api/sessions', async (req, res) => {
       try {
-        const { instanceId, branch, mode } = req.body as {
+        const { instanceId, branch, mode, useWorktree } = req.body as {
           instanceId: string
           branch?: string
           mode?: 'claude' | 'gemini' | 'codex' | 'shell'
+          useWorktree?: boolean
         }
 
         if (!instanceId) {
@@ -234,17 +237,23 @@ export class WebDashboardServer {
         const manager = new SessionManager({ repoPath: instance.repoPath, statusDir })
         await manager.start()
 
-        // Determine branch name
-        let sessionBranch = branch?.trim() || undefined
-        if (!sessionBranch) {
-          // Auto-generate branch name
-          const existingMetadata = await loadSessionStore(instanceId)
-          const sessionIdx = existingMetadata.length
-          const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-          sessionBranch = `orcha/session-${sessionIdx + 1}-${timestamp}`
+        // Determine branch name (only if using worktrees)
+        const shouldUseWorktree = useWorktree !== false // default true
+        let sessionBranch: string | undefined = undefined
+
+        if (shouldUseWorktree) {
+          sessionBranch = branch?.trim() || undefined
+          if (!sessionBranch) {
+            // Auto-generate branch name
+            const existingMetadata = await loadSessionStore(instanceId)
+            const sessionIdx = existingMetadata.length
+            const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+            sessionBranch = `orcha/session-${sessionIdx + 1}-${timestamp}`
+          }
         }
 
-        console.log(`[API] Creating session: ${sessionBranch} (mode=${mode || 'claude'})`)
+        const branchDisplay = sessionBranch || '(no worktree)'
+        console.log(`[API] Creating session: ${branchDisplay} (mode=${mode || 'claude'})`)
 
         // Create session (this creates worktree)
         const session = await manager.createSession({
@@ -270,27 +279,9 @@ export class WebDashboardServer {
         const cmd = (mode || 'claude') === 'shell' ? '' : (mode || 'claude')
         if (cmd) {
           // Use inline env var syntax: VAR=val command (sets vars just for that command)
-          const cmdWithFlags = cmd === 'claude' ? `${cmd} --dangerously-skip-permissions` : cmd
-          const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmdWithFlags}`
+          // Note: --dangerously-skip-permissions is only used for batch issue processing, not regular sessions
+          const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmd}`
           sessionTmux.runInPane(session.id, envCmd)
-
-          // Accept the bypass permissions warning by pressing Down then Enter (Claude only)
-          if (cmd === 'claude') {
-            setTimeout(() => {
-              try {
-                execSync(`tmux send-keys -t "${sessionTmuxName}:0.0" Down`, { stdio: 'pipe' })
-                setTimeout(() => {
-                  try {
-                    execSync(`tmux send-keys -t "${sessionTmuxName}:0.0" Enter`, { stdio: 'pipe' })
-                  } catch {
-                    // May already be past the prompt
-                  }
-                }, 1000)
-              } catch {
-                // May already be past the prompt
-              }
-            }, 2000)
-          }
         }
 
         // Update session metadata store
@@ -424,45 +415,94 @@ export class WebDashboardServer {
       }
     })
 
+    // API: Clone a repository and register as instance
+    // Supports GitHub, Azure DevOps, and generic git URLs
+    // API: Remove an empty instance (no sessions)
+    this.app.delete('/api/instances/:instanceId', async (req, res) => {
+      try {
+        const { instanceId } = req.params
+
+        // Get instance info
+        const instance = await getInstance(instanceId)
+        if (!instance) {
+          res.status(404).json({ error: 'Instance not found' })
+          return
+        }
+
+        // Check if instance has sessions
+        const metadata = await loadSessionStore(instanceId)
+        if (metadata.length > 0) {
+          res.status(400).json({ error: 'Cannot remove instance with active sessions. Please close all sessions first.' })
+          return
+        }
+
+        // Kill tmux session if exists (the empty container session)
+        try {
+          execSync(`tmux kill-session -t "${instance.tmuxSession}" 2>/dev/null`, { stdio: 'ignore' })
+        } catch {
+          // Tmux session may already be gone
+        }
+
+        // Unregister instance from registry
+        await unregisterInstance(instanceId)
+
+        console.log(`[API] Instance removed: ${instanceId}`)
+        res.json({ success: true })
+      } catch (err) {
+        console.error('[API] Error removing instance:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Clone a GitHub repo and register as instance
     this.app.post('/api/instances/clone', async (req, res) => {
       try {
-        const { githubUrl } = req.body as { githubUrl: string }
+        // Accept both 'githubUrl' (legacy) and 'repoUrl' (new)
+        const { githubUrl, repoUrl } = req.body as { githubUrl?: string; repoUrl?: string }
+        const inputUrl = repoUrl || githubUrl
 
         // Validate input
-        if (!githubUrl) {
-          res.status(400).json({ error: 'githubUrl is required' })
+        if (!inputUrl) {
+          res.status(400).json({ error: 'repoUrl is required' })
           return
         }
 
-        // Parse GitHub URL to extract owner/repo
-        // Supports: https://github.com/owner/repo, github.com/owner/repo, owner/repo
-        const urlPatterns = [
-          /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/.*)?$/,
-          /^github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/.*)?$/,
-          /^([^/]+)\/([^/]+)$/,
-        ]
+        // Parse the URL using VCS provider abstraction
+        const repoInfo = parseRemoteUrl(inputUrl)
 
-        let owner: string | null = null
-        let repo: string | null = null
-
-        for (const pattern of urlPatterns) {
-          const match = githubUrl.match(pattern)
-          if (match) {
-            owner = match[1]
-            repo = match[2]
-            break
+        // Also support shorthand formats: owner/repo for GitHub
+        let finalRepoInfo = repoInfo
+        if (!repoInfo) {
+          // Try shorthand: owner/repo (GitHub)
+          const shorthandMatch = inputUrl.match(/^([^/]+)\/([^/]+)$/)
+          if (shorthandMatch) {
+            const [, owner, repo] = shorthandMatch
+            finalRepoInfo = {
+              type: 'github' as const,
+              owner,
+              repo: repo.replace(/\.git$/, ''),
+              remoteUrl: `https://github.com/${owner}/${repo}`,
+            }
           }
         }
 
-        if (!owner || !repo) {
-          res.status(400).json({ error: `Invalid GitHub URL: ${githubUrl}` })
+        if (!finalRepoInfo) {
+          res.status(400).json({ error: `Could not parse repository URL: ${inputUrl}` })
           return
         }
 
-        // Build clone path
+        // Get provider for clone URL generation
+        const provider = getProvider(finalRepoInfo.remoteUrl)
+        const cloneUrl = provider?.getCloneUrl(finalRepoInfo) || finalRepoInfo.remoteUrl
+
+        // Build clone path - use project prefix for Azure DevOps to avoid collisions
         const cloneBaseDir = '/mnt/c/repos/.workspace/clones'
-        const clonePath = join(cloneBaseDir, repo)
+        let cloneDirName = finalRepoInfo.repo
+        if (finalRepoInfo.type === 'azure-devops' && finalRepoInfo.project) {
+          // Include project name for ADO repos to avoid collision across projects
+          cloneDirName = `${finalRepoInfo.project}-${finalRepoInfo.repo}`
+        }
+        const clonePath = join(cloneBaseDir, cloneDirName)
 
         // Ensure base directory exists
         const { mkdir: mkdirAsync } = await import('fs/promises')
@@ -471,20 +511,41 @@ export class WebDashboardServer {
         // Check if already cloned
         let cloned = false
         if (!existsSync(clonePath)) {
-          // Clone using gh CLI (safer than git clone for auth)
           const { spawnSync } = await import('child_process')
-          console.log(`[API] Cloning ${owner}/${repo} to ${clonePath}...`)
+          const repoSlug = finalRepoInfo.owner
+            ? finalRepoInfo.project
+              ? `${finalRepoInfo.owner}/${finalRepoInfo.project}/${finalRepoInfo.repo}`
+              : `${finalRepoInfo.owner}/${finalRepoInfo.repo}`
+            : finalRepoInfo.repo
 
-          const cloneResult = spawnSync('gh', ['repo', 'clone', `${owner}/${repo}`, clonePath], {
-            stdio: 'pipe',
-            timeout: 300000, // 5 minute timeout for large repos
-          })
+          // Use gh CLI for GitHub (handles auth better), git clone for others
+          if (finalRepoInfo.type === 'github' && finalRepoInfo.owner) {
+            console.log(`[API] Cloning ${repoSlug} via gh CLI to ${clonePath}...`)
+            const cloneResult = spawnSync('gh', ['repo', 'clone', `${finalRepoInfo.owner}/${finalRepoInfo.repo}`, clonePath], {
+              stdio: 'pipe',
+              timeout: 300000, // 5 minute timeout for large repos
+            })
 
-          if (cloneResult.status !== 0) {
-            const stderr = cloneResult.stderr?.toString() || 'Unknown error'
-            console.error(`[API] Clone failed:`, stderr)
-            res.status(500).json({ error: `Clone failed: ${stderr.slice(0, 200)}` })
-            return
+            if (cloneResult.status !== 0) {
+              const stderr = cloneResult.stderr?.toString() || 'Unknown error'
+              console.error(`[API] Clone failed:`, stderr)
+              res.status(500).json({ error: `Clone failed: ${stderr.slice(0, 200)}` })
+              return
+            }
+          } else {
+            // Use git clone for Azure DevOps and other providers
+            console.log(`[API] Cloning ${repoSlug} via git clone to ${clonePath}...`)
+            const cloneResult = spawnSync('git', ['clone', cloneUrl, clonePath], {
+              stdio: 'pipe',
+              timeout: 300000, // 5 minute timeout for large repos
+            })
+
+            if (cloneResult.status !== 0) {
+              const stderr = cloneResult.stderr?.toString() || 'Unknown error'
+              console.error(`[API] Clone failed:`, stderr)
+              res.status(500).json({ error: `Clone failed: ${stderr.slice(0, 200)}` })
+              return
+            }
           }
 
           cloned = true
@@ -506,12 +567,13 @@ export class WebDashboardServer {
               repoPath: existing.repoPath,
               tmuxSession: existing.tmuxSession,
               sessionCount: existing.sessionCount,
+              providerType: existing.providerType || finalRepoInfo.type,
             },
           })
           return
         }
 
-        // Register instance
+        // Register instance (provider detection happens automatically in registerInstance)
         const instance = await registerInstance(clonePath, 0)
 
         // Create tmux session
@@ -520,7 +582,13 @@ export class WebDashboardServer {
           tmux.createSession()
         }
 
-        console.log(`[API] Instance registered: ${instance.instanceId} (cloned from ${owner}/${repo})`)
+        const repoSlug = finalRepoInfo.owner
+          ? finalRepoInfo.project
+            ? `${finalRepoInfo.owner}/${finalRepoInfo.project}/${finalRepoInfo.repo}`
+            : `${finalRepoInfo.owner}/${finalRepoInfo.repo}`
+          : finalRepoInfo.repo
+
+        console.log(`[API] Instance registered: ${instance.instanceId} (cloned from ${repoSlug})`)
 
         res.json({
           success: true,
@@ -530,6 +598,7 @@ export class WebDashboardServer {
             repoPath: instance.repoPath,
             tmuxSession: instance.tmuxSession,
             sessionCount: instance.sessionCount,
+            providerType: instance.providerType,
           },
         })
       } catch (err) {
@@ -606,14 +675,26 @@ export class WebDashboardServer {
         const ghCheck = spawnSync('which', ['gh'], { encoding: 'utf-8' })
         const hasGh = ghCheck.status === 0
 
-        // Check if origin is a GitHub remote
+        // Detect VCS provider type
+        let providerType: string = 'generic'
         let hasGitHubRemote = false
+        let repoInfo: RepoInfo | null = null
         try {
           const remoteResult = await executeGit(instanceId, ['remote', 'get-url', 'origin'])
-          hasGitHubRemote = remoteResult.stdout.includes('github.com')
+          if (remoteResult.code === 0) {
+            const remoteUrl = remoteResult.stdout.trim()
+            providerType = detectProvider(remoteUrl)
+            repoInfo = parseRemoteUrl(remoteUrl)
+            hasGitHubRemote = providerType === 'github'
+          }
         } catch {
           // No origin remote
         }
+
+        // Get the provider to check capabilities
+        const provider = repoInfo ? getProvider(repoInfo.remoteUrl) : null
+        const workItemLabel = provider?.getWorkItemLabel() || 'Issue'
+        const prLabel = provider?.getPrLabel() || 'Pull Request'
 
         // Get commits since main/master for PR description
         let commits: Array<{ hash: string; message: string }> = []
@@ -645,6 +726,11 @@ export class WebDashboardServer {
           hasGh,
           hasGitHubRemote,
           commits,
+          // New provider-aware fields
+          providerType,
+          workItemLabel,
+          prLabel,
+          repoInfo,
         })
       } catch (err) {
         console.error('[API] Git status error:', err)
@@ -775,7 +861,7 @@ export class WebDashboardServer {
       }
     })
 
-    // API: Create pull request using gh CLI
+    // API: Create pull request using VCS provider
     this.app.post('/api/git/create-pr', async (req, res) => {
       try {
         const { instanceId, title, body } = req.body as { instanceId: string; title: string; body: string }
@@ -791,28 +877,49 @@ export class WebDashboardServer {
           return
         }
 
-        // Check gh CLI is available
-        const { spawnSync } = await import('child_process')
-        const ghCheck = spawnSync('which', ['gh'], { encoding: 'utf-8' })
-        if (ghCheck.status !== 0) {
-          res.status(400).json({ error: 'gh CLI not installed. Install it from https://cli.github.com/' })
+        // Get remote URL and detect provider
+        const remoteResult = await executeGit(instanceId, ['remote', 'get-url', 'origin'])
+        if (remoteResult.code !== 0) {
+          res.status(400).json({ error: 'Repository has no origin remote' })
           return
         }
 
-        // Create PR using gh CLI
-        const args = ['pr', 'create', '--title', title]
-        if (body) {
-          args.push('--body', body)
+        const remoteUrl = remoteResult.stdout.trim()
+        const repoInfo = parseRemoteUrl(remoteUrl)
+        if (!repoInfo) {
+          res.status(400).json({ error: 'Could not parse remote URL' })
+          return
         }
 
-        const prResult = spawnSync('gh', args, {
-          cwd: instance.repoPath,
-          encoding: 'utf-8',
-          timeout: 60000,
+        const provider = getProvider(remoteUrl)
+        if (!provider) {
+          res.status(400).json({ error: 'No provider available for this repository type' })
+          return
+        }
+
+        // Get current branch for source
+        const branchResult = await executeGit(instanceId, ['branch', '--show-current'])
+        const sourceBranch = branchResult.stdout.trim()
+
+        // Determine target branch (main or master)
+        let targetBranch = 'main'
+        const mainCheck = await executeGit(instanceId, ['rev-parse', '--verify', 'origin/main'])
+        if (mainCheck.code !== 0) {
+          targetBranch = 'master'
+        }
+
+        // Create PR using provider
+        const result = await provider.createPullRequest({
+          title,
+          body,
+          sourceBranch,
+          targetBranch,
+          repoPath: instance.repoPath,
+          repoInfo,
         })
 
-        if (prResult.status !== 0) {
-          const errorMsg = prResult.stderr || prResult.stdout || 'Unknown error'
+        if (!result.success) {
+          const errorMsg = result.error || 'Unknown error'
           // Check for common issues
           if (errorMsg.includes('no commits between')) {
             res.status(400).json({ error: 'No commits to create a PR from. Push your commits first.' })
@@ -826,10 +933,8 @@ export class WebDashboardServer {
           return
         }
 
-        // Extract PR URL from output
-        const prUrl = prResult.stdout.trim()
-        console.log(`[API] Created PR: ${prUrl}`)
-        res.json({ success: true, prUrl })
+        console.log(`[API] Created PR: ${result.prUrl}`)
+        res.json({ success: true, prUrl: result.prUrl, prNumber: result.prNumber })
       } catch (err) {
         console.error('[API] Git create-pr error:', err)
         res.status(500).json({ error: (err as Error).message })
@@ -837,7 +942,7 @@ export class WebDashboardServer {
     })
 
     // =========================================================================
-    // GitHub Issues API
+    // Work Items / Issues API (Provider-aware)
     // =========================================================================
 
     // API: Get diff for pre-review (all changes since diverging from main)
@@ -985,6 +1090,8 @@ export class WebDashboardServer {
     })
 
     // API: Fetch GitHub issues for validation/preview
+    // API: Fetch work items/issues for validation/preview
+    // Supports both GitHub issues and Azure DevOps work items via provider abstraction
     this.app.get('/api/github/issues', async (req, res) => {
       try {
         const { instanceId, numbers } = req.query as { instanceId?: string; numbers?: string }
@@ -1000,80 +1107,92 @@ export class WebDashboardServer {
           return
         }
 
-        // Parse issue numbers
-        const issueNumbers = numbers.split(',').map(n => parseInt(n.trim(), 10)).filter(n => !isNaN(n))
-        if (issueNumbers.length === 0) {
-          res.status(400).json({ error: 'No valid issue numbers provided' })
+        // Parse issue/work item numbers
+        const itemNumbers = numbers.split(',').map(n => parseInt(n.trim(), 10)).filter(n => !isNaN(n))
+        if (itemNumbers.length === 0) {
+          res.status(400).json({ error: 'No valid issue/work item numbers provided' })
           return
         }
 
-        // Check gh CLI is available
-        const { spawnSync } = await import('child_process')
-        const ghCheck = spawnSync('which', ['gh'], { encoding: 'utf-8' })
-        if (ghCheck.status !== 0) {
-          res.status(400).json({ error: 'gh CLI not installed' })
-          return
-        }
-
-        // Get GitHub remote to determine repo
+        // Get remote URL and detect provider
         const remoteResult = await executeGit(instanceId, ['remote', 'get-url', 'origin'])
-        if (remoteResult.code !== 0 || !remoteResult.stdout.includes('github.com')) {
-          res.status(400).json({ error: 'Repository does not have a GitHub remote' })
+        if (remoteResult.code !== 0) {
+          res.status(400).json({ error: 'Repository has no origin remote' })
           return
         }
 
-        // Parse owner/repo from remote URL
         const remoteUrl = remoteResult.stdout.trim()
-        const repoMatch = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/)
-        if (!repoMatch) {
-          res.status(400).json({ error: 'Could not parse GitHub repo from remote' })
+        const repoInfo = parseRemoteUrl(remoteUrl)
+        if (!repoInfo) {
+          res.status(400).json({ error: 'Could not parse remote URL' })
           return
         }
-        const [, owner, repo] = repoMatch
 
-        // Fetch issues using gh CLI (batch query)
-        const issues: Array<{ number: number; title: string; url: string; state: string }> = []
+        const provider = getProvider(remoteUrl)
+        if (!provider) {
+          res.status(400).json({ error: 'No provider available for this repository type' })
+          return
+        }
+
+        // Fetch work items using provider
+        const workItems = await provider.listWorkItems(itemNumbers, repoInfo)
+
+        // Build response - map to expected format and track errors
+        const issues: Array<{ number: number; title: string; url: string; state: string; type?: string }> = []
         const errors: Array<{ number: number; error: string }> = []
 
-        // Use gh issue view for each (gh doesn't have a batch lookup)
-        for (const num of issueNumbers) {
-          const issueResult = spawnSync('gh', ['issue', 'view', String(num), '--json', 'number,title,url,state', '-R', `${owner}/${repo}`], {
-            encoding: 'utf-8',
-            timeout: 10000,
-          })
-
-          if (issueResult.status === 0) {
-            try {
-              const issueData = JSON.parse(issueResult.stdout)
-              issues.push({
-                number: issueData.number,
-                title: issueData.title,
-                url: issueData.url,
-                state: issueData.state,
-              })
-            } catch {
-              errors.push({ number: num, error: 'Failed to parse issue data' })
-            }
-          } else {
-            errors.push({ number: num, error: 'Issue not found' })
+        // Check which items were found
+        const foundIds = new Set(workItems.map(w => w.id))
+        for (const num of itemNumbers) {
+          if (!foundIds.has(num)) {
+            errors.push({ number: num, error: `${provider.getWorkItemLabel()} not found` })
           }
         }
 
-        console.log(`[API] Fetched ${issues.length} issues for ${owner}/${repo}`)
-        res.json({ issues, errors, repo: `${owner}/${repo}` })
+        // Map work items to response format
+        for (const item of workItems) {
+          issues.push({
+            number: item.id,
+            title: item.title,
+            url: item.url,
+            state: item.state,
+            type: item.type,
+          })
+        }
+
+        const repoSlug = repoInfo.owner
+          ? repoInfo.project
+            ? `${repoInfo.owner}/${repoInfo.project}/${repoInfo.repo}`
+            : `${repoInfo.owner}/${repoInfo.repo}`
+          : repoInfo.repo
+
+        console.log(`[API] Fetched ${issues.length} ${provider.getWorkItemLabel().toLowerCase()}s for ${repoSlug}`)
+        res.json({
+          issues,
+          errors,
+          repo: repoSlug,
+          providerType: repoInfo.type,
+          workItemLabel: provider.getWorkItemLabel(),
+        })
       } catch (err) {
-        console.error('[API] GitHub issues error:', err)
+        console.error('[API] Work items error:', err)
         res.status(500).json({ error: (err as Error).message })
       }
     })
 
-    // API: Batch process GitHub issues - create sessions with /flow command
+    // API: Batch process issues/work items - create sessions with /flow command
+    // Supports both GitHub issues and Azure DevOps work items via provider abstraction
     this.app.post('/api/batch-issues', async (req, res) => {
       try {
-        const { instanceId, issues } = req.body as {
+        const { instanceId, issues, skipPermissions = true, startupCommand = '/flow-auto' } = req.body as {
           instanceId: string
-          issues: Array<{ number: number; owner?: string; repo?: string; url?: string }>
+          issues: Array<{ number: number; owner?: string; repo?: string; project?: string; url?: string }>
+          skipPermissions?: boolean
+          startupCommand?: string
         }
+
+        // Validate startupCommand (must start with /)
+        const safeStartupCommand = startupCommand.startsWith('/') ? startupCommand : '/flow-auto'
 
         if (!instanceId || !issues || !Array.isArray(issues) || issues.length === 0) {
           res.status(400).json({ error: 'instanceId and non-empty issues array are required' })
@@ -1086,17 +1205,15 @@ export class WebDashboardServer {
           return
         }
 
-        // Get GitHub remote to build issue URLs
+        // Get remote URL and detect provider type
         const remoteResult = await executeGit(instanceId, ['remote', 'get-url', 'origin'])
-        let defaultOwner = ''
-        let defaultRepo = ''
+        let repoInfo: RepoInfo | null = null
+        let providerType = 'generic'
 
-        if (remoteResult.code === 0 && remoteResult.stdout.includes('github.com')) {
-          const repoMatch = remoteResult.stdout.match(/github\.com[:/]([^/]+)\/([^/.]+)/)
-          if (repoMatch) {
-            defaultOwner = repoMatch[1]
-            defaultRepo = repoMatch[2]
-          }
+        if (remoteResult.code === 0) {
+          const remoteUrl = remoteResult.stdout.trim()
+          providerType = detectProvider(remoteUrl)
+          repoInfo = parseRemoteUrl(remoteUrl)
         }
 
         // Ensure tmux session exists
@@ -1109,23 +1226,42 @@ export class WebDashboardServer {
         const createdSessions: Array<{ id: string; issueNumber: number; branch: string }> = []
         const errors: Array<{ issueNumber: number; error: string }> = []
 
-        // Process each issue
+        // Process each issue/work item
         for (const issue of issues) {
           try {
-            // Build issue URL
-            const issueOwner = issue.owner || defaultOwner
-            const issueRepo = issue.repo || defaultRepo
-            const issueUrl = issue.url || `https://github.com/${issueOwner}/${issueRepo}/issues/${issue.number}`
+            // Build issue/work item URL based on provider type
+            let itemUrl: string
+            let branchPrefix: string
 
-            if (!issueOwner || !issueRepo) {
-              errors.push({ issueNumber: issue.number, error: 'Could not determine repository for issue' })
-              continue
+            if (providerType === 'azure-devops' && repoInfo?.owner && repoInfo?.project) {
+              // Azure DevOps work item URL
+              itemUrl = issue.url || `https://dev.azure.com/${repoInfo.owner}/${repoInfo.project}/_workitems/edit/${issue.number}`
+              branchPrefix = 'fix/workitem'
+            } else if (providerType === 'github' && repoInfo?.owner) {
+              // GitHub issue URL
+              const issueOwner = issue.owner || repoInfo.owner
+              const issueRepo = issue.repo || repoInfo.repo
+              itemUrl = issue.url || `https://github.com/${issueOwner}/${issueRepo}/issues/${issue.number}`
+              branchPrefix = 'fix/issue'
+
+              if (!issueOwner || !issueRepo) {
+                errors.push({ issueNumber: issue.number, error: 'Could not determine repository for issue' })
+                continue
+              }
+            } else {
+              // Generic - just use the provided URL or skip
+              if (!issue.url) {
+                errors.push({ issueNumber: issue.number, error: 'No issue tracking available for this repository type' })
+                continue
+              }
+              itemUrl = issue.url
+              branchPrefix = 'fix/item'
             }
 
             // Create branch name with random suffix to avoid collision
             const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
             const randomSuffix = Math.random().toString(36).slice(2, 6)
-            const branchName = `fix/issue-${issue.number}-${timestamp}-${randomSuffix}`
+            const branchName = `${branchPrefix}-${issue.number}-${timestamp}-${randomSuffix}`
 
             // Create session manager
             const manager = new SessionManager({ repoPath: instance.repoPath, statusDir })
@@ -1151,14 +1287,16 @@ export class WebDashboardServer {
             const workDir = session.worktreePath || instance.repoPath
             sessionTmux.createPane(session.id, workDir)
 
-            // Run Claude with environment variables
-            const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' claude --dangerously-skip-permissions`
+            // Run Claude with environment variables (conditionally add --dangerously-skip-permissions)
+            const claudeFlags = skipPermissions ? ' --dangerously-skip-permissions' : ''
+            const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' claude${claudeFlags}`
             sessionTmux.runInPane(session.id, envCmd)
 
-            // Queue up the permission acceptance and /flow command in background
-            // Use spawn to run a shell script that handles timing
+            // Queue up the startup command in background
+            // If skipPermissions is enabled, also handle permission acceptance
             const { spawn: spawnBg } = await import('child_process')
-            const acceptScript = `
+            const acceptScript = skipPermissions
+              ? `
               sleep 3
               # Accept the bypass permissions prompt by pressing Down to select option 2, then Enter
               tmux send-keys -t "${sessionTmuxName}:0.0" Down
@@ -1169,23 +1307,39 @@ export class WebDashboardServer {
               for i in 1 2 3 4 5 6 7 8 9 10; do
                 CONTENT=$(tmux capture-pane -t "${sessionTmuxName}:0.0" -p -S -10 2>/dev/null || echo "")
                 if echo "$CONTENT" | grep -q "❯"; then
-                  # Send the /flow-auto command text first, then Enter after a delay
-                  tmux send-keys -t "${sessionTmuxName}:0.0" "/flow-auto ${issueUrl}"
+                  # Send the startup command text first, then Enter after a delay
+                  tmux send-keys -t "${sessionTmuxName}:0.0" "${safeStartupCommand} ${itemUrl}"
                   sleep 1
                   tmux send-keys -t "${sessionTmuxName}:0.0" Enter
-                  echo "[Batch] Sent /flow-auto for issue #${issue.number}"
+                  echo "[Batch] Sent ${safeStartupCommand} for item #${issue.number}"
                   exit 0
                 fi
                 sleep 2
               done
-              echo "[Batch] Could not detect Claude prompt for issue #${issue.number}"
+              echo "[Batch] Could not detect Claude prompt for item #${issue.number}"
+            `
+              : `
+              sleep 5
+              for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                CONTENT=$(tmux capture-pane -t "${sessionTmuxName}:0.0" -p -S -10 2>/dev/null || echo "")
+                if echo "$CONTENT" | grep -q "❯"; then
+                  # Send the startup command text first, then Enter after a delay
+                  tmux send-keys -t "${sessionTmuxName}:0.0" "${safeStartupCommand} ${itemUrl}"
+                  sleep 1
+                  tmux send-keys -t "${sessionTmuxName}:0.0" Enter
+                  echo "[Batch] Sent ${safeStartupCommand} for item #${issue.number}"
+                  exit 0
+                fi
+                sleep 2
+              done
+              echo "[Batch] Could not detect Claude prompt for item #${issue.number}"
             `
             const bg = spawnBg('bash', ['-c', acceptScript], {
               detached: true,
               stdio: 'ignore',
             })
             bg.unref()
-            console.log(`[API] Spawned background task for issue #${issue.number}`)
+            console.log(`[API] Spawned background task for issue #${issue.number} (skipPermissions: ${skipPermissions}, cmd: ${safeStartupCommand})`)
 
             // Update session metadata store with issue info
             const existingMetadata = await loadSessionStore(instanceId)

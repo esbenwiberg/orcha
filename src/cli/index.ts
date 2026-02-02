@@ -104,10 +104,11 @@ program
   .option('-r, --repo <path>', 'Repository path (default: current directory)')
   .option('-b, --branches <branches>', 'Comma-separated branch names')
   .option('-m, --mode <mode>', 'AI mode: claude, gemini, codex, shell', 'claude')
+  .option('--main', 'Work directly on main branch (no worktree)')
   .option('--no-worktree', 'Disable automatic worktree creation')
   .option('--no-attach', 'Do not attach to tmux session after starting')
   .action(async (options) => {
-    const { count, repo, branches, mode, attach, worktree } = options
+    const { count, repo, branches, mode, attach, worktree, main } = options
 
     // Validate inputs
     if (count < 1 || count > 12) {
@@ -117,7 +118,7 @@ program
 
     // Default to current directory if not specified
     const repoPath = resolve(repo || '.')
-    const useWorktrees = worktree !== false // default true
+    const useWorktrees = worktree !== false && !main // default true, disabled by --main or --no-worktree
 
     // Check if tmux is available
     if (!TmuxRenderer.isAvailable()) {

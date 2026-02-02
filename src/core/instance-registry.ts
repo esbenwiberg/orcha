@@ -12,8 +12,9 @@ import { existsSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
-import type { InstanceInfo, InstanceRegistry } from './types.js'
+import type { InstanceInfo, InstanceRegistry, RepoInfo, VcsProviderType } from './types.js'
 import { generateInstanceId, generateInstanceIdWithHash } from './instance-id.js'
+import { detectProvider, parseRemoteUrl } from './vcs-provider.js'
 
 const ORCHA_DIR = join(homedir(), '.orcha')
 const REGISTRY_FILE = join(ORCHA_DIR, 'instances.json')
@@ -75,6 +76,9 @@ export async function registerInstance(
     instanceId = generateInstanceIdWithHash(repoPath)
   }
 
+  // Detect VCS provider from git remote
+  const { providerType, repoInfo } = detectProviderFromRepo(absolutePath)
+
   const instance: InstanceInfo = {
     instanceId,
     repoPath: absolutePath,
@@ -82,12 +86,48 @@ export async function registerInstance(
     pid: process.pid,
     startedAt: new Date().toISOString(),
     sessionCount,
+    providerType,
+    repoInfo,
   }
 
   registry.instances[instanceId] = instance
   await saveRegistry(registry)
 
   return instance
+}
+
+/**
+ * Get the git remote URL for a repository
+ */
+function getGitRemoteUrl(repoPath: string): string | null {
+  try {
+    const result = execSync('git remote get-url origin', {
+      cwd: repoPath,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    return result.trim() || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Detect VCS provider from a repository's git remote
+ */
+function detectProviderFromRepo(repoPath: string): {
+  providerType: VcsProviderType
+  repoInfo: RepoInfo | undefined
+} {
+  const remoteUrl = getGitRemoteUrl(repoPath)
+  if (!remoteUrl) {
+    return { providerType: 'generic', repoInfo: undefined }
+  }
+
+  const providerType = detectProvider(remoteUrl)
+  const repoInfo = parseRemoteUrl(remoteUrl) || undefined
+
+  return { providerType, repoInfo }
 }
 
 /**
@@ -119,6 +159,28 @@ export async function updateInstanceSessionCount(
     registry.instances[instanceId].sessionCount = sessionCount
     await saveRegistry(registry)
   }
+}
+
+/**
+ * Update instance provider info (re-detects from git remote)
+ * Useful for instances registered before provider detection was added
+ */
+export async function updateInstanceProviderInfo(
+  instanceId: string
+): Promise<InstanceInfo | null> {
+  const registry = await loadRegistry()
+  const instance = registry.instances[instanceId]
+
+  if (!instance) {
+    return null
+  }
+
+  const { providerType, repoInfo } = detectProviderFromRepo(instance.repoPath)
+  instance.providerType = providerType
+  instance.repoInfo = repoInfo
+
+  await saveRegistry(registry)
+  return instance
 }
 
 /**

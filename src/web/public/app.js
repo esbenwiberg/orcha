@@ -45,6 +45,47 @@ function showToast(message, type = 'success') {
 }
 
 /**
+ * Copy text to clipboard with fallback for non-HTTPS
+ */
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('Copied to clipboard', 'success');
+    }).catch(() => {
+      copyToClipboardFallback(text);
+    });
+  } else {
+    copyToClipboardFallback(text);
+  }
+}
+
+/**
+ * Fallback copy using textarea + execCommand (works on HTTP)
+ */
+function copyToClipboardFallback(text) {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    const success = document.execCommand('copy');
+    if (success) {
+      showToast('Copied to clipboard', 'success');
+    } else {
+      showToast('Copy failed', 'error');
+    }
+  } catch (err) {
+    console.error('Copy fallback failed:', err);
+    showToast('Copy failed', 'error');
+  }
+  document.body.removeChild(textarea);
+}
+
+/**
  * Close any open actions menu
  */
 function closeActionsMenu() {
@@ -145,7 +186,6 @@ function showHelpDialog() {
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Toggle fullscreen</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, Enter</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Focus panel 1-9</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, 1-9</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Show this help</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, H</kbd></div>
-        <div style="border-top:1px solid #333;margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;"><span style="color:#888;">Exit fullscreen</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Escape</kbd></div>
       </div>
       <div style="margin-top:16px;text-align:right;">
         <button class="help-close" style="background:#9b59b6;border:none;color:white;font-size:0.85rem;padding:8px 16px;border-radius:4px;cursor:pointer;">Close</button>
@@ -933,6 +973,37 @@ async function closeSession(instanceId, sessionId, sessionKey) {
 }
 
 /**
+ * Remove an empty instance (repo with no sessions)
+ */
+async function removeInstance(instanceId) {
+  const displayName = instanceId.replace('orcha-', '');
+  if (!confirm(`Remove repo "${displayName}" from the dashboard?`)) {
+    return false;
+  }
+
+  try {
+    const res = await fetch(`/api/instances/${instanceId}`, {
+      method: 'DELETE',
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || 'Unknown error');
+    }
+
+    // Trigger re-render to update sidebar
+    await render();
+
+    console.log(`[Remove] Instance removed: ${instanceId}`);
+    return true;
+  } catch (err) {
+    console.error('[Remove] Error:', err);
+    alert(`Failed to remove repo: ${err.message}`);
+    return false;
+  }
+}
+
+/**
  * Get display name for a session (customName > branch > tmux session)
  */
 function getSessionDisplayName(session) {
@@ -1039,6 +1110,12 @@ function showNewSessionDialog(instanceId) {
       <div class="dialog-instance" style="font-size:0.75rem;color:#9b59b6;margin-bottom:16px;">${instanceId}</div>
       <div class="new-session-form" style="display:flex;flex-direction:column;gap:12px;">
         <div>
+          <label style="font-size:0.75rem;color:#888;display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" class="new-session-use-worktree" checked style="width:16px;height:16px;accent-color:#9b59b6;">
+            <span>Use worktree (separate branch)</span>
+          </label>
+        </div>
+        <div class="branch-input-container">
           <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Branch name (optional)</label>
           <input type="text" class="new-session-branch" placeholder="Auto-generated if empty" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
         </div>
@@ -1059,10 +1136,26 @@ function showNewSessionDialog(instanceId) {
     </div>
   `;
 
+  const useWorktreeCheckbox = overlay.querySelector('.new-session-use-worktree');
+  const branchInputContainer = overlay.querySelector('.branch-input-container');
   const branchInput = overlay.querySelector('.new-session-branch');
   const modeSelect = overlay.querySelector('.new-session-mode');
   const createBtn = overlay.querySelector('.new-session-create');
   const cancelBtn = overlay.querySelector('.new-session-cancel');
+
+  // Toggle branch input visibility based on worktree checkbox
+  const updateBranchInputState = () => {
+    if (useWorktreeCheckbox.checked) {
+      branchInputContainer.style.opacity = '1';
+      branchInputContainer.style.pointerEvents = 'auto';
+      branchInput.disabled = false;
+    } else {
+      branchInputContainer.style.opacity = '0.5';
+      branchInputContainer.style.pointerEvents = 'none';
+      branchInput.disabled = true;
+    }
+  };
+  useWorktreeCheckbox.addEventListener('change', updateBranchInputState);
 
   const closeDialog = () => overlay.remove();
 
@@ -1079,7 +1172,7 @@ function showNewSessionDialog(instanceId) {
     }
 
     try {
-      await createSession(instanceId, branchInput.value, modeSelect.value);
+      await createSession(instanceId, branchInput.value, modeSelect.value, useWorktreeCheckbox.checked);
       closeDialog();
       // Trigger refresh to show new session
       await render();
@@ -1136,7 +1229,7 @@ function parseGitHubUrl(url) {
 }
 
 /**
- * Parse issue references from text input
+ * Parse issue references from text input (GitHub)
  * Supports: #123, 123, owner/repo#123, full GitHub issue URLs
  * Returns array of { number, owner?, repo?, url? }
  */
@@ -1193,10 +1286,78 @@ function parseIssueReferences(text) {
 }
 
 /**
+ * Parse work item references from text input (Azure DevOps)
+ * Supports: 123, AB#123, full Azure DevOps work item URLs
+ * Returns array of { number, url? }
+ */
+function parseWorkItemReferences(text) {
+  const items = [];
+  const seen = new Set();
+
+  // Split by newlines, commas, spaces
+  const tokens = text.split(/[\n,\s]+/).filter(Boolean);
+
+  for (const token of tokens) {
+    let parsed = null;
+
+    // Full Azure DevOps URL: https://dev.azure.com/org/project/_workitems/edit/123
+    const urlMatch = token.match(/^https?:\/\/dev\.azure\.com\/([^/]+)\/([^/]+)\/_workitems\/edit\/(\d+)/);
+    if (urlMatch) {
+      parsed = {
+        number: parseInt(urlMatch[3], 10),
+        url: token,
+      };
+    }
+
+    // Also support visualstudio.com URL format
+    if (!parsed) {
+      const vsUrlMatch = token.match(/^https?:\/\/([^.]+)\.visualstudio\.com\/([^/]+)\/_workitems\/edit\/(\d+)/);
+      if (vsUrlMatch) {
+        parsed = {
+          number: parseInt(vsUrlMatch[3], 10),
+          url: token,
+        };
+      }
+    }
+
+    // AB#123 format (Azure Boards reference)
+    if (!parsed) {
+      const abMatch = token.match(/^AB#(\d+)$/i);
+      if (abMatch) {
+        parsed = {
+          number: parseInt(abMatch[1], 10),
+        };
+      }
+    }
+
+    // Just a number: 123
+    if (!parsed) {
+      const simpleMatch = token.match(/^(\d+)$/);
+      if (simpleMatch) {
+        parsed = {
+          number: parseInt(simpleMatch[1], 10),
+        };
+      }
+    }
+
+    if (parsed && !seen.has(parsed.number)) {
+      seen.add(parsed.number);
+      items.push(parsed);
+    }
+  }
+
+  return items;
+}
+
+/**
  * Show the batch issues dialog for an instance
  */
 function showBatchIssuesDialog(instanceId) {
-  console.log('[Dialog] Opening Batch Issues for:', instanceId);
+  const providerType = getProviderType(instanceId);
+  const workItemLabel = getWorkItemLabel(providerType);
+  const isAdo = providerType === 'azure-devops';
+
+  console.log(`[Dialog] Opening Batch ${workItemLabel} for:`, instanceId, `(${providerType})`);
 
   // Remove any existing dialog
   const existingDialog = document.querySelector('.new-session-overlay');
@@ -1204,25 +1365,53 @@ function showBatchIssuesDialog(instanceId) {
     existingDialog.remove();
   }
 
+  // Provider-specific placeholders and hints
+  const placeholder = isAdo
+    ? `123, 456
+https://dev.azure.com/org/project/_workitems/edit/789`
+    : `#123, #456
+https://github.com/owner/repo/issues/789
+owner/repo#101`;
+
+  const hint = isAdo
+    ? 'Supports: work item IDs (123, 456) or Azure DevOps URLs'
+    : 'Supports: #123, 123, owner/repo#123, or full GitHub URLs';
+
   // Create overlay
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
 
+  // Load saved preferences from localStorage
+  const savedSkipPermissions = localStorage.getItem('orcha.batchSkipPermissions');
+  const savedStartupCommand = localStorage.getItem('orcha.batchStartupCommand');
+  const defaultSkipPermissions = savedSkipPermissions === null ? true : savedSkipPermissions === 'true';
+  const defaultStartupCommand = savedStartupCommand || '/flow-auto';
+
   overlay.innerHTML = `
     <div class="new-session-dialog batch-issues-dialog">
-      <h3>🚀 Batch Process Issues</h3>
+      <h3>🚀 Batch Process ${workItemLabel}</h3>
       <div class="dialog-instance">${instanceId}</div>
       <div class="new-session-form">
         <div>
-          <label>Issue references (one per line or comma-separated)</label>
-          <textarea class="batch-issues-input" rows="6" placeholder="#123, #456
-https://github.com/owner/repo/issues/789
-owner/repo#101"></textarea>
-          <div class="batch-issues-hint">Supports: #123, 123, owner/repo#123, or full GitHub URLs</div>
+          <label>${workItemLabel.slice(0, -1)} references (one per line or comma-separated)</label>
+          <textarea class="batch-issues-input" rows="6" placeholder="${placeholder}"></textarea>
+          <div class="batch-issues-hint">${hint}</div>
         </div>
         <div class="batch-issues-preview">
           <div class="batch-preview-label">Preview</div>
           <div class="batch-preview-list"></div>
+        </div>
+        <div class="batch-options">
+          <div class="batch-option-row">
+            <label class="batch-checkbox-label">
+              <input type="checkbox" class="batch-skip-permissions" ${defaultSkipPermissions ? 'checked' : ''}>
+              Skip permission prompts
+            </label>
+          </div>
+          <div class="batch-option-row">
+            <label class="batch-input-label">Startup command</label>
+            <input type="text" class="batch-startup-command" value="${defaultStartupCommand}" placeholder="/flow-auto">
+          </div>
         </div>
         <div class="batch-issues-error error-text"></div>
       </div>
@@ -1238,18 +1427,31 @@ owner/repo#101"></textarea>
   const errorEl = overlay.querySelector('.batch-issues-error');
   const submitBtn = overlay.querySelector('.batch-issues-submit');
   const cancelBtn = overlay.querySelector('.new-session-cancel');
+  const skipPermissionsCheckbox = overlay.querySelector('.batch-skip-permissions');
+  const startupCommandInput = overlay.querySelector('.batch-startup-command');
+
+  // Save preferences to localStorage on change
+  skipPermissionsCheckbox.addEventListener('change', () => {
+    localStorage.setItem('orcha.batchSkipPermissions', skipPermissionsCheckbox.checked);
+  });
+  startupCommandInput.addEventListener('input', () => {
+    localStorage.setItem('orcha.batchStartupCommand', startupCommandInput.value);
+  });
 
   let parsedIssues = [];
-  let fetchedTitles = new Map(); // number -> { title, state, url }
+  let fetchedTitles = new Map(); // number -> { title, state, url, type? }
   let fetchDebounce = null;
 
-  // Fetch issue titles from GitHub for preview
-  const fetchIssueTitles = async (numbers) => {
+  // Choose the correct parser based on provider type
+  const parseReferences = isAdo ? parseWorkItemReferences : parseIssueReferences;
+
+  // Fetch issue/work item titles for preview
+  const fetchItemTitles = async (numbers) => {
     if (numbers.length === 0) return;
 
-    // Only fetch issues without explicit owner/repo (local repo issues)
+    // Only fetch items without explicit URL (local repo items)
     const localNumbers = parsedIssues
-      .filter(i => !i.owner)
+      .filter(i => !i.url)
       .map(i => i.number);
 
     if (localNumbers.length === 0) return;
@@ -1258,14 +1460,14 @@ owner/repo#101"></textarea>
       const res = await fetch(`/api/github/issues?instanceId=${encodeURIComponent(instanceId)}&numbers=${localNumbers.join(',')}`);
       if (res.ok) {
         const data = await res.json();
-        for (const issue of data.issues || []) {
-          fetchedTitles.set(issue.number, { title: issue.title, state: issue.state, url: issue.url });
+        for (const item of data.issues || []) {
+          fetchedTitles.set(item.number, { title: item.title, state: item.state, url: item.url, type: item.type });
         }
         // Re-render preview with titles
         renderPreview();
       }
     } catch (err) {
-      console.log('[BatchIssues] Failed to fetch titles:', err);
+      console.log('[BatchItems] Failed to fetch titles:', err);
     }
   };
 
@@ -1273,10 +1475,13 @@ owner/repo#101"></textarea>
   const renderPreview = () => {
     previewList.innerHTML = '';
 
+    const itemLabel = isAdo ? 'work items' : 'issues';
+    const itemLabelSingular = isAdo ? 'Work Item' : 'Issue';
+
     if (parsedIssues.length === 0) {
-      previewList.innerHTML = '<div class="batch-preview-empty">No issues detected</div>';
+      previewList.innerHTML = `<div class="batch-preview-empty">No ${itemLabel} detected</div>`;
       submitBtn.disabled = true;
-      submitBtn.textContent = 'Process 0 Issues';
+      submitBtn.textContent = `Process 0 ${workItemLabel}`;
       return;
     }
 
@@ -1286,18 +1491,21 @@ owner/repo#101"></textarea>
 
       const fetched = fetchedTitles.get(issue.number);
       if (issue.owner && issue.repo) {
+        // GitHub cross-repo reference
         item.innerHTML = `<span class="batch-issue-num">#${issue.number}</span> <span class="batch-issue-repo">${issue.owner}/${issue.repo}</span>`;
       } else if (fetched) {
-        const stateClass = fetched.state === 'OPEN' ? 'open' : 'closed';
-        item.innerHTML = `<span class="batch-issue-num">#${issue.number}</span> <span class="batch-issue-title">${escapeHtml(fetched.title)}</span> <span class="batch-issue-state ${stateClass}">${fetched.state}</span>`;
+        const stateClass = fetched.state === 'OPEN' || fetched.state === 'Active' || fetched.state === 'New' ? 'open' : 'closed';
+        // Show work item type for ADO (e.g., "Bug", "User Story")
+        const typeTag = fetched.type ? `<span class="batch-issue-type">${fetched.type}</span>` : '';
+        item.innerHTML = `<span class="batch-issue-num">${isAdo ? '' : '#'}${issue.number}</span> ${typeTag}<span class="batch-issue-title">${escapeHtml(fetched.title)}</span> <span class="batch-issue-state ${stateClass}">${fetched.state}</span>`;
       } else {
-        item.innerHTML = `<span class="batch-issue-num">#${issue.number}</span> <span class="batch-issue-loading">loading...</span>`;
+        item.innerHTML = `<span class="batch-issue-num">${isAdo ? '' : '#'}${issue.number}</span> <span class="batch-issue-loading">loading...</span>`;
       }
       previewList.appendChild(item);
     }
 
     submitBtn.disabled = false;
-    submitBtn.textContent = `Process ${parsedIssues.length} Issue${parsedIssues.length > 1 ? 's' : ''}`;
+    submitBtn.textContent = `Process ${parsedIssues.length} ${workItemLabel.slice(0, -1)}${parsedIssues.length > 1 ? 's' : ''}`;
   };
 
   // Helper to escape HTML
@@ -1309,13 +1517,13 @@ owner/repo#101"></textarea>
 
   // Update preview on input
   const updatePreview = () => {
-    parsedIssues = parseIssueReferences(textarea.value);
+    parsedIssues = parseReferences(textarea.value);
     renderPreview();
 
     // Debounce fetching titles
     clearTimeout(fetchDebounce);
     fetchDebounce = setTimeout(() => {
-      fetchIssueTitles(parsedIssues.map(i => i.number));
+      fetchItemTitles(parsedIssues.map(i => i.number));
     }, 300);
   };
 
@@ -1406,6 +1614,8 @@ owner/repo#101"></textarea>
         body: JSON.stringify({
           instanceId,
           issues: parsedIssues,
+          skipPermissions: skipPermissionsCheckbox.checked,
+          startupCommand: startupCommandInput.value || '/flow-auto',
         }),
       });
 
@@ -1432,15 +1642,18 @@ owner/repo#101"></textarea>
         cancelBtn.textContent = 'Close';
         cancelBtn.disabled = false;
 
-        showToast(`Started ${sessions.length} session(s) for issue processing`, 'success');
+        const itemType = isAdo ? 'work item' : 'issue';
+        showToast(`Started ${sessions.length} session(s) for ${itemType} processing`, 'success');
       }
 
       if (errors.length > 0 && sessions.length === 0) {
         // All failed
-        throw new Error(`All ${errors.length} issue(s) failed to process`);
+        const itemType = isAdo ? 'work item(s)' : 'issue(s)';
+        throw new Error(`All ${errors.length} ${itemType} failed to process`);
       } else if (errors.length > 0) {
         // Partial success
-        errorEl.textContent = `${errors.length} issue(s) failed - see details above`;
+        const itemType = isAdo ? 'work item(s)' : 'issue(s)';
+        errorEl.textContent = `${errors.length} ${itemType} failed - see details above`;
       }
 
       // Refresh dashboard in background
@@ -1723,7 +1936,7 @@ async function cloneAndCreateInstance(githubUrl) {
 /**
  * Create a new session via API
  */
-async function createSession(instanceId, branch, mode) {
+async function createSession(instanceId, branch, mode, useWorktree = true) {
   const res = await fetch('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1731,6 +1944,7 @@ async function createSession(instanceId, branch, mode) {
       instanceId,
       branch: branch || undefined,
       mode: mode || 'claude',
+      useWorktree,
     }),
   });
 
@@ -1804,9 +2018,27 @@ function createTerminalPanel(session) {
   title.textContent = displayName;
   title.title = 'Click to rename';
 
-  // Make title editable on click
+  // Track if we just copied text (to skip click handler)
+  let justCopied = false;
+
+  // Handle text selection on mouseup (before click clears it)
+  title.addEventListener('mouseup', (e) => {
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim().length > 0) {
+      e.stopPropagation();
+      justCopied = true;
+      copyToClipboard(selection.toString());
+      // Reset flag after a tick (after click event fires)
+      setTimeout(() => { justCopied = false; }, 0);
+    }
+  });
+
+  // Make title editable on click (but allow text selection)
   title.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (justCopied) {
+      return; // Selection was handled by mouseup
+    }
     makeEditableTitle(title, session);
   });
 
@@ -1893,19 +2125,29 @@ function createTerminalPanel(session) {
   panel.appendChild(container);
 
   // Focus handling (Ctrl+click toggles visibility filter)
+  // Use capture phase (true) to intercept clicks before xterm.js handles them
   panel.addEventListener('click', (e) => {
+    // Don't interfere with terminal clicks
+    if (e.target.closest('.terminal-container')) {
+      return;
+    }
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim().length > 0) {
+      return; // Selection handled by child mouseup handlers
+    }
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       toggleSessionVisibility(key);
     } else {
       focusPanel(key);
     }
-  });
+  }, true);
 
-  // Double-click to toggle fullscreen
+  // Double-click to toggle fullscreen (only on header, not terminal)
   panel.addEventListener('dblclick', (e) => {
-    // Don't trigger on header buttons
+    // Don't trigger on header buttons or terminal area
     if (e.target.closest('.panel-fullscreen-btn')) return;
+    if (e.target.closest('.terminal-container')) return;
     toggleFullscreen(key);
   });
 
@@ -2034,6 +2276,69 @@ function initTerminal(session) {
   term.onResize(({ cols, rows }) => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+    }
+  });
+
+  // Manual selection tracking since xterm.js mouse selection doesn't work with tmux
+  // Use term.element (the actual xterm DOM) to capture events
+  let selectionStart = null;
+  const termEl = term.element;
+
+  termEl.addEventListener('mousedown', (e) => {
+    if (e.shiftKey) {
+      const rect = termEl.getBoundingClientRect();
+      const cellWidth = rect.width / term.cols;
+      const cellHeight = rect.height / term.rows;
+      selectionStart = {
+        col: Math.floor((e.clientX - rect.left) / cellWidth),
+        row: Math.floor((e.clientY - rect.top) / cellHeight)
+      };
+    }
+  });
+
+  termEl.addEventListener('mouseup', (e) => {
+    if (selectionStart && e.shiftKey) {
+      const rect = termEl.getBoundingClientRect();
+      const cellWidth = rect.width / term.cols;
+      const cellHeight = rect.height / term.rows;
+      const endCol = Math.floor((e.clientX - rect.left) / cellWidth);
+      const endRow = Math.floor((e.clientY - rect.top) / cellHeight);
+
+      // Determine start and end positions
+      const startRow = Math.min(selectionStart.row, endRow);
+      const startCol = selectionStart.row < endRow ? selectionStart.col :
+                       selectionStart.row > endRow ? endCol :
+                       Math.min(selectionStart.col, endCol);
+
+      // Build selection text manually from buffer
+      let text = '';
+      const rowStart = Math.min(selectionStart.row, endRow);
+      const rowEnd = Math.max(selectionStart.row, endRow);
+
+      for (let r = rowStart; r <= rowEnd; r++) {
+        const line = term.buffer.active.getLine(r);
+        if (line) {
+          const lineText = line.translateToString();
+          if (r === rowStart && r === rowEnd) {
+            // Single line selection
+            const cStart = Math.min(selectionStart.col, endCol);
+            const cEnd = Math.max(selectionStart.col, endCol);
+            text += lineText.substring(cStart, cEnd);
+          } else if (r === rowStart) {
+            text += lineText.substring(selectionStart.row < endRow ? selectionStart.col : endCol) + '\n';
+          } else if (r === rowEnd) {
+            text += lineText.substring(0, selectionStart.row < endRow ? endCol : selectionStart.col);
+          } else {
+            text += lineText + '\n';
+          }
+        }
+      }
+
+      if (text.trim().length > 0) {
+        copyToClipboard(text.trim());
+      }
+
+      selectionStart = null;
     }
   });
 
@@ -2230,6 +2535,42 @@ function groupByInstance(sessions) {
 }
 
 /**
+ * Get provider type for an instance
+ */
+function getProviderType(instanceId) {
+  const instance = state.instances?.find(i => i.instanceId === instanceId);
+  return instance?.providerType || 'generic';
+}
+
+/**
+ * Get work item label based on provider type
+ */
+function getWorkItemLabel(providerType) {
+  switch (providerType) {
+    case 'azure-devops':
+      return 'Work Items';
+    case 'github':
+      return 'Issues';
+    default:
+      return 'Issues';
+  }
+}
+
+/**
+ * Get provider badge HTML
+ */
+function getProviderBadge(providerType) {
+  switch (providerType) {
+    case 'github':
+      return '<span class="provider-badge provider-github" title="GitHub">gh</span>';
+    case 'azure-devops':
+      return '<span class="provider-badge provider-ado" title="Azure DevOps">ado</span>';
+    default:
+      return '';
+  }
+}
+
+/**
  * Update sidebar session list - shows one entry per tmux session
  * Also shows instances with 0 sessions
  */
@@ -2252,6 +2593,8 @@ function updateSidebar(tmuxSessions, instances = []) {
   }
 
   for (const [instanceId, instanceSessions] of groups) {
+    const providerType = getProviderType(instanceId);
+
     // Instance header container
     const headerContainer = document.createElement('div');
     headerContainer.className = 'instance-header-container';
@@ -2259,19 +2602,31 @@ function updateSidebar(tmuxSessions, instances = []) {
     // Instance header (clickable to filter)
     const header = document.createElement('div');
     header.className = 'instance-header';
-    header.textContent = instanceId.replace('orcha-', '');
+    // Add provider badge before repo name
+    const providerBadge = getProviderBadge(providerType);
+    const repoName = instanceId.replace('orcha-', '');
+    header.innerHTML = providerBadge + '<span class="instance-name">' + repoName + '</span>';
     header.title = 'Click to show only this repo';
     header.style.cursor = 'pointer';
     header.addEventListener('click', () => filterByInstance(instanceId));
 
-    // Batch issues button
+    // Batch issues/work items button (only for GitHub and Azure DevOps)
     const batchBtn = document.createElement('button');
     batchBtn.className = 'batch-issues-btn';
     batchBtn.innerHTML = '⚡';
-    batchBtn.title = 'Batch process GitHub issues';
+    const workItemLabel = getWorkItemLabel(providerType);
+    batchBtn.title = `Batch process ${workItemLabel}`;
+    // Disable batch button for generic repos (no issue/work item tracking)
+    if (providerType === 'generic') {
+      batchBtn.disabled = true;
+      batchBtn.title = 'No issue tracking available for this repository';
+      batchBtn.style.opacity = '0.3';
+    }
     batchBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      showBatchIssuesDialog(instanceId);
+      if (providerType !== 'generic') {
+        showBatchIssuesDialog(instanceId);
+      }
     });
 
     // Add session button
@@ -2287,6 +2642,20 @@ function updateSidebar(tmuxSessions, instances = []) {
     headerContainer.appendChild(header);
     headerContainer.appendChild(batchBtn);
     headerContainer.appendChild(addBtn);
+
+    // Show remove button for empty instances
+    if (instanceSessions.length === 0) {
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'remove-instance-btn';
+      removeBtn.innerHTML = '×';
+      removeBtn.title = 'Remove empty repo';
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        removeInstance(instanceId);
+      });
+      headerContainer.appendChild(removeBtn);
+    }
+
     sessionList.appendChild(headerContainer);
 
     // One entry per tmux session
@@ -2326,8 +2695,26 @@ function updateSidebar(tmuxSessions, instances = []) {
       item.appendChild(dot);
       item.appendChild(info);
 
+      // Track if we just copied text (to skip click handler)
+      let justCopied = false;
+
+      // Handle text selection on mouseup (before click clears it)
+      info.addEventListener('mouseup', (e) => {
+        const selection = window.getSelection();
+        if (selection && selection.toString().trim().length > 0) {
+          e.stopPropagation();
+          justCopied = true;
+          copyToClipboard(selection.toString());
+          // Reset flag after a tick (after click event fires)
+          setTimeout(() => { justCopied = false; }, 0);
+        }
+      });
+
       // Click to focus, Ctrl+click to toggle filter
       item.addEventListener('click', (e) => {
+        if (justCopied) {
+          return; // Selection was handled by mouseup
+        }
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
           toggleSessionVisibility(key);
@@ -2544,14 +2931,6 @@ async function init() {
   let prefixTimeout = null;
 
   document.addEventListener('keydown', (e) => {
-
-    // Escape to exit fullscreen (always works, no prefix needed)
-    if (e.key === 'Escape' && state.fullscreenKey) {
-      exitFullscreen();
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
 
     // Ctrl+A activates prefix mode
     if (e.ctrlKey && e.key.toLowerCase() === 'a') {
