@@ -60,10 +60,17 @@ export class WorktreeManager {
       throw new Error(`Worktree already exists at ${worktreePath}`)
     }
 
+    // Fetch latest from origin to ensure we have up-to-date refs
+    try {
+      await this.git.fetch('origin')
+    } catch {
+      // Ignore fetch errors (e.g., no network, no remote configured)
+    }
+
     // Use relative path so worktrees work across Windows/WSL
     const relativeWorktreePath = relative(this.repoPath, worktreePath)
 
-    // Check if branch exists
+    // Check if branch exists (after fetch, so we have latest remote refs)
     const branches = await this.git.branch()
     const branchExists = branches.all.includes(branch) ||
                          branches.all.includes(`remotes/origin/${branch}`)
@@ -72,11 +79,30 @@ export class WorktreeManager {
       // Use existing branch
       await this.git.raw(['worktree', 'add', relativeWorktreePath, branch])
     } else {
-      // Create new branch from current HEAD
-      await this.git.raw(['worktree', 'add', '-b', branch, relativeWorktreePath])
+      // Create new branch from origin's default branch (main or master)
+      const defaultBranch = await this.getDefaultBranch()
+      await this.git.raw(['worktree', 'add', '-b', branch, relativeWorktreePath, defaultBranch])
     }
 
     return worktreePath
+  }
+
+  /**
+   * Get the default branch reference (origin/main or origin/master)
+   */
+  private async getDefaultBranch(): Promise<string> {
+    const branches = await this.git.branch(['-r'])
+
+    // Prefer origin/main, fall back to origin/master, then HEAD
+    if (branches.all.includes('origin/main')) {
+      return 'origin/main'
+    }
+    if (branches.all.includes('origin/master')) {
+      return 'origin/master'
+    }
+
+    // Fallback to HEAD if no remote default branch found
+    return 'HEAD'
   }
 
   /**
