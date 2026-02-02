@@ -1646,12 +1646,28 @@ export class WebDashboardServer {
 
       const metadata = await loadSessionStore(inst.instanceId)
 
+      // Use tmux pane detection as fallback when status files show "idle"
+      const tmux = new TmuxRenderer({ sessionName: inst.tmuxSession })
+      const tmuxExists = tmux.sessionExists()
+
       for (const [sessionId, status] of statuses) {
         const meta = metadata.find(m => m.id === sessionId)
         // Skip sessions without metadata (orphaned status files)
         if (!meta) continue
         // Skip sessions where paneIndex is undefined (legacy data)
         if (meta.paneIndex === undefined) continue
+
+        // Apply tmux detection for more accurate status
+        let finalState = status.state
+        let finalMessage = status.message
+
+        if (tmuxExists && (status.state === 'idle' || status.state === 'initializing')) {
+          const detected = tmux.detectClaudeStatus(meta.paneIndex)
+          if (detected && detected.state !== 'idle') {
+            finalState = detected.state as any
+            finalMessage = detected.message
+          }
+        }
 
         sessions.push({
           id: sessionId,
@@ -1661,8 +1677,8 @@ export class WebDashboardServer {
           tmuxSession: meta.tmuxSession || inst.tmuxSession,
           paneIndex: meta.paneIndex,
           branch: meta.branch?.replace(/^orcha\//, ''),
-          state: status.state,
-          message: status.message,
+          state: finalState,
+          message: finalMessage,
           customName: meta.customName,
           worktreePath: meta.worktreePath,
         })

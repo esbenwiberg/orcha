@@ -1556,7 +1556,7 @@ owner/repo#101`;
         const typeTag = fetched.type ? `<span class="batch-issue-type">${fetched.type}</span>` : '';
         item.innerHTML = `<span class="batch-issue-num">${isAdo ? '' : '#'}${issue.number}</span> ${typeTag}<span class="batch-issue-title">${escapeHtml(fetched.title)}</span> <span class="batch-issue-state ${stateClass}">${fetched.state}</span>`;
       } else {
-        item.innerHTML = `<span class="batch-issue-num">${isAdo ? '' : '#'}${issue.number}</span> <span class="batch-issue-loading">loading...</span>`;
+        item.innerHTML = `<span class="batch-issue-num">${isAdo ? '' : '#'}${issue.number}</span> <span class="batch-issue-loading"><span class="spinner-small"></span> loading...</span>`;
       }
       previewList.appendChild(item);
     }
