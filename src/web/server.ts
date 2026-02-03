@@ -512,18 +512,33 @@ export class WebDashboardServer {
         // Parse the URL using VCS provider abstraction
         const repoInfo = parseRemoteUrl(inputUrl)
 
-        // Also support shorthand formats: owner/repo for GitHub
+        // Also support shorthand formats:
+        // - owner/repo for GitHub
+        // - org/project/repo for Azure DevOps
         let finalRepoInfo = repoInfo
         if (!repoInfo) {
-          // Try shorthand: owner/repo (GitHub)
-          const shorthandMatch = inputUrl.match(/^([^/]+)\/([^/]+)$/)
-          if (shorthandMatch) {
-            const [, owner, repo] = shorthandMatch
+          // Try shorthand: org/project/repo (Azure DevOps)
+          const adoShorthandMatch = inputUrl.match(/^([^/]+)\/([^/]+)\/([^/]+)$/)
+          if (adoShorthandMatch) {
+            const [, org, project, repo] = adoShorthandMatch
             finalRepoInfo = {
-              type: 'github' as const,
-              owner,
+              type: 'azure-devops' as const,
+              owner: org,
+              project,
               repo: repo.replace(/\.git$/, ''),
-              remoteUrl: `https://github.com/${owner}/${repo}`,
+              remoteUrl: `https://dev.azure.com/${org}/${project}/_git/${repo}`,
+            }
+          } else {
+            // Try shorthand: owner/repo (GitHub)
+            const ghShorthandMatch = inputUrl.match(/^([^/]+)\/([^/]+)$/)
+            if (ghShorthandMatch) {
+              const [, owner, repo] = ghShorthandMatch
+              finalRepoInfo = {
+                type: 'github' as const,
+                owner,
+                repo: repo.replace(/\.git$/, ''),
+                remoteUrl: `https://github.com/${owner}/${repo}`,
+              }
             }
           }
         }
