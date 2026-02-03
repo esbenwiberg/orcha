@@ -1054,15 +1054,45 @@ async function closeSession(instanceId, sessionId, sessionKey) {
 }
 
 /**
- * Remove an empty instance (repo with no sessions)
+ * Remove an instance (repo), closing all sessions if needed
  */
-async function removeInstance(instanceId) {
+async function removeInstance(instanceId, instanceSessions = []) {
   const displayName = instanceId.replace('orcha-', '');
-  if (!confirm(`Remove repo "${displayName}" from the dashboard?`)) {
+
+  // Build warning message
+  let confirmMessage = `Remove repo "${displayName}" from the dashboard?`;
+  if (instanceSessions.length > 0) {
+    confirmMessage = `Remove repo "${displayName}"?\n\nThis will close ${instanceSessions.length} active session(s) and clean up any worktrees.`;
+  }
+
+  if (!confirm(confirmMessage)) {
     return false;
   }
 
   try {
+    // If there are sessions, close them all first
+    if (instanceSessions.length > 0) {
+      console.log(`[Remove] Closing ${instanceSessions.length} session(s) for ${instanceId}...`);
+
+      for (const session of instanceSessions) {
+        try {
+          const res = await fetch(`/api/sessions/${instanceId}/${session.id}`, {
+            method: 'DELETE',
+          });
+
+          if (!res.ok) {
+            console.warn(`[Remove] Failed to close session ${session.id}`);
+          }
+        } catch (err) {
+          console.warn(`[Remove] Error closing session ${session.id}:`, err);
+        }
+      }
+
+      // Wait a bit for cleanup to complete
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    // Now remove the instance
     const res = await fetch(`/api/instances/${instanceId}`, {
       method: 'DELETE',
     });
@@ -1075,6 +1105,7 @@ async function removeInstance(instanceId) {
     // Trigger re-render to update sidebar
     await render();
 
+    showToast(`Removed repo "${displayName}"`, 'success');
     console.log(`[Remove] Instance removed: ${instanceId}`);
     return true;
   } catch (err) {
@@ -2736,18 +2767,18 @@ function updateSidebar(tmuxSessions, instances = []) {
     headerContainer.appendChild(batchBtn);
     headerContainer.appendChild(addBtn);
 
-    // Show remove button for empty instances
-    if (instanceSessions.length === 0) {
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'remove-instance-btn';
-      removeBtn.innerHTML = '×';
-      removeBtn.title = 'Remove empty repo';
-      removeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        removeInstance(instanceId);
-      });
-      headerContainer.appendChild(removeBtn);
-    }
+    // Always show remove button (it will handle closing sessions if needed)
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-instance-btn';
+    removeBtn.innerHTML = '×';
+    removeBtn.title = instanceSessions.length > 0
+      ? 'Remove repo (will close all sessions)'
+      : 'Remove empty repo';
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeInstance(instanceId, instanceSessions);
+    });
+    headerContainer.appendChild(removeBtn);
 
     sessionList.appendChild(headerContainer);
 
