@@ -180,11 +180,12 @@ function showHelpDialog() {
       </h3>
       <div style="display:flex;flex-direction:column;gap:8px;font-size:0.85rem;">
         <div style="color:#888;margin-bottom:4px;">All shortcuts use <kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A</kbd> prefix:</div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Navigate sessions</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, ↑↓←→</kbd></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Focus panel 1-9</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, 1-9</kbd></div>
+        <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Toggle fullscreen</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, Enter</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">File manager (yazi)</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, F</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Git actions menu</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, G</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Review changes</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, R</kbd></div>
-        <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Toggle fullscreen</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, Enter</kbd></div>
-        <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Focus panel 1-9</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, 1-9</kbd></div>
         <div style="display:flex;justify-content:space-between;"><span style="color:#888;">Show this help</span><kbd style="background:#333;padding:2px 6px;border-radius:3px;color:#e0e0e0;">Ctrl+A, H</kbd></div>
       </div>
       <div style="margin-top:16px;text-align:right;">
@@ -1323,20 +1324,80 @@ function toggleNewSessionForm(instanceId, containerEl) {
 }
 
 /**
- * Parse GitHub URL to extract owner/repo
+ * Parse repository URL to extract info (supports GitHub and Azure DevOps)
+ * Returns: { provider: 'github'|'azure-devops', owner, repo, project?, preview }
  */
-function parseGitHubUrl(url) {
-  const patterns = [
+function parseRepoUrl(url) {
+  // Azure DevOps patterns
+  const adoHttpsPattern = /^https?:\/\/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/?#]+)/;
+  const adoVsPattern = /^https?:\/\/([^./]+)\.visualstudio\.com\/([^/]+)\/_git\/([^/?#]+)/;
+  const adoShorthand = /^([^/]+)\/([^/]+)\/([^/]+)$/;
+
+  // Try Azure DevOps HTTPS (dev.azure.com)
+  let match = url.match(adoHttpsPattern);
+  if (match) {
+    return {
+      provider: 'azure-devops',
+      owner: match[1],
+      project: match[2],
+      repo: match[3],
+      preview: `${match[1]}/${match[2]}/${match[3]}`
+    };
+  }
+
+  // Try Azure DevOps (visualstudio.com)
+  match = url.match(adoVsPattern);
+  if (match) {
+    return {
+      provider: 'azure-devops',
+      owner: match[1],
+      project: match[2],
+      repo: match[3],
+      preview: `${match[1]}/${match[2]}/${match[3]}`
+    };
+  }
+
+  // Try Azure DevOps shorthand (org/project/repo)
+  match = url.match(adoShorthand);
+  if (match) {
+    return {
+      provider: 'azure-devops',
+      owner: match[1],
+      project: match[2],
+      repo: match[3],
+      preview: `${match[1]}/${match[2]}/${match[3]}`
+    };
+  }
+
+  // GitHub patterns
+  const githubPatterns = [
     /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/.*)?$/,
     /^github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/.*)?$/,
     /^([^/]+)\/([^/]+)$/,
   ];
 
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
+  for (const pattern of githubPatterns) {
+    match = url.match(pattern);
     if (match) {
-      return { owner: match[1], repo: match[2] };
+      return {
+        provider: 'github',
+        owner: match[1],
+        repo: match[2],
+        preview: `${match[1]}/${match[2]}`
+      };
     }
+  }
+
+  return null;
+}
+
+/**
+ * Legacy function for backward compatibility
+ */
+function parseGitHubUrl(url) {
+  const parsed = parseRepoUrl(url);
+  if (parsed && parsed.provider === 'github') {
+    return { owner: parsed.owner, repo: parsed.repo };
   }
   return null;
 }
@@ -1822,7 +1883,7 @@ function showAddRepoDialog() {
 
       <div class="dialog-tabs">
         <button class="dialog-tab active" data-tab="local">Local Folder</button>
-        <button class="dialog-tab" data-tab="github">GitHub URL</button>
+        <button class="dialog-tab" data-tab="github">Clone from URL</button>
       </div>
 
       <div class="tab-content active" data-tab="local">
@@ -1838,8 +1899,8 @@ function showAddRepoDialog() {
       <div class="tab-content" data-tab="github">
         <div style="display:flex;flex-direction:column;gap:12px;">
           <div>
-            <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">GitHub URL or owner/repo</label>
-            <input type="text" class="github-url-input" placeholder="https://github.com/owner/repo" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+            <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Repository URL</label>
+            <input type="text" class="github-url-input" placeholder="github.com/owner/repo or dev.azure.com/org/project/_git/repo" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
             <div class="github-preview preview-text"></div>
             <div class="github-error error-text"></div>
           </div>
@@ -1887,15 +1948,16 @@ function showAddRepoDialog() {
     });
   });
 
-  // GitHub URL preview
+  // Repository URL preview
   githubUrlInput.addEventListener('input', () => {
-    const parsed = parseGitHubUrl(githubUrlInput.value.trim());
+    const parsed = parseRepoUrl(githubUrlInput.value.trim());
     if (parsed) {
-      githubPreview.textContent = `Will clone: ${parsed.owner}/${parsed.repo}`;
+      const providerLabel = parsed.provider === 'github' ? 'GitHub' : 'Azure DevOps';
+      githubPreview.textContent = `Will clone: ${parsed.preview} (${providerLabel})`;
       githubError.textContent = '';
     } else if (githubUrlInput.value.trim()) {
       githubPreview.textContent = '';
-      githubError.textContent = 'Invalid GitHub URL format';
+      githubError.textContent = 'Invalid repository URL format';
     } else {
       githubPreview.textContent = '';
       githubError.textContent = '';
@@ -1969,11 +2031,11 @@ function showAddRepoDialog() {
       } else {
         const url = githubUrlInput.value.trim();
         if (!url) {
-          throw new Error('Please enter a GitHub URL');
+          throw new Error('Please enter a repository URL');
         }
-        const parsed = parseGitHubUrl(url);
+        const parsed = parseRepoUrl(url);
         if (!parsed) {
-          throw new Error('Invalid GitHub URL format');
+          throw new Error('Invalid repository URL format. Supported: GitHub (owner/repo) or Azure DevOps (org/project/repo)');
         }
 
         const result = await cloneAndCreateInstance(url);
@@ -3134,6 +3196,32 @@ async function init() {
         if (session) {
           showDiffViewerDialog(session.instanceId);
         }
+        return;
+      }
+
+      // Arrow keys to navigate through sessions
+      if ((e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowDown' || e.key === 'ArrowRight') && state.sessions.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Find current session index
+        let currentIndex = -1;
+        if (state.focusedSession) {
+          currentIndex = state.sessions.findIndex(s => getSessionKey(s) === state.focusedSession);
+        }
+
+        // Navigate to previous (up/left) or next (down/right) session
+        let newIndex;
+        if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+          // Previous session (wrap around to end if at start)
+          newIndex = currentIndex <= 0 ? state.sessions.length - 1 : currentIndex - 1;
+        } else {
+          // Next session (wrap around to start if at end)
+          newIndex = currentIndex >= state.sessions.length - 1 ? 0 : currentIndex + 1;
+        }
+
+        // Focus the new session
+        focusPanel(getSessionKey(state.sessions[newIndex]));
         return;
       }
     }
