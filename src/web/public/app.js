@@ -14,6 +14,7 @@ const state = {
   visibleSessions: null, // Set<string> of visible session keys, or null for all
   refreshInterval: null,
   usage: null, // { date, tokens, messages, sessions } or null
+  gridLayout: { cols: 1, rows: 1 }, // Current grid layout for 2D navigation
 };
 
 // DOM elements
@@ -2995,6 +2996,8 @@ function applyGridLayout(count) {
   const { cols, rows } = calculateGridLayout(count);
   terminalGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
   terminalGrid.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+  // Store layout for 2D navigation
+  state.gridLayout = { cols, rows };
 }
 
 /**
@@ -3210,18 +3213,76 @@ async function init() {
           currentIndex = state.sessions.findIndex(s => getSessionKey(s) === state.focusedSession);
         }
 
-        // Navigate to previous (up/left) or next (down/right) session
-        let newIndex;
-        if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
-          // Previous session (wrap around to end if at start)
-          newIndex = currentIndex <= 0 ? state.sessions.length - 1 : currentIndex - 1;
-        } else {
-          // Next session (wrap around to start if at end)
-          newIndex = currentIndex >= state.sessions.length - 1 ? 0 : currentIndex + 1;
+        // Default to first session if none focused
+        if (currentIndex < 0) {
+          focusPanel(getSessionKey(state.sessions[0]));
+          return;
+        }
+
+        const { cols, rows } = state.gridLayout;
+        const totalSessions = state.sessions.length;
+
+        // Calculate current position in grid
+        const currentRow = Math.floor(currentIndex / cols);
+        const currentCol = currentIndex % cols;
+
+        let newIndex = currentIndex;
+
+        if (e.key === 'ArrowUp') {
+          // Move up one row (same column)
+          if (currentRow > 0) {
+            newIndex = (currentRow - 1) * cols + currentCol;
+            // If new index is out of bounds, go to last session in that column
+            if (newIndex >= totalSessions) {
+              newIndex = currentIndex; // Stay in place
+            }
+          } else {
+            // At top row, wrap to bottom row in same column
+            const bottomRow = Math.floor((totalSessions - 1) / cols);
+            newIndex = bottomRow * cols + currentCol;
+            // If that position doesn't exist, move left until we find a session
+            while (newIndex >= totalSessions && newIndex >= bottomRow * cols) {
+              newIndex--;
+            }
+          }
+        } else if (e.key === 'ArrowDown') {
+          // Move down one row (same column)
+          const nextIndex = (currentRow + 1) * cols + currentCol;
+          if (nextIndex < totalSessions) {
+            newIndex = nextIndex;
+          } else {
+            // At bottom row or next position doesn't exist, wrap to top row in same column
+            newIndex = currentCol;
+            if (newIndex >= totalSessions) {
+              newIndex = 0; // Fallback to first session
+            }
+          }
+        } else if (e.key === 'ArrowLeft') {
+          // Move left one column (same row)
+          if (currentCol > 0) {
+            newIndex = currentIndex - 1;
+          } else {
+            // At leftmost column, wrap to rightmost in same row
+            const rowStart = currentRow * cols;
+            const rowEnd = Math.min((currentRow + 1) * cols - 1, totalSessions - 1);
+            newIndex = rowEnd;
+          }
+        } else if (e.key === 'ArrowRight') {
+          // Move right one column (same row)
+          const rowStart = currentRow * cols;
+          const rowEnd = Math.min((currentRow + 1) * cols, totalSessions) - 1;
+          if (currentIndex < rowEnd) {
+            newIndex = currentIndex + 1;
+          } else {
+            // At rightmost position in row, wrap to leftmost in same row
+            newIndex = rowStart;
+          }
         }
 
         // Focus the new session
-        focusPanel(getSessionKey(state.sessions[newIndex]));
+        if (newIndex >= 0 && newIndex < totalSessions && newIndex !== currentIndex) {
+          focusPanel(getSessionKey(state.sessions[newIndex]));
+        }
         return;
       }
     }
