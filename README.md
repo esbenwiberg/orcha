@@ -66,6 +66,7 @@ npm install && npm run build && npm link
 | Command | Description |
 |---------|-------------|
 | `orcha start -n N -r <repo>` | Start N sessions in repo |
+| `orcha start -n N -b <branches>` | Start sessions on specific branches (comma-separated) |
 | `orcha stop` | Stop sessions for current repo |
 | `orcha stop --all` | Stop all running instances |
 | `orcha status` | Show session statuses |
@@ -125,7 +126,30 @@ This means:
 - No conflicts between parallel changes
 - Easy to review and merge when done
 
-Disable with `--no-worktree` to have all sessions work in the same directory.
+### Branch Options
+
+**Use existing branches:**
+```bash
+# Work on an existing feature branch
+orcha start -n 2 -b feature/authentication
+
+# Work on multiple existing branches
+orcha start -n 3 -b feature/auth,feature/api,bugfix/login
+```
+
+**Auto-generate new branches:**
+```bash
+# Orcha creates branches: orcha/session-1-20260203, orcha/session-2-20260203, etc.
+orcha start -n 3
+```
+
+**Work directly in repo (no worktree):**
+```bash
+# All sessions work in the same directory
+orcha start -n 2 --no-worktree
+```
+
+Orcha automatically detects whether a branch exists locally or on origin. If it exists, it checks out that branch in a worktree. If it doesn't exist, it creates a new branch from your default branch (main/master).
 
 ## Presets
 
@@ -195,6 +219,32 @@ orcha list
   ```
 - **AI CLI tool** - Claude Code, Gemini CLI, or Codex CLI
 
+## Custom Actions
+
+Create custom action buttons in the web dashboard for frequently-used scripts:
+
+```bash
+# Actions are managed via the web UI
+orcha web
+```
+
+In the sidebar, click **"+ Add Action"** to create:
+- **Name**: Short label (e.g., "Check Mail")
+- **Icon**: Any emoji (e.g., 📧)
+- **Script**: Shell commands to run
+
+**Usage:**
+- **Click** action button → Creates new tmux session and runs script
+- **Right-click** action button → Edit name, icon, or script
+- **Delete** via edit dialog
+
+**Example actions:**
+- `📧 Check Mail` → `mail-cli inbox --unread`
+- `🐳 Docker Status` → `docker ps -a && docker images`
+- `📊 System Info` → `htop`
+
+Actions are stored in `~/.orcha/actions.json` and persist across sessions.
+
 ## Configuration
 
 Orcha stores data in:
@@ -204,6 +254,7 @@ Orcha stores data in:
 | `~/.orcha/presets/` | Saved preset configurations |
 | `~/.orcha/worktrees/` | Git worktrees for sessions |
 | `~/.orcha/registry.json` | Running instance registry |
+| `~/.orcha/actions.json` | Custom action buttons |
 | `/tmp/orcha/agents/` | Session status files |
 
 ## Architecture

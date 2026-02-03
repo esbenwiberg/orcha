@@ -12,7 +12,15 @@
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=7">
+  <!-- Markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.esm.min.mjs';
+    window.mermaid = mermaid;
+    mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+  </script>
+
+  <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
   <div id="app">
@@ -21,10 +29,10 @@
       <div class="sidebar-header">
         <img src="logo.png" alt="Orcha" class="logo">
         <span class="subtitle" id="catchphrase">herd your AI agents</span>
-        <button id="add-repo-btn" title="Add repository">+ Add Repository</button>
       </div>
       <div id="session-list"></div>
       <div class="sidebar-footer">
+        <div id="action-bar"></div>
         <div id="usage-stats"></div>
         <div id="summary"></div>
       </div>

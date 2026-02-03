@@ -15,10 +15,12 @@ const state = {
   refreshInterval: null,
   usage: null, // { date, tokens, messages, sessions } or null
   gridLayout: { cols: 1, rows: 1 }, // Current grid layout for 2D navigation
+  actions: [], // Custom action buttons
 };
 
 // DOM elements
 const sessionList = document.getElementById('session-list');
+const actionBarEl = document.getElementById('action-bar');
 
 /**
  * Show a toast notification
@@ -753,8 +755,23 @@ async function showPlanDialog(session) {
     }
 
     const data = await res.json();
-    // Render markdown as preformatted text with basic styling
-    contentEl.innerHTML = `<pre class="plan-content">${escapeHtml(data.content)}</pre>`;
+    // Render markdown with marked.js
+    const htmlContent = marked.parse(data.content);
+    contentEl.innerHTML = `<div class="plan-content markdown-body">${htmlContent}</div>`;
+
+    // Render mermaid diagrams if any
+    if (window.mermaid) {
+      const mermaidElements = contentEl.querySelectorAll('code.language-mermaid');
+      mermaidElements.forEach((el, idx) => {
+        const code = el.textContent;
+        const id = `mermaid-${Date.now()}-${idx}`;
+        const container = document.createElement('div');
+        container.className = 'mermaid-container';
+        container.innerHTML = `<div class="mermaid" id="${id}">${code}</div>`;
+        el.parentElement.replaceWith(container);
+      });
+      await window.mermaid.run({ querySelector: '.plan-content .mermaid' });
+    }
   } catch (err) {
     contentEl.innerHTML = `<div class="plan-error">Failed to load plan: ${err.message}</div>`;
   }
@@ -996,6 +1013,243 @@ function updateUsageDisplay(usage) {
       <span class="usage-unit">${days} days of Claude</span>
     </div>
   `;
+}
+
+/**
+ * Fetch custom actions from server
+ */
+async function fetchActions() {
+  try {
+    const res = await fetch('/api/actions');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error('Failed to fetch actions:', err);
+    return [];
+  }
+}
+
+/**
+ * Render action bar with custom action buttons
+ */
+function renderActionBar(actions) {
+  if (!actionBarEl) return;
+
+  if (!actions || actions.length === 0) {
+    actionBarEl.innerHTML = `
+      <div class="action-bar-empty">
+        <button class="action-add-btn" onclick="showActionEditorDialog()">+ Add Action</button>
+      </div>
+    `;
+    return;
+  }
+
+  actionBarEl.innerHTML = `
+    <div class="action-bar-header">
+      <span class="usage-label">Quick Actions</span>
+      <button class="action-add-btn-small" onclick="showActionEditorDialog()" title="Add action">+</button>
+    </div>
+    <div class="action-buttons">
+      ${actions.map(action => `
+        <button class="action-btn"
+                data-action-id="${action.id}"
+                title="${escapeHtml(action.name)}"
+                onclick="executeAction('${action.id}', event)"
+                oncontextmenu="editAction('${action.id}', event); return false;">
+          <span class="action-icon">${escapeHtml(action.icon)}</span>
+          <span class="action-name">${escapeHtml(action.name)}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+/**
+ * Execute a custom action
+ */
+async function executeAction(actionId, event) {
+  // Prevent context menu from triggering execution
+  if (event && event.button === 2) return;
+
+  const action = state.actions.find(a => a.id === actionId);
+  if (!action) return;
+
+  showToast(`Running ${action.name}...`, 'info');
+
+  try {
+    const res = await fetch(`/api/actions/${actionId}/execute`, {
+      method: 'POST',
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || 'Failed to execute action');
+    }
+
+    const result = await res.json();
+    showToast(`${action.name} started`, 'success');
+
+    // Refresh sessions list to show new session
+    await fetchSessions();
+    render();
+
+    // Auto-focus the new action session after render completes
+    if (result.sessionId && result.instanceId) {
+      const sessionKey = `${result.instanceId}/${result.sessionId}`;
+      // Give render time to create the panel
+      setTimeout(() => {
+        focusPanel(sessionKey);
+      }, 100);
+    }
+  } catch (err) {
+    showToast(`Failed to execute ${action.name}: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Show action editor dialog
+ */
+function showActionEditorDialog(actionId = null) {
+  const action = actionId ? state.actions.find(a => a.id === actionId) : null;
+  const isEdit = !!action;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'action-editor-overlay';
+
+  overlay.innerHTML = `
+    <div class="action-editor-dialog">
+      <h3>${isEdit ? 'Edit Action' : 'New Action'}</h3>
+      <form class="action-editor-form" onsubmit="saveAction(event, ${isEdit ? `'${actionId}'` : 'null'})">
+        <div class="form-group">
+          <label for="action-name">Name</label>
+          <input type="text" id="action-name" name="name" placeholder="Check Mail" maxlength="20" value="${isEdit ? escapeHtml(action.name) : ''}" required>
+        </div>
+        <div class="form-group">
+          <label for="action-icon">Icon (emoji)</label>
+          <input type="text" id="action-icon" name="icon" placeholder="📧" maxlength="4" value="${isEdit ? escapeHtml(action.icon) : ''}" required>
+        </div>
+        <div class="form-group">
+          <label for="action-script">Script</label>
+          <textarea id="action-script" name="script" placeholder="echo 'Hello, world!'" rows="6" required>${isEdit ? escapeHtml(action.script) : ''}</textarea>
+        </div>
+        <div class="form-actions">
+          ${isEdit ? `<button type="button" class="btn-danger" onclick="deleteAction('${actionId}')">Delete</button>` : '<div></div>'}
+          <div>
+            <button type="button" class="btn-secondary" onclick="closeActionEditorDialog()">Cancel</button>
+            <button type="submit" class="btn-primary">Save</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  // Animate in
+  requestAnimationFrame(() => {
+    overlay.classList.add('visible');
+  });
+
+  // Focus first input
+  setTimeout(() => document.getElementById('action-name').focus(), 100);
+
+  // Close on overlay click
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeActionEditorDialog();
+  });
+}
+
+/**
+ * Edit an action (right-click handler)
+ */
+function editAction(actionId, event) {
+  event.preventDefault();
+  event.stopPropagation();
+  showActionEditorDialog(actionId);
+}
+
+/**
+ * Save action (create or update)
+ */
+async function saveAction(event, actionId) {
+  event.preventDefault();
+
+  const form = event.target;
+  const formData = new FormData(form);
+  const data = {
+    name: formData.get('name').trim(),
+    icon: formData.get('icon').trim(),
+    script: formData.get('script').trim(),
+  };
+
+  // Validate
+  if (!data.name || !data.icon || !data.script) {
+    showToast('All fields are required', 'error');
+    return;
+  }
+
+  try {
+    const url = actionId ? `/api/actions/${actionId}` : '/api/actions';
+    const method = actionId ? 'PUT' : 'POST';
+
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || 'Failed to save action');
+    }
+
+    showToast(`Action ${actionId ? 'updated' : 'created'}`, 'success');
+    closeActionEditorDialog();
+
+    // Refresh actions
+    state.actions = await fetchActions();
+    renderActionBar(state.actions);
+  } catch (err) {
+    showToast(`Failed to save action: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Delete an action
+ */
+async function deleteAction(actionId) {
+  if (!confirm('Are you sure you want to delete this action?')) return;
+
+  try {
+    const res = await fetch(`/api/actions/${actionId}`, {
+      method: 'DELETE',
+    });
+
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || 'Failed to delete action');
+    }
+
+    showToast('Action deleted', 'success');
+    closeActionEditorDialog();
+
+    // Refresh actions
+    state.actions = await fetchActions();
+    renderActionBar(state.actions);
+  } catch (err) {
+    showToast(`Failed to delete action: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Close action editor dialog
+ */
+function closeActionEditorDialog() {
+  const overlay = document.querySelector('.action-editor-overlay');
+  if (!overlay) return;
+
+  overlay.classList.remove('visible');
+  setTimeout(() => overlay.remove(), 300);
 }
 
 /**
@@ -2769,6 +3023,21 @@ function updateSidebar(tmuxSessions, instances = []) {
 
   sessionList.innerHTML = '';
 
+  // Add repositories header with add button
+  const reposHeader = document.createElement('div');
+  reposHeader.className = 'repos-header';
+  reposHeader.innerHTML = '<span>Repositories</span>';
+
+  const addRepoBtn = document.createElement('button');
+  addRepoBtn.id = 'add-repo-btn';
+  addRepoBtn.className = 'add-repo-btn-inline';
+  addRepoBtn.innerHTML = '+';
+  addRepoBtn.title = 'Add repository';
+  addRepoBtn.addEventListener('click', showAddRepoDialog);
+
+  reposHeader.appendChild(addRepoBtn);
+  sessionList.appendChild(reposHeader);
+
   // Group sessions by instance
   const groups = groupByInstance(tmuxSessions);
 
@@ -2779,7 +3048,17 @@ function updateSidebar(tmuxSessions, instances = []) {
     }
   }
 
+  // Separate orcha-actions from regular repos
+  const actionsInstance = groups.get('orcha-actions');
+  const regularGroups = new Map();
   for (const [instanceId, instanceSessions] of groups) {
+    if (instanceId !== 'orcha-actions') {
+      regularGroups.set(instanceId, instanceSessions);
+    }
+  }
+
+  // Render regular repos first
+  for (const [instanceId, instanceSessions] of regularGroups) {
     const providerType = getProviderType(instanceId);
 
     // Instance header container
@@ -2913,6 +3192,127 @@ function updateSidebar(tmuxSessions, instances = []) {
       sessionList.appendChild(item);
     }
   }
+
+  // Render orcha-actions at the bottom with separator
+  if (actionsInstance) {
+    // Add separator
+    const separator = document.createElement('div');
+    separator.className = 'actions-separator';
+    separator.innerHTML = '<span>Quick Actions</span>';
+    sessionList.appendChild(separator);
+
+    // Render actions instance
+    const instanceId = 'orcha-actions';
+    const instanceSessions = actionsInstance;
+    const providerType = getProviderType(instanceId);
+
+    // Instance header container
+    const headerContainer = document.createElement('div');
+    headerContainer.className = 'instance-header-container';
+
+    // Instance header (clickable to filter)
+    const header = document.createElement('div');
+    header.className = 'instance-header';
+    const providerBadge = getProviderBadge(providerType);
+    const repoName = 'Actions';
+    header.innerHTML = providerBadge + '<span class="instance-name">' + repoName + '</span>';
+    header.title = 'Click to show only actions';
+    header.style.cursor = 'pointer';
+    header.addEventListener('click', () => filterByInstance(instanceId));
+
+    // No batch button for actions
+    const batchBtn = document.createElement('button');
+    batchBtn.className = 'batch-issues-btn';
+    batchBtn.innerHTML = '⚡';
+    batchBtn.disabled = true;
+    batchBtn.style.opacity = '0.1';
+    batchBtn.title = 'Not applicable to actions';
+
+    // No add button for actions (actions are created via action bar)
+    const addBtn = document.createElement('button');
+    addBtn.className = 'add-session-btn';
+    addBtn.innerHTML = '+';
+    addBtn.disabled = true;
+    addBtn.style.opacity = '0.1';
+    addBtn.title = 'Actions are created via Quick Actions bar';
+
+    headerContainer.appendChild(header);
+    headerContainer.appendChild(batchBtn);
+    headerContainer.appendChild(addBtn);
+
+    // No remove button for actions (it's a special instance)
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-instance-btn';
+    removeBtn.innerHTML = '×';
+    removeBtn.disabled = true;
+    removeBtn.style.opacity = '0.1';
+    removeBtn.title = 'Cannot remove actions instance';
+    headerContainer.appendChild(removeBtn);
+
+    sessionList.appendChild(headerContainer);
+
+    // Render action sessions
+    for (const session of instanceSessions) {
+      const key = getSessionKey(session);
+
+      const item = document.createElement('div');
+      item.className = 'session-item';
+      item.dataset.sessionKey = key;
+      if (state.focusedSession === key) {
+        item.classList.add('active');
+      }
+      if (!isSessionVisible(key)) {
+        item.classList.add('filtered-out');
+      }
+
+      const dot = document.createElement('div');
+      dot.className = `session-dot ${session.state}`;
+
+      const info = document.createElement('div');
+      info.className = 'session-info';
+
+      const name = document.createElement('div');
+      name.className = 'session-name';
+      const paneInfo = session.paneCount > 1 ? ` (${session.paneCount})` : '';
+      name.textContent = getSessionDisplayName(session) + paneInfo;
+
+      const branch = document.createElement('div');
+      branch.className = 'session-branch';
+      branch.textContent = session.message || session.state;
+
+      info.appendChild(name);
+      info.appendChild(branch);
+
+      item.appendChild(dot);
+      item.appendChild(info);
+
+      let justCopied = false;
+
+      info.addEventListener('mouseup', (e) => {
+        const selection = window.getSelection();
+        if (selection && selection.toString().trim().length > 0) {
+          e.stopPropagation();
+          justCopied = true;
+          copyToClipboard(selection.toString());
+          setTimeout(() => { justCopied = false; }, 0);
+        }
+      });
+
+      item.addEventListener('click', (e) => {
+        if (justCopied) {
+          return;
+        }
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          toggleSessionVisibility(key);
+        } else {
+          focusPanel(key);
+        }
+      });
+
+      sessionList.appendChild(item);
+    }
+  }
 }
 
 /**
@@ -3004,17 +3404,19 @@ function applyGridLayout(count) {
  * Main render function
  */
 async function render() {
-  // Fetch sessions, instances, and usage in parallel
-  const [{ sessions, summary }, instances, usage] = await Promise.all([
+  // Fetch sessions, instances, usage, and actions in parallel
+  const [{ sessions, summary }, instances, usage, actions] = await Promise.all([
     fetchSessions(),
     fetchInstances(),
     fetchUsage(),
+    fetchActions(),
   ]);
 
   // Store all sessions (for sidebar)
   state.sessions = sessions;
   state.instances = instances;
   state.usage = usage;
+  state.actions = actions;
 
   // Dedupe by tmux session for terminal panels (1 panel per tmux session)
   const tmuxSessions = dedupeByTmuxSession(sessions);
@@ -3023,6 +3425,7 @@ async function render() {
   // Pass instances to show empty repos too
   updateSidebar(tmuxSessions, instances);
   updateSummary(summary);
+  renderActionBar(actions);
   updateUsageDisplay(usage);
 
   if (tmuxSessions.length === 0) {

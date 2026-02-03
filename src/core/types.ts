@@ -233,3 +233,21 @@ export interface WorkItem {
   assignee?: string
   labels?: string[]
 }
+
+// ============================================================================
+// Action Types (Custom Action Buttons)
+// ============================================================================
+
+export interface Action {
+  id: string // UUID
+  name: string // Display name (e.g., "Check Mail")
+  icon: string // Single emoji/symbol (e.g., "📧")
+  script: string // Shell script content to execute
+  createdAt: string // ISO 8601 timestamp
+  updatedAt: string // ISO 8601 timestamp
+}
+
+export interface ActionsStore {
+  version: number // Schema version
+  actions: Action[]
+}

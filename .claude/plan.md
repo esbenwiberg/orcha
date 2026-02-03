@@ -15,15 +15,15 @@ Add customizable action buttons to the Orcha web dashboard navbar (above stats s
 
 ## Acceptance Criteria
 
-- [x] User can open action editor dialog by clicking "+ Add Action" button
-- [x] Dialog allows setting: action name, icon (emoji/symbol), shell script content
-- [x] Actions are saved to `~/.orcha/actions.json` with persistence
-- [x] Action buttons appear in navbar above usage stats section
-- [x] Clicking action button opens new tmux session and executes script
-- [x] Actions are global (not tied to specific repo instances)
-- [x] User can edit/delete existing actions (right-click to edit, delete button in dialog)
-- [x] Visual feedback when action is triggered (toast notification)
-- [x] Actions sync between page reloads
+- [ ] User can open action editor dialog by holding modifier key (Ctrl/Cmd) + clicking a designated area in navbar
+- [ ] Dialog allows setting: action name, icon (emoji/symbol), shell script content
+- [ ] Actions are saved to `~/.orcha/actions.json` with persistence
+- [ ] Action buttons appear in navbar above usage stats section
+- [ ] Clicking action button opens new WSL session and executes script
+- [ ] Actions are global (not tied to specific repo instances)
+- [ ] User can edit/delete existing actions
+- [ ] Visual feedback when action is triggered (toast notification)
+- [ ] Actions sync between page reloads
 
 ## Architecture
 

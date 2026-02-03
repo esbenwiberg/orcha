@@ -22,6 +22,7 @@ import { SessionManager } from '../core/session-manager.js'
 import { TmuxRenderer } from '../cli/tmux-renderer.js'
 import { getProvider, parseRemoteUrl, detectProvider } from '../core/vcs-provider.js'
 import type { RepoInfo } from '../core/types.js'
+import { getActions, getAction, createAction, updateAction, deleteAction, executeAction } from '../core/actions-manager.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -67,6 +68,7 @@ export class WebDashboardServer {
   private server = createServer(this.app)
   private wss: WebSocketServer
   private ptySessions = new Map<string, PtySession>()
+  private statusMonitors = new Map<string, StatusMonitor>() // Reusable monitors per instance
   private port: number
 
   constructor(port = 3847) {
@@ -119,8 +121,88 @@ export class WebDashboardServer {
       }
     })
 
-    // API: Rename a session
+    // Enable JSON body parsing
     this.app.use(express.json())
+
+    // API: Get all actions
+    this.app.get('/api/actions', async (_req, res) => {
+      try {
+        const actions = await getActions()
+        res.json(actions)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Create a new action
+    this.app.post('/api/actions', async (req, res) => {
+      try {
+        const { name, icon, script } = req.body as { name?: string; icon?: string; script?: string }
+
+        // Validate required fields
+        if (!name || !icon || !script) {
+          res.status(400).json({ error: 'name, icon, and script are required' })
+          return
+        }
+
+        const action = await createAction(name, icon, script)
+        res.json(action)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Update an action
+    this.app.put('/api/actions/:id', async (req, res) => {
+      try {
+        const { id } = req.params
+        const { name, icon, script } = req.body as { name?: string; icon?: string; script?: string }
+
+        const action = await updateAction(id, { name, icon, script })
+
+        if (!action) {
+          res.status(404).json({ error: 'Action not found' })
+          return
+        }
+
+        res.json(action)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Delete an action
+    this.app.delete('/api/actions/:id', async (req, res) => {
+      try {
+        const { id } = req.params
+
+        const success = await deleteAction(id)
+
+        if (!success) {
+          res.status(404).json({ error: 'Action not found' })
+          return
+        }
+
+        res.json({ success: true })
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Execute an action (creates new tmux session)
+    this.app.post('/api/actions/:id/execute', async (req, res) => {
+      try {
+        const { id } = req.params
+
+        const result = await executeAction(id)
+
+        res.json(result)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Rename a session
     this.app.put('/api/sessions/:instanceId/:sessionId/name', async (req, res) => {
       try {
         const { instanceId, sessionId } = req.params
@@ -1721,16 +1803,24 @@ export class WebDashboardServer {
 
     for (const inst of instances) {
       const statusDir = getStatusDirForInstance(inst.instanceId)
-      const monitor = new StatusMonitor({ statusDir })
-      await monitor.start()
+
+      // Get or create singleton monitor for this instance (prevents start/stop churn)
+      let monitor = this.statusMonitors.get(inst.instanceId)
+      if (!monitor) {
+        monitor = new StatusMonitor({ statusDir })
+        await monitor.start()
+        this.statusMonitors.set(inst.instanceId, monitor)
+      }
+
       const statuses = monitor.getAllStatuses()
-      await monitor.stop()
+      // Don't stop - keep monitor alive for next request
 
       const metadata = await loadSessionStore(inst.instanceId)
 
-      // Use tmux pane detection as fallback when status files show "idle"
-      const tmux = new TmuxRenderer({ sessionName: inst.tmuxSession })
-      const tmuxExists = tmux.sessionExists()
+      // NOTE: Removed blocking tmux status detection to prevent event loop blocking
+      // This was causing keyboard lag (execSync blocks for ~50ms per call)
+      // Status now comes purely from status files written by Claude sessions
+      // If status accuracy is needed, tmux calls should be made async in the future
 
       for (const [sessionId, status] of statuses) {
         const meta = metadata.find(m => m.id === sessionId)
@@ -1738,18 +1828,6 @@ export class WebDashboardServer {
         if (!meta) continue
         // Skip sessions where paneIndex is undefined (legacy data)
         if (meta.paneIndex === undefined) continue
-
-        // Apply tmux detection for more accurate status
-        let finalState = status.state
-        let finalMessage = status.message
-
-        if (tmuxExists && (status.state === 'idle' || status.state === 'initializing')) {
-          const detected = tmux.detectClaudeStatus(meta.paneIndex)
-          if (detected && detected.state !== 'idle') {
-            finalState = detected.state as any
-            finalMessage = detected.message
-          }
-        }
 
         sessions.push({
           id: sessionId,
@@ -1759,8 +1837,8 @@ export class WebDashboardServer {
           tmuxSession: meta.tmuxSession || inst.tmuxSession,
           paneIndex: meta.paneIndex,
           branch: meta.branch?.replace(/^orcha\//, ''),
-          state: finalState,
-          message: finalMessage,
+          state: status.state,
+          message: status.message,
           customName: meta.customName,
           worktreePath: meta.worktreePath,
         })
@@ -1869,6 +1947,15 @@ export class WebDashboardServer {
       session.ws?.close()
     }
     this.ptySessions.clear()
+
+    // Stop all status monitors (cleanup file watchers)
+    for (const [instanceId, monitor] of this.statusMonitors) {
+      monitor.stop().catch(err => {
+        console.warn(`[Server] Failed to stop monitor for ${instanceId}:`, err.message)
+      })
+    }
+    this.statusMonitors.clear()
+
     this.server.close()
   }
 }
