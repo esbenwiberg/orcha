@@ -13,7 +13,7 @@ import { join, dirname, resolve, isAbsolute } from 'path'
 import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, statSync } from 'fs'
 import { listInstances, getInstance, getInstanceByPath, registerInstance, unregisterInstance } from '../core/instance-registry.js'
 import { StatusMonitor, getStatusDirForInstance } from '../core/status-monitor.js'
 import { loadSessionStore, updateSessionName, saveSessionStore } from '../core/session-store.js'
@@ -1081,6 +1081,30 @@ export class WebDashboardServer {
             }
           }
         }
+
+        // Filter out directories - only keep actual files
+        const filteredFiles: Array<{ path: string; status: string; committed: boolean }> = []
+        for (const file of files) {
+          const fullPath = join(instance.repoPath, file.path)
+          try {
+            // Check if path exists and is not a directory
+            if (existsSync(fullPath)) {
+              const stat = statSync(fullPath)
+              if (!stat.isDirectory()) {
+                filteredFiles.push(file)
+              }
+            } else {
+              // File doesn't exist (deleted file) - include it
+              filteredFiles.push(file)
+            }
+          } catch (err) {
+            // If we can't stat it, include it anyway (might be deleted, etc.)
+            filteredFiles.push(file)
+          }
+        }
+        // Replace files array with filtered version
+        files.length = 0
+        files.push(...filteredFiles)
 
         // Get full diff (PR preview = all branch changes + uncommitted)
         let diff = ''
