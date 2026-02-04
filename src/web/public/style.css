@@ -479,8 +479,8 @@ body {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 20px;
-  width: 90%;
-  max-width: 500px;
+  width: 70vw;
+  max-width: 800px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
   transform: translateY(-20px);
   transition: transform 0.2s ease;
@@ -843,8 +843,9 @@ body {
 
 /* Batch issues dialog */
 .batch-issues-dialog {
-  min-width: 420px;
-  max-width: 500px;
+  width: 70vw;
+  max-width: 900px;
+  min-width: 500px;
 }
 
 .batch-issues-input {
@@ -1133,8 +1134,9 @@ body {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 20px;
-  min-width: 300px;
-  max-width: 400px;
+  width: 50vw;
+  max-width: 700px;
+  min-width: 400px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   animation: slideIn 0.15s ease-out;
 }
@@ -1542,10 +1544,10 @@ body {
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  width: 80vw;
-  height: 80vh;
-  max-width: 1200px;
-  max-height: 800px;
+  width: 90vw;
+  height: 90vh;
+  max-width: 1800px;
+  max-height: 1200px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1636,10 +1638,10 @@ body {
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  width: 70vw;
-  height: 70vh;
-  max-width: 900px;
-  max-height: 700px;
+  width: 85vw;
+  height: 85vh;
+  max-width: 1400px;
+  max-height: 1200px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1911,10 +1913,10 @@ body {
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  width: 90vw;
-  height: 85vh;
-  max-width: 1400px;
-  max-height: 900px;
+  width: 95vw;
+  height: 90vh;
+  max-width: 2000px;
+  max-height: 1400px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
