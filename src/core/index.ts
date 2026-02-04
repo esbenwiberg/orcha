@@ -68,3 +68,7 @@ export { githubProvider } from './github-provider.js'
 
 // Azure DevOps provider
 export { azureDevOpsProvider } from './azure-devops-provider.js'
+
+// Cleanup utilities
+export { detectDeadSessions, cleanupDeadSessions, cleanupInstanceRegistry } from './cleanup.js'
+export type { DeadSession, CleanupResult } from './cleanup.js'

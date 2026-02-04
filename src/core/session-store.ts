@@ -30,10 +30,18 @@ export interface SessionStoreData {
 const STORE_VERSION = 1
 
 /**
+ * Get the orcha config directory (~/.orcha)
+ */
+function getOrchaConfigDir(): string {
+  return join(process.env.HOME || '/tmp', '.orcha')
+}
+
+/**
  * Get the session store file path for an instance
+ * Uses ~/.orcha/{instanceId}/sessions.json for persistence across reboots
  */
 function getStorePath(instanceId: string): string {
-  return `/tmp/orcha/${instanceId}/sessions.json`
+  return join(getOrchaConfigDir(), instanceId, 'sessions.json')
 }
 
 /**

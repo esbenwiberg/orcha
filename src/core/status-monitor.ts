@@ -21,24 +21,33 @@ import type {
   StatusEvent,
 } from './types.js'
 
-const DEFAULT_STATUS_DIR = '/tmp/orcha/agents'
-
-const DEFAULT_CONFIG: StatusMonitorConfig = {
-  statusDir: DEFAULT_STATUS_DIR,
-  pollInterval: 1000,
-  idleTimeout: 30000,
+/**
+ * Get the orcha config directory (~/.orcha)
+ */
+function getOrchaDir(): string {
+  return join(process.env.HOME || '/tmp', '.orcha')
 }
 
 /**
  * Get the status directory for an instance
+ * Uses ~/.orcha/{instanceId}/status/ for persistence across reboots
  * @param instanceId - Optional instance ID (e.g., "orcha-myproject")
  * @returns Status directory path
  */
 export function getStatusDirForInstance(instanceId?: string): string {
   if (instanceId) {
-    return `/tmp/orcha/${instanceId}/agents`
+    return join(getOrchaDir(), instanceId, 'status')
   }
-  return DEFAULT_STATUS_DIR
+  // Fallback for legacy/unspecified - still use persistent location
+  return join(getOrchaDir(), 'default', 'status')
+}
+
+const DEFAULT_STATUS_DIR = getStatusDirForInstance()
+
+const DEFAULT_CONFIG: StatusMonitorConfig = {
+  statusDir: DEFAULT_STATUS_DIR,
+  pollInterval: 1000,
+  idleTimeout: 30000,
 }
 
 interface StatusEntry {
