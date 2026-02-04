@@ -31,6 +31,7 @@ import {
   clearSessionStore,
   ensureHooksInstalled,
 } from '../core/index.js'
+import { detectDeadSessions, cleanupDeadSessions } from '../core/cleanup.js'
 import type { SessionMetadata } from '../core/index.js'
 import type { InstanceInfo } from '../core/index.js'
 import { formatStatus } from './format.js'
@@ -61,6 +62,105 @@ async function cleanupStatusDir(statusDir: string): Promise<void> {
       // Ignore errors during cleanup
     }
   }
+}
+
+/**
+ * Check if an instance has recoverable sessions
+ * Returns session metadata if recovery is possible, null otherwise
+ */
+async function checkRecoverableSessions(
+  instanceId: string,
+  repoPath: string
+): Promise<SessionMetadata[] | null> {
+  // Check if session metadata exists
+  const sessions = await loadSessionStore(instanceId)
+  if (sessions.length === 0) {
+    return null
+  }
+
+  // Check if tmux session exists
+  const tmux = new TmuxRenderer({ sessionName: instanceId })
+  if (!tmux.sessionExists()) {
+    return null
+  }
+
+  // Check if at least some worktrees still exist
+  const worktrees = new WorktreeManager(repoPath)
+  let validSessions = 0
+  for (const session of sessions) {
+    if (session.worktreePath && existsSync(session.worktreePath)) {
+      validSessions++
+    } else if (!session.worktreePath) {
+      // Sessions without worktrees (main branch) are always valid
+      validSessions++
+    }
+  }
+
+  // If at least half the sessions are valid, allow recovery
+  if (validSessions >= sessions.length / 2) {
+    return sessions
+  }
+
+  return null
+}
+
+/**
+ * Recover existing sessions instead of starting fresh
+ * Reconnects to tmux panes and restarts AI processes if needed
+ */
+async function recoverSessions(
+  instanceId: string,
+  repoPath: string,
+  sessions: SessionMetadata[],
+  statusDir: string
+): Promise<{ recovered: number; failed: number }> {
+  const tmux = new TmuxRenderer({ sessionName: instanceId })
+  const panes = tmux.listPanes()
+
+  let recovered = 0
+  let failed = 0
+
+  for (let i = 0; i < sessions.length; i++) {
+    const session = sessions[i]
+    const paneExists = i < panes.length
+
+    // Check if pane is still alive
+    if (!paneExists) {
+      console.log(`  Session #${session.displayId}: pane missing, skipping`)
+      failed++
+      continue
+    }
+
+    // Check if worktree still exists (if applicable)
+    if (session.worktreePath && !existsSync(session.worktreePath)) {
+      console.log(`  Session #${session.displayId}: worktree missing at ${session.worktreePath}`)
+      failed++
+      continue
+    }
+
+    // Check if the pane has a running AI process by looking at pane content
+    const detected = tmux.detectClaudeStatus(i)
+    const hasRunningProcess = detected && detected.state !== 'idle'
+
+    if (!hasRunningProcess) {
+      // Restart the AI process in this pane
+      const workDir = session.worktreePath || repoPath
+      const cmd = session.mode === 'shell' ? '' : session.mode
+      if (cmd) {
+        // Use --continue to resume Claude's conversation context when recovering
+        const resumeFlag = session.mode === 'claude' ? ' --continue' : ''
+        console.log(`  Session #${session.displayId}: restarting ${session.mode}${resumeFlag ? ' (resuming conversation)' : ''}...`)
+        const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmd}${resumeFlag}`
+        tmux.runInPane(session.id, envCmd)
+      }
+    } else {
+      console.log(`  Session #${session.displayId}: already running (${detected?.state || 'active'})`)
+    }
+
+    recovered++
+  }
+
+  return { recovered, failed }
 }
 
 /**
@@ -107,8 +207,9 @@ program
   .option('--main', 'Work directly on main branch (no worktree)')
   .option('--no-worktree', 'Disable automatic worktree creation')
   .option('--no-attach', 'Do not attach to tmux session after starting')
+  .option('--fresh', 'Force fresh start, skipping session recovery')
   .action(async (options) => {
-    const { count, repo, branches, mode, attach, worktree, main } = options
+    const { count, repo, branches, mode, attach, worktree, main, fresh } = options
 
     // Validate inputs
     if (count < 1 || count > 12) {
@@ -135,6 +236,49 @@ program
 
     // Generate instance-specific session name
     const instanceId = getSessionName(repoPath)
+    const statusDir = getStatusDirForInstance(instanceId)
+
+    // Check for recoverable sessions first (unless --fresh is specified)
+    const recoverableSessions = fresh ? null : await checkRecoverableSessions(instanceId, repoPath)
+    if (recoverableSessions) {
+      console.log(`Found ${recoverableSessions.length} recoverable session(s) in ${instanceId}`)
+      console.log(`Attempting auto-recovery...`)
+
+      const { recovered, failed } = await recoverSessions(
+        instanceId,
+        repoPath,
+        recoverableSessions,
+        statusDir
+      )
+
+      if (recovered > 0) {
+        console.log(`\nRecovered ${recovered} session(s)${failed > 0 ? `, ${failed} failed` : ''}`)
+        console.log(`Instance: ${instanceId}`)
+
+        // Start status bar updates
+        const monitor = new StatusMonitor({ statusDir })
+        await monitor.start()
+        const statusBar = new StatusBar({ sessionName: instanceId })
+        await statusBar.start(monitor)
+
+        console.log('\nCommands:')
+        console.log('  orcha status      - View session status')
+        console.log('  orcha watch       - Interactive dashboard')
+        console.log('  orcha stop        - Stop this instance')
+        console.log('  orcha start --fresh - Force fresh start (clears sessions)')
+
+        if (attach) {
+          console.log('\nAttaching to tmux session...')
+          const tmux = new TmuxRenderer({ sessionName: instanceId })
+          tmux.attach()
+        } else {
+          console.log(`\nTo attach to tmux session: tmux attach -t ${instanceId}`)
+        }
+        return
+      } else {
+        console.log(`Recovery failed, starting fresh...`)
+      }
+    }
 
     console.log(`Starting ${count} session(s) in ${repoPath}...`)
     console.log(`Instance: ${instanceId}`)
@@ -154,7 +298,6 @@ program
 
     // Always clean up old status files and session store for fresh start
     await clearSessionStore(instanceId)
-    const statusDir = getStatusDirForInstance(instanceId)
     await cleanupStatusDir(statusDir)
 
     // Clean up orphaned worktrees from previous runs
@@ -1050,15 +1193,58 @@ program
 // =============================================================================
 program
   .command('cleanup')
-  .description('Remove orphaned worktrees and clean up temp files')
+  .description('Remove orphaned worktrees, dead tmux sessions, and clean up temp files')
   .option('-r, --repo <path>', 'Repository path (default: current directory)')
   .option('--dry-run', 'Show what would be cleaned without removing')
+  .option('--sessions-only', 'Only clean up dead tmux sessions, skip worktrees')
   .action(async (options) => {
-    const { repo, dryRun } = options
+    const { repo, dryRun, sessionsOnly } = options
 
-    // Default to current directory
+    // Clean up dead tmux sessions
+    console.log('Scanning for dead tmux sessions...')
+    const deadSessions = await detectDeadSessions()
+
+    if (deadSessions.length > 0) {
+      console.log(`\nFound ${deadSessions.length} dead tmux session(s):`)
+      for (const session of deadSessions) {
+        console.log(`  - ${session.name}`)
+        console.log(`    Reason: ${session.reason}`)
+        console.log(`    Created: ${new Date(session.created).toLocaleString()}`)
+      }
+
+      if (dryRun) {
+        console.log('\n[Dry run] Would kill the above tmux sessions.')
+      } else {
+        const result = await cleanupDeadSessions(false)
+        console.log(`\nKilled ${result.deadSessions.length} dead tmux session(s).`)
+
+        if (result.cleanedInstances.length > 0) {
+          console.log(`Cleaned ${result.cleanedInstances.length} instance(s) from registry:`)
+          for (const instanceId of result.cleanedInstances) {
+            console.log(`  - ${instanceId}`)
+          }
+        }
+
+        if (result.cleanedTempDirs.length > 0) {
+          console.log(`Removed ${result.cleanedTempDirs.length} temp director(ies):`)
+          for (const dir of result.cleanedTempDirs) {
+            console.log(`  - ${dir}`)
+          }
+        }
+      }
+    } else {
+      console.log('No dead tmux sessions found.')
+    }
+
+    // Skip worktree cleanup if --sessions-only flag is set
+    if (sessionsOnly) {
+      console.log('\nCleanup complete (sessions only).')
+      return
+    }
+
+    // Clean up worktrees
     const repoPath = resolve(repo || '.')
-    console.log(`Cleaning up orphaned resources for ${repoPath}...`)
+    console.log(`\nCleaning up orphaned worktrees for ${repoPath}...`)
 
     const worktrees = new WorktreeManager(repoPath)
 
@@ -1067,32 +1253,30 @@ program
 
     if (managed.length === 0) {
       console.log('No orcha-managed worktrees found.')
-      return
-    }
+    } else {
+      console.log(`Found ${managed.length} orcha-managed worktree(s):`)
+      for (const wt of managed) {
+        console.log(`  - ${wt.sessionId}: ${wt.branch} (${wt.path})`)
+      }
 
-    console.log(`Found ${managed.length} orcha-managed worktree(s):`)
-    for (const wt of managed) {
-      console.log(`  - ${wt.sessionId}: ${wt.branch} (${wt.path})`)
-    }
+      if (dryRun) {
+        console.log('\n[Dry run] Would remove all above worktrees.')
+      } else {
+        // Remove all managed worktrees (they're orphaned since no session is running)
+        const removed = await worktrees.cleanup([])
 
-    if (dryRun) {
-      console.log('\n[Dry run] Would remove all above worktrees.')
-      return
-    }
+        if (removed.length > 0) {
+          console.log(`\nRemoved ${removed.length} orphaned worktree(s):`)
+          for (const id of removed) {
+            console.log(`  - ${id}`)
+          }
+        }
 
-    // Remove all managed worktrees (they're orphaned since no session is running)
-    const removed = await worktrees.cleanup([])
-
-    if (removed.length > 0) {
-      console.log(`\nRemoved ${removed.length} orphaned worktree(s):`)
-      for (const id of removed) {
-        console.log(`  - ${id}`)
+        // Prune git worktree references
+        await worktrees.prune()
+        console.log('Pruned stale git worktree references.')
       }
     }
-
-    // Prune git worktree references
-    await worktrees.prune()
-    console.log('Pruned stale git worktree references.')
 
     // Clean up status files
     const monitor = new StatusMonitor()
