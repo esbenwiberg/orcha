@@ -76,6 +76,20 @@ fi
 
 echo "${GREEN}✓ tmux $(tmux -V) found${RESET}"
 
+# Configure tmux for mouse support
+echo "→ Configuring tmux mouse support..."
+TMUX_CONF="$HOME/.tmux.conf"
+if [ -f "$TMUX_CONF" ] && grep -q "set.*mouse" "$TMUX_CONF"; then
+    echo "${GREEN}✓ Mouse support already configured${RESET}"
+else
+    echo "set -g mouse on" >> "$TMUX_CONF"
+    echo "${GREEN}✓ Added mouse support to ~/.tmux.conf${RESET}"
+    # Reload tmux config if tmux server is running
+    if tmux list-sessions >/dev/null 2>&1; then
+        tmux source-file "$TMUX_CONF" 2>/dev/null || true
+    fi
+fi
+
 # Check for Claude Code (optional)
 echo "→ Checking AI CLI tools..."
 HAS_AI=false
