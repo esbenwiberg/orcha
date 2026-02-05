@@ -765,6 +765,9 @@ body {
   align-items: center;
   border-top: 1px solid var(--border-color);
   margin-top: 8px;
+  overflow: visible;
+  flex-wrap: nowrap;
+  padding-right: 4px;
 }
 
 .instance-header-container:first-child {
@@ -774,8 +777,17 @@ body {
 
 .instance-header-container .instance-header {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   border-top: none;
   margin-top: 0;
+}
+
+.instance-header-container .instance-header .instance-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Actions separator */
@@ -816,14 +828,80 @@ body {
   color: var(--text-muted);
   font-size: 1.1rem;
   cursor: pointer;
-  padding: 4px 8px;
+  padding: 4px 6px;
   transition: color 0.15s;
   opacity: 0.6;
+  flex-shrink: 0;
+  z-index: 10;
 }
 
 .remove-instance-btn:hover {
   color: var(--status-error);
   opacity: 1;
+}
+
+/* Instance menu button */
+.instance-menu-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  transition: color 0.15s;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.instance-menu-btn:hover {
+  color: var(--accent-purple);
+  opacity: 1;
+}
+
+/* Instance dropdown menu */
+.instance-menu {
+  position: fixed;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  min-width: 160px;
+  z-index: 1000;
+  padding: 4px 0;
+}
+
+.instance-menu-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  transition: background 0.15s;
+}
+
+.instance-menu-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.instance-menu-item.danger {
+  color: var(--status-error);
+}
+
+.instance-menu-item.danger:hover {
+  background: rgba(248, 81, 73, 0.1);
+}
+
+.instance-menu-item .menu-icon {
+  width: 20px;
+  margin-right: 8px;
+  text-align: center;
+}
+
+.instance-menu-separator {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
 }
 
 /* Batch issues button */

@@ -10,7 +10,7 @@
 
 import { EventEmitter } from 'events'
 import { watch, FSWatcher } from 'chokidar'
-import { readFile, mkdir, writeFile, readdir, unlink } from 'fs/promises'
+import { readFile, mkdir, writeFile, readdir, unlink, copyFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join, basename } from 'path'
 import type {
@@ -40,6 +40,99 @@ export function getStatusDirForInstance(instanceId?: string): string {
   }
   // Fallback for legacy/unspecified - still use persistent location
   return join(getOrchaDir(), 'default', 'status')
+}
+
+/**
+ * Legacy status directory paths that might contain old status files
+ * These are checked during migration to recover orphaned sessions
+ */
+function getLegacyStatusPaths(instanceId: string): string[] {
+  return [
+    // Old /tmp paths with various subdirectory patterns
+    join('/tmp', 'orcha', instanceId, 'agents'),
+    join('/tmp', 'orcha', instanceId, 'status'),
+    join('/tmp', `orcha-${instanceId}-status`),
+    join('/tmp', `${instanceId}-status`),
+  ]
+}
+
+/**
+ * Migrate status files from legacy /tmp locations to ~/.orcha
+ * This handles the transition from /tmp-based storage to persistent ~/.orcha storage
+ *
+ * @param instanceId - The instance ID to migrate status files for
+ * @returns Number of files migrated
+ */
+export async function migrateStatusFromLegacyPaths(instanceId: string): Promise<number> {
+  const targetDir = getStatusDirForInstance(instanceId)
+  const legacyPaths = getLegacyStatusPaths(instanceId)
+  let migratedCount = 0
+
+  // Ensure target directory exists
+  await mkdir(targetDir, { recursive: true })
+
+  for (const legacyPath of legacyPaths) {
+    if (!existsSync(legacyPath)) continue
+
+    try {
+      const files = await readdir(legacyPath)
+      for (const file of files) {
+        if (!file.endsWith('.json')) continue
+
+        const sourcePath = join(legacyPath, file)
+        const targetPath = join(targetDir, file)
+
+        // Only migrate if target doesn't exist (don't overwrite newer data)
+        if (!existsSync(targetPath)) {
+          try {
+            await copyFile(sourcePath, targetPath)
+            migratedCount++
+          } catch (err) {
+            // Ignore individual file errors
+          }
+        }
+      }
+    } catch (err) {
+      // Directory might not be readable, continue to next
+    }
+  }
+
+  return migratedCount
+}
+
+/**
+ * Discover orphaned tmux sessions that match the orcha-ui-* pattern
+ * These are sessions that were created by the web dashboard but may not be
+ * tracked in sessions.json (e.g., after a crash or migration)
+ *
+ * @returns Array of orphaned session info { tmuxSession, sessionId }
+ */
+export function discoverOrphanedTmuxSessions(): Array<{ tmuxSession: string; sessionId: string }> {
+  const orphans: Array<{ tmuxSession: string; sessionId: string }> = []
+
+  try {
+    const { execSync } = require('child_process')
+    const output = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null', {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    const sessions = output.trim().split('\n').filter(Boolean)
+    for (const tmuxSession of sessions) {
+      // Match orcha-ui-session-* pattern
+      const match = tmuxSession.match(/^orcha-ui-(session-\d+-[a-z0-9]+)$/)
+      if (match) {
+        orphans.push({
+          tmuxSession,
+          sessionId: match[1],
+        })
+      }
+    }
+  } catch {
+    // tmux not available or no sessions - return empty
+  }
+
+  return orphans
 }
 
 const DEFAULT_STATUS_DIR = getStatusDirForInstance()

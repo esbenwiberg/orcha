@@ -15,7 +15,7 @@ import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
 import { existsSync, readFileSync, statSync } from 'fs'
 import { listInstances, getInstance, getInstanceByPath, registerInstance, unregisterInstance } from '../core/instance-registry.js'
-import { StatusMonitor, getStatusDirForInstance } from '../core/status-monitor.js'
+import { StatusMonitor, getStatusDirForInstance, migrateStatusFromLegacyPaths } from '../core/status-monitor.js'
 import { loadSessionStore, updateSessionName, saveSessionStore } from '../core/session-store.js'
 import type { SessionMetadata } from '../core/session-store.js'
 import { SessionManager } from '../core/session-manager.js'
@@ -635,12 +635,9 @@ export class WebDashboardServer {
         const cloneUrl = provider?.getCloneUrl(finalRepoInfo) || finalRepoInfo.remoteUrl
 
         // Build clone path - use project prefix for Azure DevOps to avoid collisions
-        const cloneBaseDir = '/mnt/c/repos/.workspace/clones'
-        let cloneDirName = finalRepoInfo.repo
-        if (finalRepoInfo.type === 'azure-devops' && finalRepoInfo.project) {
-          // Include project name for ADO repos to avoid collision across projects
-          cloneDirName = `${finalRepoInfo.project}-${finalRepoInfo.repo}`
-        }
+        // Use ORCHA_CLONE_DIR env var, or default to ~/repos/orcha-clones
+        const cloneBaseDir = process.env.ORCHA_CLONE_DIR || join(homedir(), 'repos', 'orcha-clones')
+        const cloneDirName = finalRepoInfo.repo
         const clonePath = join(cloneBaseDir, cloneDirName)
 
         // Ensure base directory exists
@@ -1803,6 +1800,10 @@ export class WebDashboardServer {
 
     for (const inst of instances) {
       const statusDir = getStatusDirForInstance(inst.instanceId)
+
+      // Migrate status files from legacy /tmp locations before reading
+      // This is idempotent and only copies files that don't already exist
+      await migrateStatusFromLegacyPaths(inst.instanceId)
 
       // Get or create singleton monitor for this instance (prevents start/stop churn)
       let monitor = this.statusMonitors.get(inst.instanceId)

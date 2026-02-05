@@ -245,7 +245,12 @@ export const azureDevOpsProvider: VcsProvider = {
 
   getCloneUrl(repoInfo: RepoInfo): string {
     if (repoInfo.owner && repoInfo.project) {
-      return `https://dev.azure.com/${repoInfo.owner}/${repoInfo.project}/_git/${repoInfo.repo}`
+      // Decode first (in case already encoded), then re-encode to handle spaces and special characters
+      const decodedProject = decodeURIComponent(repoInfo.project)
+      const decodedRepo = decodeURIComponent(repoInfo.repo)
+      const encodedProject = encodeURIComponent(decodedProject)
+      const encodedRepo = encodeURIComponent(decodedRepo)
+      return `https://dev.azure.com/${repoInfo.owner}/${encodedProject}/_git/${encodedRepo}`
     }
     return repoInfo.remoteUrl
   },

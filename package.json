@@ -38,11 +38,14 @@
   },
   "homepage": "https://github.com/esbenwiberg/orcha#readme",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run copy-public",
+    "copy-public": "cp -r src/web/public dist/web/",
     "dev": "tsc --watch",
     "test": "vitest",
     "lint": "eslint src/",
     "start": "node dist/cli/index.js",
+    "web": "node dist/web/start-server.js",
+    "web:dev": "PORT=3000 NO_OPEN=1 node dist/web/start-server.js",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

@@ -4,7 +4,12 @@
  */
 
 export * from './types.js'
-export { StatusMonitor, getStatusDirForInstance } from './status-monitor.js'
+export {
+  StatusMonitor,
+  getStatusDirForInstance,
+  migrateStatusFromLegacyPaths,
+  discoverOrphanedTmuxSessions,
+} from './status-monitor.js'
 export { WorktreeManager } from './worktree-manager.js'
 export { ProcessRegistry } from './process-registry.js'
 export { SessionManager } from './session-manager.js'

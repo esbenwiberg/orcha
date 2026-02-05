@@ -45,13 +45,13 @@ export interface VcsProvider {
 // URL Pattern Matching
 // ============================================================================
 
-// GitHub patterns
-const GITHUB_HTTPS_PATTERN = /github\.com[/:]([^/]+)\/([^/.]+)/
-const GITHUB_SSH_PATTERN = /git@github\.com:([^/]+)\/([^/.]+)/
+// GitHub patterns (allow dots in repo names like .workspace)
+const GITHUB_HTTPS_PATTERN = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/
+const GITHUB_SSH_PATTERN = /git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/
 
-// Azure DevOps patterns
+// Azure DevOps patterns (supports optional username@ prefix like user@dev.azure.com)
 const ADO_HTTPS_PATTERN =
-  /dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/?#]+)/
+  /(?:[^@/]+@)?dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/?#]+)/
 const ADO_VS_HTTPS_PATTERN =
   /(?:https?:\/\/)?([^./]+)\.visualstudio\.com\/([^/]+)\/_git\/([^/?#]+)/
 const ADO_SSH_PATTERN = /ssh\.dev\.azure\.com\/v3\/([^/]+)\/([^/]+)\/([^/?#]+)/

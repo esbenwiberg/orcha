@@ -1310,9 +1310,78 @@ async function closeSession(instanceId, sessionId, sessionKey) {
 }
 
 /**
+ * Show instance context menu with actions
+ */
+function showInstanceMenu(event, instanceId, instanceSessions, providerType, headerContainer) {
+  // Close any existing menu
+  const existingMenu = document.querySelector('.instance-menu');
+  if (existingMenu) existingMenu.remove();
+
+  const menu = document.createElement('div');
+  menu.className = 'instance-menu';
+
+  const workItemLabel = getWorkItemLabel(providerType);
+
+  // Add session option
+  const addItem = document.createElement('div');
+  addItem.className = 'instance-menu-item';
+  addItem.innerHTML = '<span class="menu-icon">+</span> Add session';
+  addItem.addEventListener('click', () => {
+    menu.remove();
+    toggleNewSessionForm(instanceId, headerContainer);
+  });
+  menu.appendChild(addItem);
+
+  // Batch issues option (only for GitHub and Azure DevOps)
+  if (providerType !== 'generic') {
+    const batchItem = document.createElement('div');
+    batchItem.className = 'instance-menu-item';
+    batchItem.innerHTML = `<span class="menu-icon">⚡</span> Batch ${workItemLabel}`;
+    batchItem.addEventListener('click', () => {
+      menu.remove();
+      showBatchIssuesDialog(instanceId);
+    });
+    menu.appendChild(batchItem);
+  }
+
+  // Separator
+  const sep = document.createElement('div');
+  sep.className = 'instance-menu-separator';
+  menu.appendChild(sep);
+
+  // Remove option
+  const removeItem = document.createElement('div');
+  removeItem.className = 'instance-menu-item danger';
+  removeItem.innerHTML = instanceSessions.length > 0
+    ? '<span class="menu-icon">×</span> Remove (close sessions)'
+    : '<span class="menu-icon">×</span> Remove repo';
+  removeItem.addEventListener('click', () => {
+    menu.remove();
+    removeInstance(instanceId, instanceSessions);
+  });
+  menu.appendChild(removeItem);
+
+  // Position the menu
+  document.body.appendChild(menu);
+  const rect = event.target.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.left = `${rect.left}px`;
+
+  // Close menu when clicking outside
+  const closeMenu = (e) => {
+    if (!menu.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
+
+/**
  * Remove an instance (repo), closing all sessions if needed
  */
 async function removeInstance(instanceId, instanceSessions = []) {
+  console.log('[Remove] removeInstance called with:', instanceId);
   const displayName = instanceId.replace('orcha-', '');
 
   // Build warning message
@@ -1583,8 +1652,8 @@ function toggleNewSessionForm(instanceId, containerEl) {
  * Returns: { provider: 'github'|'azure-devops', owner, repo, project?, preview }
  */
 function parseRepoUrl(url) {
-  // Azure DevOps patterns
-  const adoHttpsPattern = /^https?:\/\/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/?#]+)/;
+  // Azure DevOps patterns (supports optional username@ prefix)
+  const adoHttpsPattern = /^https?:\/\/(?:[^@/]+@)?dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/?#]+)/;
   const adoVsPattern = /^https?:\/\/([^./]+)\.visualstudio\.com\/([^/]+)\/_git\/([^/?#]+)/;
   const adoShorthand = /^([^/]+)\/([^/]+)\/([^/]+)$/;
 
@@ -2647,8 +2716,28 @@ function initTerminal(session) {
   // Open terminal
   term.open(container);
 
-  // Fit to container
-  setTimeout(() => fitAddon.fit(), 0);
+  // Fit to container with multiple attempts to handle CSS grid settling
+  // (especially important when adding the first session after empty state)
+  const fitAndResize = () => {
+    fitAddon.fit();
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    }
+  };
+
+  setTimeout(fitAndResize, 0);
+  setTimeout(fitAndResize, 50);
+  setTimeout(fitAndResize, 150);
+  setTimeout(fitAndResize, 300);
+
+  // ResizeObserver to handle container size changes (grid layout changes, window resize)
+  const resizeObserver = new ResizeObserver(() => {
+    fitAddon.fit();
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    }
+  });
+  resizeObserver.observe(container);
 
   // Connect WebSocket - attach to tmux session (shows all panes via tmux's native layout)
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -3076,51 +3165,18 @@ function updateSidebar(tmuxSessions, instances = []) {
     header.style.cursor = 'pointer';
     header.addEventListener('click', () => filterByInstance(instanceId));
 
-    // Batch issues/work items button (only for GitHub and Azure DevOps)
-    const batchBtn = document.createElement('button');
-    batchBtn.className = 'batch-issues-btn';
-    batchBtn.innerHTML = '⚡';
-    const workItemLabel = getWorkItemLabel(providerType);
-    batchBtn.title = `Batch process ${workItemLabel}`;
-    // Disable batch button for generic repos (no issue/work item tracking)
-    if (providerType === 'generic') {
-      batchBtn.disabled = true;
-      batchBtn.title = 'No issue tracking available for this repository';
-      batchBtn.style.opacity = '0.3';
-    }
-    batchBtn.addEventListener('click', (e) => {
+    // Menu button with dropdown for all actions
+    const menuBtn = document.createElement('button');
+    menuBtn.className = 'instance-menu-btn';
+    menuBtn.innerHTML = '⋮';
+    menuBtn.title = 'Repository actions';
+    menuBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (providerType !== 'generic') {
-        showBatchIssuesDialog(instanceId);
-      }
-    });
-
-    // Add session button
-    const addBtn = document.createElement('button');
-    addBtn.className = 'add-session-btn';
-    addBtn.innerHTML = '+';
-    addBtn.title = 'Add new session';
-    addBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleNewSessionForm(instanceId, headerContainer);
+      showInstanceMenu(e, instanceId, instanceSessions, providerType, headerContainer);
     });
 
     headerContainer.appendChild(header);
-    headerContainer.appendChild(batchBtn);
-    headerContainer.appendChild(addBtn);
-
-    // Always show remove button (it will handle closing sessions if needed)
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'remove-instance-btn';
-    removeBtn.innerHTML = '×';
-    removeBtn.title = instanceSessions.length > 0
-      ? 'Remove repo (will close all sessions)'
-      : 'Remove empty repo';
-    removeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      removeInstance(instanceId, instanceSessions);
-    });
-    headerContainer.appendChild(removeBtn);
+    headerContainer.appendChild(menuBtn);
 
     sessionList.appendChild(headerContainer);
 

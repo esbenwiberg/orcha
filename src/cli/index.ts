@@ -20,6 +20,8 @@ import {
   StatusMonitor,
   ConfigLoader,
   getStatusDirForInstance,
+  migrateStatusFromLegacyPaths,
+  discoverOrphanedTmuxSessions,
   registerInstance,
   unregisterInstance,
   findInstanceFromCwd,
@@ -67,32 +69,102 @@ async function cleanupStatusDir(statusDir: string): Promise<void> {
 /**
  * Check if an instance has recoverable sessions
  * Returns session metadata if recovery is possible, null otherwise
+ *
+ * This function also:
+ * - Migrates status files from legacy /tmp locations to ~/.orcha
+ * - Discovers orphaned tmux sessions (orcha-ui-*) and reconstructs metadata
  */
 async function checkRecoverableSessions(
   instanceId: string,
   repoPath: string
 ): Promise<SessionMetadata[] | null> {
-  // Check if session metadata exists
-  const sessions = await loadSessionStore(instanceId)
+  // Step 1: Migrate any status files from legacy /tmp locations
+  const migratedCount = await migrateStatusFromLegacyPaths(instanceId)
+  if (migratedCount > 0) {
+    console.log(`  Migrated ${migratedCount} status file(s) from legacy location`)
+  }
+
+  // Step 2: Load existing session metadata
+  let sessions = await loadSessionStore(instanceId)
+
+  // Step 3: Discover orphaned tmux sessions that aren't in sessions.json
+  const orphanedTmux = discoverOrphanedTmuxSessions()
+  const trackedSessionIds = new Set(sessions.map(s => s.id))
+
+  // Find orphans that belong to this instance (by checking if tmux session exists)
+  const orphansToAdd: SessionMetadata[] = []
+  for (const orphan of orphanedTmux) {
+    // Skip if already tracked
+    if (trackedSessionIds.has(orphan.sessionId)) continue
+
+    // Check if this tmux session actually exists and is alive
+    const orphanTmux = new TmuxRenderer({ sessionName: orphan.tmuxSession })
+    if (!orphanTmux.sessionExists()) continue
+
+    // Reconstruct metadata for this orphaned session
+    // We have limited info, so we use sensible defaults
+    const nextDisplayId = sessions.length > 0
+      ? Math.max(...sessions.map(s => s.displayId)) + 1
+      : orphansToAdd.length + 1
+
+    const metadata: SessionMetadata = {
+      id: orphan.sessionId,
+      displayId: nextDisplayId + orphansToAdd.length,
+      paneIndex: 0, // UI sessions always use pane 0 in their own tmux session
+      branch: null,
+      mode: 'claude', // Assume claude mode for orphaned sessions
+      worktreePath: null, // Unknown, will be null
+      createdAt: new Date().toISOString(),
+      tmuxSession: orphan.tmuxSession,
+    }
+
+    orphansToAdd.push(metadata)
+    console.log(`  Discovered orphaned tmux session: ${orphan.tmuxSession} -> ${orphan.sessionId}`)
+  }
+
+  // Add orphaned sessions to the store
+  if (orphansToAdd.length > 0) {
+    sessions = [...sessions, ...orphansToAdd]
+    await saveSessionStore(instanceId, sessions)
+    console.log(`  Added ${orphansToAdd.length} orphaned session(s) to metadata store`)
+  }
+
+  // Step 4: Validate sessions
   if (sessions.length === 0) {
     return null
   }
 
-  // Check if tmux session exists
+  // Check if main tmux session exists OR if any UI sessions exist
   const tmux = new TmuxRenderer({ sessionName: instanceId })
-  if (!tmux.sessionExists()) {
+  const hasMainTmux = tmux.sessionExists()
+  const hasUiSessions = sessions.some(s => {
+    if (!s.tmuxSession) return false
+    const uiTmux = new TmuxRenderer({ sessionName: s.tmuxSession })
+    return uiTmux.sessionExists()
+  })
+
+  if (!hasMainTmux && !hasUiSessions) {
     return null
   }
 
-  // Check if at least some worktrees still exist
-  const worktrees = new WorktreeManager(repoPath)
+  // Check if at least some sessions have valid tmux sessions
   let validSessions = 0
   for (const session of sessions) {
+    // Check if UI session's tmux exists
+    if (session.tmuxSession) {
+      const sessionTmux = new TmuxRenderer({ sessionName: session.tmuxSession })
+      if (sessionTmux.sessionExists()) {
+        validSessions++
+        continue
+      }
+    }
+
+    // Check if worktree exists (for sessions without dedicated tmux)
     if (session.worktreePath && existsSync(session.worktreePath)) {
       validSessions++
     } else if (!session.worktreePath) {
-      // Sessions without worktrees (main branch) are always valid
-      validSessions++
+      // Sessions without worktrees (main branch) are valid if main tmux exists
+      if (hasMainTmux) validSessions++
     }
   }
 
@@ -106,7 +178,9 @@ async function checkRecoverableSessions(
 
 /**
  * Recover existing sessions instead of starting fresh
- * Reconnects to tmux panes and restarts AI processes if needed
+ * Handles both:
+ * - CLI sessions: panes in the main tmux session
+ * - UI sessions: separate tmux sessions (orcha-ui-*)
  */
 async function recoverSessions(
   instanceId: string,
@@ -114,19 +188,22 @@ async function recoverSessions(
   sessions: SessionMetadata[],
   statusDir: string
 ): Promise<{ recovered: number; failed: number }> {
-  const tmux = new TmuxRenderer({ sessionName: instanceId })
-  const panes = tmux.listPanes()
+  const mainTmux = new TmuxRenderer({ sessionName: instanceId })
+  const mainPanes = mainTmux.sessionExists() ? mainTmux.listPanes() : []
 
   let recovered = 0
   let failed = 0
 
-  for (let i = 0; i < sessions.length; i++) {
-    const session = sessions[i]
-    const paneExists = i < panes.length
+  for (const session of sessions) {
+    // Determine which tmux session this session belongs to
+    const isUiSession = !!session.tmuxSession && session.tmuxSession !== instanceId
+    const sessionTmux = isUiSession
+      ? new TmuxRenderer({ sessionName: session.tmuxSession! })
+      : mainTmux
 
-    // Check if pane is still alive
-    if (!paneExists) {
-      console.log(`  Session #${session.displayId}: pane missing, skipping`)
+    // Check if the tmux session exists
+    if (!sessionTmux.sessionExists()) {
+      console.log(`  Session #${session.displayId}: tmux session missing (${session.tmuxSession || instanceId}), skipping`)
       failed++
       continue
     }
@@ -138,23 +215,38 @@ async function recoverSessions(
       continue
     }
 
-    // Check if the pane has a running AI process by looking at pane content
-    const detected = tmux.detectClaudeStatus(i)
+    // For UI sessions, use pane 0. For CLI sessions, use paneIndex
+    const paneIndex = isUiSession ? 0 : session.paneIndex
+
+    // Check if the pane has a running AI process
+    const detected = sessionTmux.detectClaudeStatus(paneIndex)
     const hasRunningProcess = detected && detected.state !== 'idle'
 
-    if (!hasRunningProcess) {
-      // Restart the AI process in this pane
-      const workDir = session.worktreePath || repoPath
-      const cmd = session.mode === 'shell' ? '' : session.mode
-      if (cmd) {
-        // Use --continue to resume Claude's conversation context when recovering
-        const resumeFlag = session.mode === 'claude' ? ' --continue' : ''
-        console.log(`  Session #${session.displayId}: restarting ${session.mode}${resumeFlag ? ' (resuming conversation)' : ''}...`)
-        const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmd}${resumeFlag}`
-        tmux.runInPane(session.id, envCmd)
-      }
-    } else {
+    if (hasRunningProcess) {
       console.log(`  Session #${session.displayId}: already running (${detected?.state || 'active'})`)
+      recovered++
+      continue
+    }
+
+    // Session exists but AI process isn't running - restart it
+    const workDir = session.worktreePath || repoPath
+    const cmd = session.mode === 'shell' ? '' : session.mode
+
+    if (cmd) {
+      // Use --continue to resume Claude's conversation context when recovering
+      const resumeFlag = session.mode === 'claude' ? ' --continue' : ''
+      console.log(`  Session #${session.displayId}: restarting ${session.mode}${resumeFlag ? ' (resuming conversation)' : ''}...`)
+
+      // Build command with correct env vars pointing to new status dir
+      const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmd}${resumeFlag}`
+
+      if (isUiSession) {
+        // UI sessions: send command to pane 0 of their dedicated tmux session
+        sessionTmux.runInPane(session.id, envCmd)
+      } else {
+        // CLI sessions: send command to the appropriate pane in main session
+        sessionTmux.runInPane(session.id, envCmd)
+      }
     }
 
     recovered++
