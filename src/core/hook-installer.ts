@@ -166,6 +166,19 @@ export async function installHooks(): Promise<void> {
   ensureHook('PreToolUse')
   ensureHook('Stop')
 
+  // Ensure Read permission for /tmp/orcha-images/ (for clipboard image paste)
+  if (!settings.permissions) {
+    settings.permissions = {}
+  }
+  if (!Array.isArray(settings.permissions.allow)) {
+    settings.permissions.allow = []
+  }
+  const allowList = settings.permissions.allow as string[]
+  const imageReadRule = 'Read /tmp/orcha-images/'
+  if (!allowList.some((rule: string) => rule === imageReadRule)) {
+    allowList.push(imageReadRule)
+  }
+
   // Write updated settings
   await writeFile(settingsPath, JSON.stringify(settings, null, 2))
 

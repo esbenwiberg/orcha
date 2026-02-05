@@ -13,7 +13,7 @@ import { join, dirname, resolve, isAbsolute } from 'path'
 import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
-import { existsSync, readFileSync, statSync } from 'fs'
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'fs'
 import { listInstances, getInstance, getInstanceByPath, registerInstance, unregisterInstance } from '../core/instance-registry.js'
 import { StatusMonitor, getStatusDirForInstance, migrateStatusFromLegacyPaths } from '../core/status-monitor.js'
 import { loadSessionStore, updateSessionName, saveSessionStore } from '../core/session-store.js'
@@ -122,7 +122,37 @@ export class WebDashboardServer {
     })
 
     // Enable JSON body parsing
-    this.app.use(express.json())
+    this.app.use(express.json({ limit: '50mb' }))
+
+    // API: Upload image from clipboard paste
+    this.app.post('/api/upload-image', (req, res) => {
+      try {
+        const { data, filename } = req.body as { data?: string; filename?: string }
+
+        if (!data) {
+          res.status(400).json({ error: 'data (base64) is required' })
+          return
+        }
+
+        const imageDir = '/tmp/orcha-images'
+        mkdirSync(imageDir, { recursive: true })
+
+        const timestamp = Date.now()
+        const random = Math.random().toString(36).slice(2, 8)
+        const ext = filename?.split('.').pop() || 'png'
+        const outputFilename = `${timestamp}-${random}.${ext}`
+        const outputPath = join(imageDir, outputFilename)
+
+        const buffer = Buffer.from(data, 'base64')
+        writeFileSync(outputPath, buffer)
+
+        console.log(`[API] Image saved: ${outputPath} (${buffer.length} bytes)`)
+        res.json({ path: outputPath })
+      } catch (err) {
+        console.error('[API] Image upload error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
 
     // API: Get all actions
     this.app.get('/api/actions', async (_req, res) => {
