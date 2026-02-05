@@ -2634,7 +2634,7 @@ function createTerminalPanel(session) {
   panel.appendChild(header);
   panel.appendChild(container);
 
-  // Focus handling (Ctrl+click toggles visibility filter)
+  // Focus handling - click to focus panel
   // Use capture phase (true) to intercept clicks before xterm.js handles them
   panel.addEventListener('click', (e) => {
     // Don't interfere with Shift+click (used for text selection/copy)
@@ -2645,12 +2645,7 @@ function createTerminalPanel(session) {
     if (selection && selection.toString().trim().length > 0) {
       return; // Selection handled by child mouseup handlers
     }
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      toggleSessionVisibility(key);
-    } else {
-      focusPanel(key);
-    }
+    focusPanel(key);
   }, true);
 
   // Double-click to toggle fullscreen (only on header, not terminal)
