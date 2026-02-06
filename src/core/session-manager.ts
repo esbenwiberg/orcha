@@ -102,7 +102,10 @@ export class SessionManager extends EventEmitter {
 
     try {
       // Create worktree if branch specified
-      if (config.branch) {
+      if (config.existingWorktreePath) {
+        session.status.message = 'Reusing existing worktree...'
+        session.worktreePath = config.existingWorktreePath
+      } else if (config.branch) {
         session.status.message = 'Creating worktree...'
         session.worktreePath = await this.worktrees.create(id, config.branch)
       }

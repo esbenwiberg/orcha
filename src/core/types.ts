@@ -41,6 +41,7 @@ export interface SessionConfig {
   mode?: SessionMode
   workingDirectory: string
   repoPath: string
+  existingWorktreePath?: string // Reuse an existing worktree instead of creating one
 }
 
 // ============================================================================

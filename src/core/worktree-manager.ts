@@ -6,7 +6,7 @@
  */
 
 import { simpleGit, SimpleGit } from 'simple-git'
-import { mkdir, rm, readdir } from 'fs/promises'
+import { mkdir, rm, readdir, rename } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join, basename, relative } from 'path'
 import { homedir } from 'os'
@@ -235,5 +235,42 @@ export class WorktreeManager {
    */
   exists(sessionId: string): boolean {
     return existsSync(this.getWorktreePath(sessionId))
+  }
+
+  /**
+   * Find an orcha-managed worktree by branch name
+   * @returns WorktreeInfo if found, null otherwise
+   */
+  async findByBranch(branch: string): Promise<WorktreeInfo | null> {
+    const managed = await this.listManaged()
+    return managed.find((w) => w.branch === branch) ?? null
+  }
+
+  /**
+   * Move an existing worktree from one session path to another.
+   * Uses `git worktree move` to relocate, keeping git metadata intact.
+   * @returns The new worktree path
+   */
+  async reuseForSession(oldSessionId: string, newSessionId: string): Promise<string> {
+    const oldPath = this.getWorktreePath(oldSessionId)
+    const newPath = this.getWorktreePath(newSessionId)
+
+    if (!existsSync(oldPath)) {
+      throw new Error(`Old worktree does not exist at ${oldPath}`)
+    }
+
+    if (existsSync(newPath)) {
+      throw new Error(`New worktree path already exists at ${newPath}`)
+    }
+
+    // Ensure parent directory exists
+    await mkdir(this.getRepoWorktreeDir(), { recursive: true })
+
+    const relativeOldPath = relative(this.repoPath, oldPath)
+    const relativeNewPath = relative(this.repoPath, newPath)
+
+    await this.git.raw(['worktree', 'move', relativeOldPath, relativeNewPath])
+
+    return newPath
   }
 }

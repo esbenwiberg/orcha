@@ -1260,11 +1260,70 @@ function getSessionKey(session) {
 }
 
 /**
- * Close/delete a session via API
+ * Show close dialog for sessions with worktrees - offers keep/remove options
  */
-async function closeSession(instanceId, sessionId, sessionKey) {
+function showCloseWorktreeDialog(displayName, session, sessionKey, closeBtn) {
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+
+  const branchName = session.branch || 'unknown';
+
+  overlay.innerHTML = `
+    <div class="new-session-dialog" style="min-width:400px;max-width:480px;">
+      <h3>Close Session</h3>
+      <p style="color:var(--text-secondary);margin:8px 0 16px;font-size:0.9rem;">
+        Session <strong>"${displayName}"</strong> has a worktree on branch <code style="background:var(--bg-secondary);padding:2px 6px;border-radius:3px;">${branchName}</code>.
+      </p>
+      <div class="new-session-buttons" style="gap:8px;flex-direction:column;">
+        <button class="close-keep-btn" style="background:var(--accent-color);color:white;padding:10px 16px;border:none;border-radius:4px;cursor:pointer;font-size:0.9rem;">Keep Worktree</button>
+        <button class="close-remove-btn" style="background:var(--error-color, #e53e3e);color:white;padding:10px 16px;border:none;border-radius:4px;cursor:pointer;font-size:0.9rem;">Remove Worktree</button>
+        <button class="new-session-cancel" style="padding:10px 16px;font-size:0.9rem;">Cancel</button>
+      </div>
+      <p class="close-hint" style="color:var(--text-muted, #666);margin-top:12px;font-size:0.78rem;">
+        Keep: worktree stays on disk; re-creating a session with the same branch will reuse it.<br>
+        Remove: worktree and branch checkout are deleted from disk.
+      </p>
+    </div>
+  `;
+
+  const closeDialog = () => overlay.remove();
+
+  overlay.querySelector('.close-keep-btn').addEventListener('click', async () => {
+    closeDialog();
+    closeBtn.disabled = true;
+    closeBtn.innerHTML = '...';
+    await closeSession(session.instanceId, session.id, sessionKey, true);
+    showToast(`Worktree kept for branch "${branchName}"`, 'success');
+  });
+
+  overlay.querySelector('.close-remove-btn').addEventListener('click', async () => {
+    closeDialog();
+    closeBtn.disabled = true;
+    closeBtn.innerHTML = '...';
+    await closeSession(session.instanceId, session.id, sessionKey, false);
+  });
+
+  overlay.querySelector('.new-session-cancel').addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDialog();
+  });
+
+  document.body.appendChild(overlay);
+}
+
+/**
+ * Close/delete a session via API
+ * @param {boolean} keepWorktree - If true, keep the worktree on disk for later reuse
+ */
+async function closeSession(instanceId, sessionId, sessionKey, keepWorktree = false) {
   try {
-    const res = await fetch(`/api/sessions/${instanceId}/${sessionId}`, {
+    const url = keepWorktree
+      ? `/api/sessions/${instanceId}/${sessionId}?keepWorktree=true`
+      : `/api/sessions/${instanceId}/${sessionId}`;
+    const res = await fetch(url, {
       method: 'DELETE',
     });
 
@@ -2452,7 +2511,11 @@ async function createSession(instanceId, branch, mode, useWorktree = true) {
     throw new Error(data.error || 'Unknown error');
   }
 
-  return res.json();
+  const data = await res.json();
+  if (data.reusedWorktree) {
+    showToast(`Worktree reused for branch "${data.session.branch}"`, 'success');
+  }
+  return data;
 }
 
 /**
@@ -2608,10 +2671,18 @@ function createTerminalPanel(session) {
   closeBtn.title = 'Close session';
   closeBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    if (confirm(`Close session "${getSessionDisplayName(session)}"? This will terminate the process and remove the worktree.`)) {
-      closeBtn.disabled = true;
-      closeBtn.innerHTML = '...';
-      await closeSession(session.instanceId, session.id, key);
+    const displayName = getSessionDisplayName(session);
+
+    if (session.worktreePath || session.branch) {
+      // Show custom modal for worktree sessions
+      showCloseWorktreeDialog(displayName, session, key, closeBtn);
+    } else {
+      // Simple confirm for non-worktree sessions
+      if (confirm(`Close session "${displayName}"? This will terminate the process.`)) {
+        closeBtn.disabled = true;
+        closeBtn.innerHTML = '...';
+        await closeSession(session.instanceId, session.id, key);
+      }
     }
   });
 

@@ -19,6 +19,7 @@ import { StatusMonitor, getStatusDirForInstance, migrateStatusFromLegacyPaths } 
 import { loadSessionStore, updateSessionName, saveSessionStore } from '../core/session-store.js'
 import type { SessionMetadata } from '../core/session-store.js'
 import { SessionManager } from '../core/session-manager.js'
+import { WorktreeManager } from '../core/worktree-manager.js'
 import { TmuxRenderer } from '../cli/tmux-renderer.js'
 import { getProvider, parseRemoteUrl, detectProvider } from '../core/vcs-provider.js'
 import type { RepoInfo } from '../core/types.js'
@@ -324,8 +325,9 @@ export class WebDashboardServer {
           }
         }
 
-        // Remove worktree if exists
-        if (session.worktreePath) {
+        // Remove worktree if exists (unless keepWorktree is requested)
+        const keepWorktree = req.query.keepWorktree === 'true'
+        if (session.worktreePath && !keepWorktree) {
           try {
             const instance = await getInstance(instanceId)
             if (instance) {
@@ -409,12 +411,26 @@ export class WebDashboardServer {
         const branchDisplay = sessionBranch || '(no worktree)'
         console.log(`[API] Creating session: ${branchDisplay} (mode=${mode || 'claude'})`)
 
-        // Create session (this creates worktree)
+        // Check if an existing worktree can be reused for this branch
+        let existingWorktreePath: string | undefined = undefined
+        let reusedWorktree = false
+        if (sessionBranch) {
+          const worktreeManager = new WorktreeManager(instance.repoPath)
+          const existing = await worktreeManager.findByBranch(sessionBranch)
+          if (existing && existing.sessionId) {
+            console.log(`[API] Reusing existing worktree for branch "${sessionBranch}" at ${existing.path}`)
+            existingWorktreePath = existing.path
+            reusedWorktree = true
+          }
+        }
+
+        // Create session (this creates worktree, or reuses existing one)
         const session = await manager.createSession({
           branch: sessionBranch,
           mode: mode || 'claude',
           workingDirectory: instance.repoPath,
           repoPath: instance.repoPath,
+          existingWorktreePath,
         })
 
         // Write status file
@@ -428,6 +444,11 @@ export class WebDashboardServer {
         const sessionTmux = new TmuxRenderer({ sessionName: sessionTmuxName })
         const workDir = session.worktreePath || instance.repoPath
         sessionTmux.createPane(session.id, workDir)
+
+        // Echo reuse message if worktree was reused
+        if (reusedWorktree) {
+          sessionTmux.runInPane(session.id, `echo '✓ Worktree reused from previous session (branch: ${sessionBranch})'`)
+        }
 
         // Run AI command with environment variables (inline syntax avoids && issues with tmux)
         const cmd = (mode || 'claude') === 'shell' ? '' : (mode || 'claude')
@@ -457,6 +478,7 @@ export class WebDashboardServer {
 
         res.json({
           success: true,
+          reusedWorktree,
           session: {
             id: session.id,
             displayId: session.displayId,
