@@ -10,7 +10,7 @@ import { mkdir, rm, readdir, rename } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join, basename, relative } from 'path'
 import { homedir } from 'os'
-import type { WorktreeInfo, WorktreeConfig } from './types.js'
+import type { WorktreeInfo, WorktreeConfig, BranchSyncInfo } from './types.js'
 
 const DEFAULT_CONFIG: WorktreeConfig = {
   baseDir: join(homedir(), '.orcha', 'worktrees'),
@@ -244,6 +244,37 @@ export class WorktreeManager {
   async findByBranch(branch: string): Promise<WorktreeInfo | null> {
     const managed = await this.listManaged()
     return managed.find((w) => w.branch === branch) ?? null
+  }
+
+  /**
+   * Get sync status of a branch relative to origin.
+   * @param branch - Branch name to check
+   * @param worktreePath - Optional worktree path to run git commands in
+   */
+  async getBranchSyncStatus(branch: string, worktreePath?: string): Promise<BranchSyncInfo> {
+    const git = worktreePath ? simpleGit(worktreePath) : this.git
+
+    try {
+      // Check if branch exists on origin
+      try {
+        await git.raw(['rev-parse', '--verify', `origin/${branch}`])
+      } catch {
+        // Branch doesn't exist on origin — check if it was created from a base branch
+        const defaultBranch = await this.getDefaultBranch()
+        return { existsOnOrigin: false, ahead: 0, behind: 0, baseBranch: defaultBranch }
+      }
+
+      // Branch exists on origin — get ahead/behind count
+      const result = await git.raw(['rev-list', '--left-right', '--count', `origin/${branch}...${branch}`])
+      const parts = result.trim().split(/\s+/)
+      const behind = parseInt(parts[0], 10) || 0
+      const ahead = parseInt(parts[1], 10) || 0
+
+      return { existsOnOrigin: true, ahead, behind }
+    } catch {
+      // Fallback if anything fails (detached HEAD, etc.)
+      return { existsOnOrigin: false, ahead: 0, behind: 0 }
+    }
   }
 
   /**

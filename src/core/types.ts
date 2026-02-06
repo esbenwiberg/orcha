@@ -60,6 +60,13 @@ export interface WorktreeConfig {
   baseDir: string // Default: ~/.orcha/worktrees
 }
 
+export interface BranchSyncInfo {
+  existsOnOrigin: boolean
+  ahead: number
+  behind: number
+  baseBranch?: string // e.g. "origin/main" — only set for newly created branches
+}
+
 // ============================================================================
 // Status Types
 // ============================================================================

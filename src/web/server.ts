@@ -22,7 +22,7 @@ import { SessionManager } from '../core/session-manager.js'
 import { WorktreeManager } from '../core/worktree-manager.js'
 import { TmuxRenderer } from '../cli/tmux-renderer.js'
 import { getProvider, parseRemoteUrl, detectProvider } from '../core/vcs-provider.js'
-import type { RepoInfo } from '../core/types.js'
+import type { RepoInfo, BranchSyncInfo } from '../core/types.js'
 import { getActions, getAction, createAction, updateAction, deleteAction, executeAction } from '../core/actions-manager.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -414,8 +414,8 @@ export class WebDashboardServer {
         // Check if an existing worktree can be reused for this branch
         let existingWorktreePath: string | undefined = undefined
         let reusedWorktree = false
-        if (sessionBranch) {
-          const worktreeManager = new WorktreeManager(instance.repoPath)
+        const worktreeManager = sessionBranch ? new WorktreeManager(instance.repoPath) : null
+        if (sessionBranch && worktreeManager) {
           const existing = await worktreeManager.findByBranch(sessionBranch)
           if (existing && existing.sessionId) {
             console.log(`[API] Reusing existing worktree for branch "${sessionBranch}" at ${existing.path}`)
@@ -445,9 +445,53 @@ export class WebDashboardServer {
         const workDir = session.worktreePath || instance.repoPath
         sessionTmux.createPane(session.id, workDir)
 
-        // Echo reuse message if worktree was reused
-        if (reusedWorktree) {
-          sessionTmux.runInPane(session.id, `echo '✓ Worktree reused from previous session (branch: ${sessionBranch})'`)
+        // Gather branch sync info and echo session info block
+        let branchInfo: BranchSyncInfo | undefined
+        if (sessionBranch && worktreeManager) {
+          try {
+            branchInfo = await worktreeManager.getBranchSyncStatus(sessionBranch, workDir)
+          } catch {
+            // Non-critical — skip info if git queries fail
+          }
+        }
+
+        // Build and echo info block into the terminal pane
+        if (sessionBranch) {
+          // Sanitize strings for safe shell interpolation (strip single quotes)
+          const safe = (s: string) => s.replace(/'/g, '')
+
+          const line = '─'.repeat(40)
+          const displayNum = `Session #${session.displayId}`
+          const header = `─── ${displayNum} ${line.slice(displayNum.length + 5)}`
+
+          // Branch line
+          let branchLine = `  Branch:    ${safe(sessionBranch)}`
+          if (branchInfo && !branchInfo.existsOnOrigin && branchInfo.baseBranch) {
+            branchLine += ` (new, from ${safe(branchInfo.baseBranch)})`
+          }
+
+          // Worktree line
+          let worktreeLine = `  Worktree:  ${safe(session.worktreePath || workDir)}`
+          if (reusedWorktree) {
+            worktreeLine += ' (reused)'
+          }
+
+          // Origin line
+          let originLine = '  Origin:    '
+          if (!branchInfo || !branchInfo.existsOnOrigin) {
+            originLine += 'branch not on remote'
+          } else if (branchInfo.ahead === 0 && branchInfo.behind === 0) {
+            originLine += 'up to date with origin'
+          } else {
+            const parts: string[] = []
+            if (branchInfo.ahead > 0) parts.push(`${branchInfo.ahead} ahead`)
+            if (branchInfo.behind > 0) parts.push(`${branchInfo.behind} behind`)
+            originLine += parts.join(', ')
+          }
+
+          const footer = line
+          const infoBlock = `${header}\\n${branchLine}\\n${worktreeLine}\\n${originLine}\\n${footer}`
+          sessionTmux.runInPane(session.id, `printf '%b\\n' '${infoBlock}'`)
         }
 
         // Run AI command with environment variables (inline syntax avoids && issues with tmux)
@@ -479,6 +523,7 @@ export class WebDashboardServer {
         res.json({
           success: true,
           reusedWorktree,
+          branchInfo,
           session: {
             id: session.id,
             displayId: session.displayId,

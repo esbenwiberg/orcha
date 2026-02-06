@@ -2540,8 +2540,28 @@ async function createSession(instanceId, branch, mode, useWorktree = true) {
   }
 
   const data = await res.json();
-  if (data.reusedWorktree) {
-    showToast(`Worktree reused for branch "${data.session.branch}"`, 'success');
+  // Show informative toast based on session creation result
+  if (data.session?.branch) {
+    const parts = [];
+    if (data.reusedWorktree) {
+      parts.push('worktree reused');
+    }
+    if (data.branchInfo) {
+      if (!data.branchInfo.existsOnOrigin) {
+        parts.push('new branch');
+      } else {
+        if (data.branchInfo.behind > 0) {
+          parts.push(`${data.branchInfo.behind} behind origin`);
+        }
+        if (data.branchInfo.ahead > 0) {
+          parts.push(`${data.branchInfo.ahead} ahead of origin`);
+        }
+      }
+    }
+    const suffix = parts.length > 0 ? ` (${parts.join(', ')})` : '';
+    showToast(`Session created on ${data.session.branch}${suffix}`, 'success');
+  } else if (data.session) {
+    showToast('Session created', 'success');
   }
   return data;
 }
