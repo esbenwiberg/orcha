@@ -454,6 +454,38 @@ body {
   white-space: nowrap;
 }
 
+/* Server controls */
+.server-controls {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.server-restart-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px dashed var(--border-color);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.server-restart-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-orange);
+  color: var(--accent-orange);
+}
+
+.server-restart-btn .action-icon {
+  font-size: 0.9rem;
+}
+
 /* Action editor dialog */
 .action-editor-overlay {
   position: fixed;

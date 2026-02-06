@@ -1714,6 +1714,33 @@ export class WebDashboardServer {
         res.status(500).json({ error: (err as Error).message })
       }
     })
+
+    // API: Restart server (graceful)
+    this.app.post('/api/server/restart', async (_req, res) => {
+      try {
+        console.log('[API] Server restart requested')
+        res.json({ success: true, message: 'Server restarting...' })
+
+        // Give time for response to be sent
+        setTimeout(() => {
+          const { spawn } = require('child_process')
+          // Use the restart script which handles graceful shutdown
+          const restartScript = join(homedir(), 'restart-orcha-web.sh')
+          if (existsSync(restartScript)) {
+            spawn('bash', [restartScript], {
+              detached: true,
+              stdio: 'ignore',
+            }).unref()
+          } else {
+            // Fallback: just exit and let tmux restart
+            process.exit(0)
+          }
+        }, 500)
+      } catch (err) {
+        console.error('[API] Restart error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
   }
 
   private setupWebSocket(): void {

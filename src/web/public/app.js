@@ -1058,16 +1058,65 @@ async function fetchActions() {
 }
 
 /**
+ * Restart the Orcha web server
+ */
+async function restartServer() {
+  if (!confirm('Restart the Orcha web server? The page will reload automatically.')) {
+    return;
+  }
+
+  showToast('Restarting server...', 'info');
+
+  try {
+    await fetch('/api/server/restart', { method: 'POST' });
+
+    // Wait for server to restart and reload page
+    showToast('Server restarting, reconnecting...', 'info');
+    setTimeout(() => {
+      const checkServer = setInterval(async () => {
+        try {
+          const res = await fetch('/api/status', { method: 'GET' });
+          if (res.ok) {
+            clearInterval(checkServer);
+            window.location.reload();
+          }
+        } catch {
+          // Server still restarting
+        }
+      }, 1000);
+
+      // Give up after 30 seconds
+      setTimeout(() => {
+        clearInterval(checkServer);
+        showToast('Server may have restarted. Please refresh manually.', 'warning');
+      }, 30000);
+    }, 1000);
+  } catch (err) {
+    showToast(`Restart failed: ${err.message}`, 'error');
+  }
+}
+
+/**
  * Render action bar with custom action buttons
  */
 function renderActionBar(actions) {
   if (!actionBarEl) return;
+
+  const serverControls = `
+    <div class="server-controls">
+      <button class="server-restart-btn" onclick="restartServer()" title="Restart Orcha server">
+        <span class="action-icon">🔄</span>
+        <span class="action-name">Restart</span>
+      </button>
+    </div>
+  `;
 
   if (!actions || actions.length === 0) {
     actionBarEl.innerHTML = `
       <div class="action-bar-empty">
         <button class="action-add-btn" onclick="showActionEditorDialog()">+ Add Action</button>
       </div>
+      ${serverControls}
     `;
     return;
   }
@@ -1089,6 +1138,7 @@ function renderActionBar(actions) {
         </button>
       `).join('')}
     </div>
+    ${serverControls}
   `;
 }
 
