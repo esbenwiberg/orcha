@@ -295,13 +295,14 @@ program
   .requiredOption('-n, --count <number>', 'Number of sessions to start', parseInt)
   .option('-r, --repo <path>', 'Repository path (default: current directory)')
   .option('-b, --branches <branches>', 'Comma-separated branch names')
+  .option('-s, --source <branch>', 'Source branch to create worktrees from (e.g. release/2.2.0)')
   .option('-m, --mode <mode>', 'AI mode: claude, gemini, codex, shell', 'claude')
   .option('--main', 'Work directly on main branch (no worktree)')
   .option('--no-worktree', 'Disable automatic worktree creation')
   .option('--no-attach', 'Do not attach to tmux session after starting')
   .option('--fresh', 'Force fresh start, skipping session recovery')
   .action(async (options) => {
-    const { count, repo, branches, mode, attach, worktree, main, fresh } = options
+    const { count, repo, branches, source, mode, attach, worktree, main, fresh } = options
 
     // Validate inputs
     if (count < 1 || count > 12) {
@@ -426,6 +427,7 @@ program
         // Create session first (this creates the worktree if branch specified)
         const session = await manager.createSession({
           branch,
+          sourceBranch: source || undefined,
           mode: mode as 'claude' | 'gemini' | 'codex' | 'shell',
           workingDirectory: repoPath,
           repoPath,
@@ -1037,11 +1039,12 @@ program
   .command('add')
   .description('Add a new session to existing orcha instance')
   .option('-b, --branch <branch>', 'Branch name for the new session')
+  .option('-s, --source <branch>', 'Source branch to create worktree from (e.g. release/2.2.0)')
   .option('-m, --mode <mode>', 'AI mode: claude, gemini, codex, shell', 'claude')
   .option('-i, --instance <id>', 'Target specific instance')
   .option('--no-worktree', 'Disable automatic worktree creation')
   .action(async (options) => {
-    const { branch, mode, instance: instanceId, worktree } = options
+    const { branch, source, mode, instance: instanceId, worktree } = options
     const useWorktree = worktree !== false
 
     // Find target instance
@@ -1089,6 +1092,7 @@ program
       // Create session first (creates worktree if branch specified)
       const session = await manager.createSession({
         branch: sessionBranch,
+        sourceBranch: source || undefined,
         mode: (mode as 'claude' | 'gemini' | 'codex' | 'shell') || 'claude',
         workingDirectory: targetInstance.repoPath,
         repoPath: targetInstance.repoPath,

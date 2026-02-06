@@ -1,274 +1,130 @@
-# Blueprint: Custom Action Buttons
+# Blueprint: Multiple Source Branch Support
 
 ## Goal
 
-Add customizable action buttons to the Orcha web dashboard navbar (above stats section) that allow users to define and execute custom utility scripts (e.g., check email CLI, daily status reports, run personal tools) in new WSL sessions with a simple UI for configuration. Actions are global/personal utilities, not tied to specific repos.
+Allow sessions to branch from **any** source branch (e.g. `release/2.2.0`, `develop`), not just `origin/main` or `origin/master`. This enables workflows like spinning up hotfix branches based on release branches.
 
 ## Non-Goals
 
-- CLI-based action configuration (web UI only)
-- Complex scripting language/DSL
-- Action scheduling or automation
-- Persistent logs/history of action executions
-- Actions that modify existing sessions (only creates new sessions)
-- Multi-step workflows or action chaining
+- Per-repo persistent config files (`.orcharc`, `orcha.config.json`) — keep it runtime params for now
+- Changing the branch naming convention (`orcha/session-*`)
+- Auto-detecting "the right" source branch from context
+- PR target branch logic (already handled separately via `targetBranch` in `CreatePrOptions`)
 
 ## Acceptance Criteria
 
-- [ ] User can open action editor dialog by holding modifier key (Ctrl/Cmd) + clicking a designated area in navbar
-- [ ] Dialog allows setting: action name, icon (emoji/symbol), shell script content
-- [ ] Actions are saved to `~/.orcha/actions.json` with persistence
-- [ ] Action buttons appear in navbar above usage stats section
-- [ ] Clicking action button opens new WSL session and executes script
-- [ ] Actions are global (not tied to specific repo instances)
-- [ ] User can edit/delete existing actions
-- [ ] Visual feedback when action is triggered (toast notification)
-- [ ] Actions sync between page reloads
+- [ ] Web UI "New Session" dialog has a "Source branch" input field (defaults empty = auto-detect main/master)
+- [ ] API `POST /api/sessions` accepts optional `sourceBranch` parameter
+- [ ] CLI `orcha start` accepts `--source <branch>` flag
+- [ ] `WorktreeManager.create()` accepts optional `sourceBranch` and uses it instead of `getDefaultBranch()`
+- [ ] Session info block displays correct source (e.g. `(new, from origin/release/2.2.0)`)
+- [ ] Existing behavior unchanged when `sourceBranch` is omitted — still falls back to `origin/main` → `origin/master` → `HEAD`
+- [ ] Works with both local and remote branch refs (e.g. `release/2.2.0` resolves to `origin/release/2.2.0` if remote exists)
 
 ## Architecture
 
-### Components
-
-**Frontend (client-side)**
-- `ActionBar` component in sidebar (above usage stats)
-- `ActionEditorDialog` modal for create/edit
-- Client state management for actions array
-- Event handlers for Ctrl+click gesture
-
-**Backend (server-side)**
-- `ActionsManager` class for CRUD operations
-- REST API endpoints:
-  - `GET /api/actions` - List all actions
-  - `POST /api/actions` - Create action
-  - `PUT /api/actions/:id` - Update action
-  - `DELETE /api/actions/:id` - Delete action
-  - `POST /api/actions/:id/execute` - Execute action (creates new session)
-
-**Data Storage**
-- `~/.orcha/actions.json` - JSON file storing global action definitions
-- Each action: `{ id, name, icon, script, createdAt, updatedAt }`
-
-**Example Actions**:
-- "📧 Check Mail" → `mail-cli inbox --unread`
-- "📊 Daily Status" → `daily-report --format=summary`
-- "🔍 Search Logs" → `grep -r "ERROR" ~/logs/ | tail -20`
-- "🐳 Docker Status" → `docker ps -a`
-
 ### Data Flow
 
-1. **Load**: Page loads → fetch `/api/actions` → render action buttons
-2. **Create**: User Ctrl+clicks → dialog opens → submits → POST `/api/actions` → save to file → return action → update UI
-3. **Execute**: User clicks action → POST `/api/actions/:id/execute` → create tmux session → run script → return session info
-4. **Edit**: User Ctrl+clicks button → dialog opens (prefilled) → submits → PUT `/api/actions/:id` → update file → update UI
-5. **Delete**: User clicks delete in dialog → DELETE `/api/actions/:id` → remove from file → update UI
-
-### Key Interfaces
-
-```typescript
-interface Action {
-  id: string              // UUID
-  name: string           // Display name (max 20 chars)
-  icon: string           // Single emoji/symbol
-  script: string         // Shell script content
-  createdAt: string      // ISO timestamp
-  updatedAt: string      // ISO timestamp
-}
-
-interface ActionExecutionResult {
-  sessionId: string
-  tmuxSession: string
-  paneIndex: number
-}
+```
+User specifies source branch (UI input / CLI flag / API param)
+  ↓
+POST /api/sessions { ..., sourceBranch: "release/2.2.0" }
+  ↓
+server.ts → passes sourceBranch into SessionConfig
+  ↓
+SessionManager.createSession() → passes to WorktreeManager.create()
+  ↓
+WorktreeManager.create(sessionId, branch, sourceBranch?)
+  ↓
+If sourceBranch provided:
+  → resolve to origin ref if needed (try origin/<sourceBranch> first, then raw)
+  → git worktree add -b <branch> <path> origin/<sourceBranch>
+Else:
+  → existing getDefaultBranch() logic (origin/main → origin/master → HEAD)
+  ↓
+BranchSyncInfo.baseBranch reflects actual source used
 ```
 
-## Folder/File Layout
+### Components Modified
 
-```
-src/
-├── core/
-│   └── actions-manager.ts          # New: Action CRUD + execute
-├── web/
-│   ├── server.ts                   # Update: Add /api/actions/* endpoints
-│   └── public/
-│       ├── index.html              # Update: Add action bar placeholder
-│       ├── app.js                  # Update: Add action UI logic
-│       └── style.css               # Update: Add action button styles
-└── cli/
-    └── types.ts                    # Update: Export Action interface
+| File | Change |
+|------|--------|
+| `src/core/types.ts` | Add `sourceBranch?: string` to `SessionConfig` |
+| `src/core/worktree-manager.ts` | `create()` accepts `sourceBranch`, resolve logic |
+| `src/core/session-manager.ts` | Pass `sourceBranch` through to `worktrees.create()` |
+| `src/web/server.ts` | Accept `sourceBranch` from API, pass through |
+| `src/web/public/app.js` | Add source branch input to new-session dialog |
+| `src/cli/index.ts` | Add `--source` flag to `orcha start` |
 
-dist/                                # Mirror src/ changes
-~/.orcha/actions.json               # New: Action persistence
-```
+No new files needed. All changes are additive to existing files.
 
 ## Milestones
 
-### Milestone 1: Foundation & Storage
+### Milestone 1: Core — WorktreeManager + Types
 
-**Intent**: Set up data model, persistence layer, and basic API endpoints without UI.
+**Intent:** Thread `sourceBranch` through the core layer so worktrees branch from the right ref.
 
-**Files touched/created**:
-- `src/core/actions-manager.ts` - New class for action management
-- `src/web/server.ts` - Add GET/POST/PUT/DELETE routes
-- `~/.orcha/actions.json` - Auto-created on first use
+**Key files:**
+- `src/core/types.ts` — add `sourceBranch?: string` to `SessionConfig`
+- `src/core/worktree-manager.ts` — modify `create(sessionId, branch, sourceBranch?)`:
+  1. If `sourceBranch` provided, resolve it (try `origin/<sourceBranch>` first, then raw ref)
+  2. Validate ref exists before attempting worktree creation
+  3. Otherwise fall back to existing `getDefaultBranch()`
+  4. Use resolved ref in `git worktree add -b ...`
+- `src/core/session-manager.ts` — pass `config.sourceBranch` to `this.worktrees.create()`
 
-**Verification**:
+**Verification:**
 ```bash
-# Create action via curl
-curl -X POST http://localhost:3847/api/actions \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Test","icon":"🚀","script":"echo hello"}'
-
-# List actions
-curl http://localhost:3847/api/actions
-
-# Delete action
-curl -X DELETE http://localhost:3847/api/actions/<id>
+npx tsc --noEmit
 ```
 
-**Unknowns**:
-- What's the UX for script execution in WSL vs native? → Probe: Test spawn behavior on Windows
-- Should action sessions be added to current instance or standalone? → Probe: Check how `orcha add` attaches to existing instance
+### Milestone 2: Web API + Server
+
+**Intent:** Accept `sourceBranch` from the HTTP API and thread it to session creation.
+
+**Key files:**
+- `src/web/server.ts` — extract `sourceBranch` from request body in `POST /api/sessions`, pass to `SessionConfig`, update info block display to show actual source
+
+**Verification:**
+```bash
+npx tsc --noEmit
+```
+
+### Milestone 3: Web UI
+
+**Intent:** Add a "Source branch" input to the New Session dialog.
+
+**Key files:**
+- `src/web/public/app.js` — add input field below branch name, send `sourceBranch` in `createSession()` fetch body
+- Copy to `dist/web/public/app.js`
+
+**Verification:**
+```bash
+cp src/web/public/app.js dist/web/public/app.js
+# Manual: open web UI, verify source branch field appears, create session with release branch
+```
+
+### Milestone 4: CLI Support
+
+**Intent:** Add `--source <branch>` flag to `orcha start`.
+
+**Key files:**
+- `src/cli/index.ts` — add `.option('--source <branch>', 'Source branch to create worktrees from')`, pass to `SessionConfig`
+
+**Verification:**
+```bash
+npx tsc --noEmit
+```
+
+## Risks / Unknowns
+
+| Risk | Mitigation |
+|------|------------|
+| User types `release/2.2.0` but remote ref is `origin/release/2.2.0` | Resolve logic: try `origin/<input>` first, then raw `<input>`, then fail with clear error |
+| Source branch doesn't exist | Validate ref before `git worktree add`; fail early with descriptive message |
+| `getBranchSyncStatus()` hardcodes `getDefaultBranch()` as base | Pass actual source used; `baseBranch` already exists in `BranchSyncInfo` type |
+| PR target branch should default to source branch not main | Out of scope — note for follow-up |
 
 ---
 
-### Milestone 2: Action Bar UI (Display Only)
-
-**Intent**: Render action buttons in navbar without interaction, fetch from API.
-
-**Files touched/created**:
-- `src/web/public/index.html` - Add `<div id="action-bar">` in sidebar
-- `src/web/public/app.js` - Add `renderActionBar()`, fetch actions on load
-- `src/web/public/style.css` - Style action buttons, hover states
-- `dist/web/public/*` - Copy changes
-
-**Verification**:
-```bash
-# Manually add action to actions.json
-echo '[{"id":"1","name":"Build","icon":"🔨","script":"npm run build"}]' > ~/.orcha/actions.json
-
-# Open web dashboard, verify button appears above stats
-orcha web
-```
-
-**Visual check**: Action button shows icon + name, positioned correctly
-
----
-
-### Milestone 3: Action Editor Dialog
-
-**Intent**: Build create/edit modal with form fields for name, icon, script.
-
-**Files touched/created**:
-- `src/web/public/app.js` - Add `ActionEditorDialog` class/functions
-- `src/web/public/style.css` - Dialog styles (overlay, form, buttons)
-- `src/web/public/index.html` - Dialog template (can be JS-generated)
-- `dist/web/public/*` - Copy changes
-
-**Verification**:
-```bash
-# In browser dev console
-showActionEditorDialog() // Should open modal
-```
-
-**Interaction tests**:
-1. Click "Add Action" placeholder → dialog opens
-2. Fill form → click Save → POST request sent → dialog closes
-3. Ctrl+click existing button → dialog opens prefilled → edit → PUT request sent
-
----
-
-### Milestone 4: Action Execution
-
-**Intent**: Wire up action buttons to create new sessions and run scripts.
-
-**Files touched/created**:
-- `src/core/actions-manager.ts` - Add `executeAction()` method
-- `src/web/server.ts` - Add POST `/api/actions/:id/execute` endpoint
-- `src/web/public/app.js` - Add click handler for action buttons
-- `dist/` - Rebuild TypeScript
-
-**Verification**:
-```bash
-# Create action via UI
-# Click action button
-# Verify: new tmux session created with script running
-tmux ls | grep orcha-action-
-
-# Check session appears in dashboard
-# Verify: script output visible in terminal
-```
-
-**Edge cases**:
-- Script with syntax errors → session should show error
-- Long-running script → session stays active
-- Script that exits immediately → session should close or stay idle
-
----
-
-### Milestone 5: Delete & Polish
-
-**Intent**: Add delete functionality, keyboard shortcuts, visual feedback.
-
-**Files touched/created**:
-- `src/web/public/app.js` - Add delete button in dialog, Ctrl+click gesture detection
-- `src/web/public/style.css` - Delete button styles, toast notifications
-- `dist/web/public/*` - Copy changes
-
-**Verification**:
-```bash
-# UI tests:
-# 1. Ctrl+click action → edit dialog opens
-# 2. Click delete → confirmation → action removed from UI and file
-# 3. Click action button → toast appears "Running [action name]..."
-# 4. Reload page → actions persist
-```
-
-**UX checks**:
-- Ctrl+click doesn't trigger action execution
-- Delete requires confirmation
-- Toast auto-dismisses after 3s
-- Action bar scrolls if many actions
-
-## Risks & Unknowns
-
-### Risk 1: Script execution environment
-**Question**: Should scripts run in WSL specifically, or respect the current environment?
-**Probe**: Check how `orcha start` spawns sessions, replicate that pattern
-**Mitigation**: Use same spawn logic as session creation, expose `--wsl` flag if needed
-
-### Risk 2: Action session isolation
-**Question**: Should action-spawned sessions be part of the current orcha instance or standalone?
-**Probe**: Review how `orcha add` works for adding sessions to running instances
-**Decision**: Standalone tmux sessions (simpler, no repo dependency), can integrate with instance in future
-
-### Risk 3: Script security
-**Question**: Do we need sandboxing or warnings for destructive scripts?
-**Probe**: Check if Claude Code has script execution warnings
-**Mitigation**: Show script content in preview before execution, add "Are you sure?" for first run
-
-### Risk 4: Icon picker UX
-**Question**: Simple text input vs full emoji picker?
-**Probe**: Check if users prefer typing emoji or selecting from picker
-**Decision**: Start with text input (user pastes emoji), iterate based on feedback
-
-### Risk 5: Action name length
-**Question**: What's the max length before UI breaks?
-**Probe**: Test with long names in narrow sidebar
-**Mitigation**: Truncate at 20 chars with ellipsis, show full name on hover
-
-### Risk 6: Script multiline editing
-**Question**: Is textarea sufficient or do we need code editor?
-**Probe**: Test textarea with realistic scripts (10-20 lines)
-**Decision**: Use `<textarea>` with monospace font, add syntax highlighting in future iteration
-
----
-
-## Next Steps
-
-Next: `/probe 'Milestone 1: Foundation & Storage'`
-
-**Probe checklist**:
-1. Examine `src/core/session-manager.ts` to understand session creation pattern
-2. Check `src/core/instance-registry.ts` for global vs per-instance data storage
-3. Review existing API patterns in `src/web/server.ts` for consistency
-4. Verify `~/.orcha/` directory structure and permissions
+Next: /probe 'Milestone 1: Core — WorktreeManager + Types'

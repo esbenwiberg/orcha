@@ -363,11 +363,12 @@ export class WebDashboardServer {
     // API: Create a new session
     this.app.post('/api/sessions', async (req, res) => {
       try {
-        const { instanceId, branch, mode, useWorktree } = req.body as {
+        const { instanceId, branch, mode, useWorktree, sourceBranch } = req.body as {
           instanceId: string
           branch?: string
           mode?: 'claude' | 'gemini' | 'codex' | 'shell'
           useWorktree?: boolean
+          sourceBranch?: string
         }
 
         if (!instanceId) {
@@ -425,8 +426,10 @@ export class WebDashboardServer {
         }
 
         // Create session (this creates worktree, or reuses existing one)
+        const sessionSourceBranch = sourceBranch?.trim() || undefined
         const session = await manager.createSession({
           branch: sessionBranch,
+          sourceBranch: sessionSourceBranch,
           mode: mode || 'claude',
           workingDirectory: instance.repoPath,
           repoPath: instance.repoPath,
@@ -449,7 +452,7 @@ export class WebDashboardServer {
         let branchInfo: BranchSyncInfo | undefined
         if (sessionBranch && worktreeManager) {
           try {
-            branchInfo = await worktreeManager.getBranchSyncStatus(sessionBranch, workDir)
+            branchInfo = await worktreeManager.getBranchSyncStatus(sessionBranch, workDir, sessionSourceBranch)
           } catch {
             // Non-critical — skip info if git queries fail
           }

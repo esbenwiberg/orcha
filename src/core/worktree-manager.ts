@@ -47,9 +47,10 @@ export class WorktreeManager {
    * Create a new worktree for a session
    * @param sessionId - Unique session identifier
    * @param branch - Branch name (will be created if doesn't exist)
+   * @param sourceBranch - Optional base branch to create from (e.g. "release/2.2.0")
    * @returns Path to the created worktree
    */
-  async create(sessionId: string, branch: string): Promise<string> {
+  async create(sessionId: string, branch: string, sourceBranch?: string): Promise<string> {
     const worktreePath = this.getWorktreePath(sessionId)
 
     // Ensure parent directory exists
@@ -79,12 +80,40 @@ export class WorktreeManager {
       // Use existing branch
       await this.git.raw(['worktree', 'add', relativeWorktreePath, branch])
     } else {
-      // Create new branch from origin's default branch (main or master)
-      const defaultBranch = await this.getDefaultBranch()
-      await this.git.raw(['worktree', 'add', '-b', branch, relativeWorktreePath, defaultBranch])
+      // Create new branch — use sourceBranch if provided, otherwise default
+      const baseBranch = sourceBranch
+        ? await this.resolveSourceBranch(sourceBranch)
+        : await this.getDefaultBranch()
+      await this.git.raw(['worktree', 'add', '-b', branch, relativeWorktreePath, baseBranch])
     }
 
     return worktreePath
+  }
+
+  /**
+   * Resolve a user-provided source branch to a valid git ref.
+   * Tries origin/<branch> first, then the raw ref.
+   * Throws if the ref cannot be found.
+   */
+  private async resolveSourceBranch(sourceBranch: string): Promise<string> {
+    // If it already starts with origin/, use as-is after validation
+    const candidates = sourceBranch.startsWith('origin/')
+      ? [sourceBranch]
+      : [`origin/${sourceBranch}`, sourceBranch]
+
+    for (const ref of candidates) {
+      try {
+        await this.git.raw(['rev-parse', '--verify', ref])
+        return ref
+      } catch {
+        // Try next candidate
+      }
+    }
+
+    throw new Error(
+      `Source branch "${sourceBranch}" not found. ` +
+      `Tried: ${candidates.join(', ')}. Run "git fetch origin" and verify the branch exists.`
+    )
   }
 
   /**
@@ -250,8 +279,9 @@ export class WorktreeManager {
    * Get sync status of a branch relative to origin.
    * @param branch - Branch name to check
    * @param worktreePath - Optional worktree path to run git commands in
+   * @param sourceBranch - Optional source branch the worktree was created from
    */
-  async getBranchSyncStatus(branch: string, worktreePath?: string): Promise<BranchSyncInfo> {
+  async getBranchSyncStatus(branch: string, worktreePath?: string, sourceBranch?: string): Promise<BranchSyncInfo> {
     const git = worktreePath ? simpleGit(worktreePath) : this.git
 
     try {
@@ -259,9 +289,11 @@ export class WorktreeManager {
       try {
         await git.raw(['rev-parse', '--verify', `origin/${branch}`])
       } catch {
-        // Branch doesn't exist on origin — check if it was created from a base branch
-        const defaultBranch = await this.getDefaultBranch()
-        return { existsOnOrigin: false, ahead: 0, behind: 0, baseBranch: defaultBranch }
+        // Branch doesn't exist on origin — report the actual base branch used
+        const baseBranch = sourceBranch
+          ? await this.resolveSourceBranch(sourceBranch).catch(() => this.getDefaultBranch())
+          : await this.getDefaultBranch()
+        return { existsOnOrigin: false, ahead: 0, behind: 0, baseBranch }
       }
 
       // Branch exists on origin — get ahead/behind count

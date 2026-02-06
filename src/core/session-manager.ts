@@ -107,7 +107,7 @@ export class SessionManager extends EventEmitter {
         session.worktreePath = config.existingWorktreePath
       } else if (config.branch) {
         session.status.message = 'Creating worktree...'
-        session.worktreePath = await this.worktrees.create(id, config.branch)
+        session.worktreePath = await this.worktrees.create(id, config.branch, config.sourceBranch)
       }
 
       // Spawn the AI process

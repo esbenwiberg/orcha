@@ -38,6 +38,7 @@ export interface Session {
 
 export interface SessionConfig {
   branch?: string
+  sourceBranch?: string // Base branch to create worktree from (e.g. "release/2.2.0")
   mode?: SessionMode
   workingDirectory: string
   repoPath: string
