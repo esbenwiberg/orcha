@@ -3036,59 +3036,81 @@ function initTerminal(session) {
     }
   });
 
-  // Clipboard image paste: intercept paste, upload image, type path into terminal
-  termEl.addEventListener('paste', (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
+  // Clipboard image paste: intercept Ctrl+V before xterm sends it to PTY,
+  // check clipboard for images via navigator.clipboard.read()
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type === 'keydown' && e.key === 'v' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      // Try to read clipboard for images — async, so we return false to block xterm
+      // and handle both image and text cases ourselves
+      (async () => {
+        try {
+          const clipboardItems = await navigator.clipboard.read();
+          let imageBlob = null;
+          for (const item of clipboardItems) {
+            for (const type of item.types) {
+              if (type.startsWith('image/')) {
+                imageBlob = await item.getType(type);
+                break;
+              }
+            }
+            if (imageBlob) break;
+          }
 
-    let imageItem = null;
-    for (const item of items) {
-      if (item.type.startsWith('image/')) {
-        imageItem = item;
-        break;
-      }
+          if (imageBlob) {
+            // Upload the image
+            const reader = new FileReader();
+            reader.onload = async () => {
+              try {
+                const base64 = reader.result.split(',')[1];
+                const ext = imageBlob.type.split('/')[1] || 'png';
+
+                const resp = await fetch('/api/upload-image', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ data: base64, filename: `paste.${ext}` }),
+                });
+
+                if (!resp.ok) {
+                  const err = await resp.json();
+                  showToast(`Image upload failed: ${err.error}`, 'error');
+                  return;
+                }
+
+                const { path } = await resp.json();
+
+                // Type the file path into the terminal
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: 'input', data: path }));
+                }
+
+                showToast(`Image saved: ${path}`, 'success');
+              } catch (err) {
+                showToast(`Image upload failed: ${err.message}`, 'error');
+              }
+            };
+            reader.readAsDataURL(imageBlob);
+          } else {
+            // No image — paste text normally
+            const text = await navigator.clipboard.readText();
+            if (text && ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'input', data: text }));
+            }
+          }
+        } catch (err) {
+          // Clipboard API failed — fall back to pasting text
+          try {
+            const text = await navigator.clipboard.readText();
+            if (text && ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'input', data: text }));
+            }
+          } catch {
+            // Can't access clipboard at all
+          }
+        }
+      })();
+      return false; // Block xterm from processing Ctrl+V
     }
-
-    if (!imageItem) return; // No image — let xterm.js handle text paste
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    const blob = imageItem.getAsFile();
-    if (!blob) return;
-
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        // Extract base64 data (strip "data:image/png;base64," prefix)
-        const base64 = reader.result.split(',')[1];
-        const ext = blob.type.split('/')[1] || 'png';
-
-        const resp = await fetch('/api/upload-image', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ data: base64, filename: `paste.${ext}` }),
-        });
-
-        if (!resp.ok) {
-          const err = await resp.json();
-          showToast(`Image upload failed: ${err.error}`, 'error');
-          return;
-        }
-
-        const { path } = await resp.json();
-
-        // Type the file path into the terminal
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'input', data: path }));
-        }
-
-        showToast(`Image saved: ${path}`, 'success');
-      } catch (err) {
-        showToast(`Image upload failed: ${err.message}`, 'error');
-      }
-    };
-    reader.readAsDataURL(blob);
+    return true; // Let xterm handle all other keys
   });
 
   // Store references
