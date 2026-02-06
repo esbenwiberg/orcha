@@ -1004,6 +1004,38 @@ export class WebDashboardServer {
       }
     })
 
+    // API: Git pull (from upstream tracking branch)
+    this.app.post('/api/git/pull', async (req, res) => {
+      try {
+        const { instanceId } = req.body as { instanceId: string }
+
+        if (!instanceId) {
+          res.status(400).json({ error: 'instanceId is required' })
+          return
+        }
+
+        const pullResult = await executeGit(instanceId, ['pull'])
+
+        if (pullResult.code !== 0) {
+          if (pullResult.stdout.includes('CONFLICT') || pullResult.stderr.includes('CONFLICT')) {
+            res.status(409).json({
+              error: 'Merge conflict detected. Please resolve manually in the terminal.',
+              output: pullResult.stdout,
+            })
+            return
+          }
+          res.status(500).json({ error: `Pull failed: ${pullResult.stderr || pullResult.stdout}` })
+          return
+        }
+
+        console.log(`[API] Git pull in ${instanceId}`)
+        res.json({ success: true, output: pullResult.stdout || 'Already up to date' })
+      } catch (err) {
+        console.error('[API] Git pull error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Fetch origin and merge main
     this.app.post('/api/git/pull-main', async (req, res) => {
       try {

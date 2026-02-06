@@ -116,7 +116,8 @@ function toggleActionsMenu(panel, session) {
   const actions = [
     { id: 'commit', label: 'Commit...', icon: '●' },
     { id: 'push', label: 'Push', icon: '↑' },
-    { id: 'pull-main', label: 'Merge origin/main', icon: '↓' },
+    { id: 'pull', label: 'Pull', icon: '↓' },
+    { id: 'pull-main', label: 'Merge origin/main', icon: '↙' },
     { id: 'create-pr', label: 'Create PR...', icon: '⎇' },
   ];
 
@@ -158,6 +159,9 @@ async function handleGitAction(action, session) {
       break;
     case 'push':
       await handleGitPush(instanceId);
+      break;
+    case 'pull':
+      await handleGitPull(instanceId);
       break;
     case 'pull-main':
       await handleGitPullMain(instanceId);
@@ -285,6 +289,30 @@ function showCommitDialog(instanceId) {
 
   document.body.appendChild(overlay);
   messageInput.focus();
+}
+
+/**
+ * Handle git pull (from upstream tracking branch)
+ */
+async function handleGitPull(instanceId) {
+  if (!confirm('Pull from origin?')) return;
+
+  showToast('Pulling...', 'info');
+
+  try {
+    const res = await fetch('/api/git/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instanceId }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Pull failed');
+
+    showToast('Pull successful', 'success');
+  } catch (err) {
+    showToast(`Pull failed: ${err.message}`, 'error');
+  }
 }
 
 /**
