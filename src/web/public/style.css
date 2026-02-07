@@ -643,6 +643,65 @@ body {
   color: var(--text-muted);
 }
 
+/* VM Health widget */
+#vm-health {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+#vm-health:empty {
+  display: none;
+}
+
+.health-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.health-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.health-row-label {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  width: 30px;
+  flex-shrink: 0;
+}
+
+.health-bar-track {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-primary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.health-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease, background 0.5s ease;
+}
+
+.health-bar-fill.green { background: var(--status-done); }
+.health-bar-fill.yellow { background: var(--status-working); }
+.health-bar-fill.red { background: var(--status-error); }
+
+.health-percent {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  width: 32px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
 #summary {
   display: flex;
   gap: 12px;

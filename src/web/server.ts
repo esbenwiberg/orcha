@@ -10,7 +10,7 @@ import { createServer } from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 import * as pty from 'node-pty'
 import { join, dirname, resolve, isAbsolute } from 'path'
-import { homedir } from 'os'
+import { homedir, cpus, totalmem, freemem, uptime, loadavg } from 'os'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
 import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'fs'
@@ -117,6 +117,32 @@ export class WebDashboardServer {
       try {
         const usage = await this.getClaudeUsage()
         res.json(usage)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Get VM health (CPU, memory, uptime)
+    this.app.get('/api/health', (_req, res) => {
+      try {
+        const cpuCount = cpus().length
+        const load = loadavg()
+        const cpuPercent = Math.min(Math.round((load[0] / cpuCount) * 1000) / 10, 100)
+        const memTotalBytes = totalmem()
+        const memFreeBytes = freemem()
+        const memUsedBytes = memTotalBytes - memFreeBytes
+        const memTotal = Math.round((memTotalBytes / (1024 ** 3)) * 10) / 10
+        const memUsed = Math.round((memUsedBytes / (1024 ** 3)) * 10) / 10
+        const memPercent = Math.round((memUsedBytes / memTotalBytes) * 1000) / 10
+
+        res.json({
+          cpu: cpuPercent,
+          memUsed,
+          memTotal,
+          memPercent,
+          uptime: Math.round(uptime()),
+          loadAvg: load.map(v => Math.round(v * 10) / 10),
+        })
       } catch (err) {
         res.status(500).json({ error: (err as Error).message })
       }

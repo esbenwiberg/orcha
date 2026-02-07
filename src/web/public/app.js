@@ -941,6 +941,7 @@ function openFileManager(instanceId, sessionId) {
 const terminalGrid = document.getElementById('terminal-grid');
 const summaryEl = document.getElementById('summary');
 const usageStatsEl = document.getElementById('usage-stats');
+const vmHealthEl = document.getElementById('vm-health');
 
 /**
  * Fetch sessions from server
@@ -986,6 +987,54 @@ async function fetchUsage() {
     console.error('Failed to fetch usage:', err);
     return null;
   }
+}
+
+/**
+ * Fetch VM health stats from server
+ */
+async function fetchHealth() {
+  try {
+    const res = await fetch('/api/health');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error('Failed to fetch health:', err);
+    return null;
+  }
+}
+
+/**
+ * Update VM health display with CPU and memory bars
+ */
+function updateHealthDisplay(health) {
+  if (!health || !vmHealthEl || health.error) {
+    if (vmHealthEl) vmHealthEl.innerHTML = '';
+    return;
+  }
+
+  function barColor(pct) {
+    if (pct > 85) return 'red';
+    if (pct >= 60) return 'yellow';
+    return 'green';
+  }
+
+  vmHealthEl.innerHTML = `
+    <div class="health-label">VM Health</div>
+    <div class="health-row">
+      <span class="health-row-label">CPU</span>
+      <div class="health-bar-track">
+        <div class="health-bar-fill ${barColor(health.cpu)}" style="width: ${Math.min(health.cpu, 100)}%"></div>
+      </div>
+      <span class="health-percent">${health.cpu}%</span>
+    </div>
+    <div class="health-row">
+      <span class="health-row-label">MEM</span>
+      <div class="health-bar-track">
+        <div class="health-bar-fill ${barColor(health.memPercent)}" style="width: ${Math.min(health.memPercent, 100)}%"></div>
+      </div>
+      <span class="health-percent">${health.memPercent}%</span>
+    </div>
+  `;
 }
 
 /**
@@ -3715,11 +3764,12 @@ function applyGridLayout(count) {
  */
 async function render() {
   // Fetch sessions, instances, usage, and actions in parallel
-  const [{ sessions, summary }, instances, usage, actions] = await Promise.all([
+  const [{ sessions, summary }, instances, usage, actions, health] = await Promise.all([
     fetchSessions(),
     fetchInstances(),
     fetchUsage(),
     fetchActions(),
+    fetchHealth(),
   ]);
 
   // Store all sessions (for sidebar)
@@ -3737,6 +3787,7 @@ async function render() {
   updateSummary(summary);
   renderActionBar(actions);
   updateUsageDisplay(usage);
+  updateHealthDisplay(health);
 
   if (tmuxSessions.length === 0) {
     showEmptyState();

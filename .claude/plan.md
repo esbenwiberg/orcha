@@ -1,130 +1,148 @@
-# Blueprint: Multiple Source Branch Support
+# Blueprint: VM Health Monitoring
 
 ## Goal
 
-Allow sessions to branch from **any** source branch (e.g. `release/2.2.0`, `develop`), not just `origin/main` or `origin/master`. This enables workflows like spinning up hotfix branches based on release branches.
+Add CPU and memory monitoring to the Orcha dashboard so users can see when their VM is under stress and anticipate crashes before they happen. The health data displays in the sidebar alongside existing usage stats.
 
 ## Non-Goals
 
-- Per-repo persistent config files (`.orcharc`, `orcha.config.json`) — keep it runtime params for now
-- Changing the branch naming convention (`orcha/session-*`)
-- Auto-detecting "the right" source branch from context
-- PR target branch logic (already handled separately via `targetBranch` in `CreatePrOptions`)
+- **Disk I/O monitoring** - out of scope for now, can be added later
+- **Alerting / notifications** - no email/slack alerts, just visual indicators
+- **Historical data / graphs** - no time-series storage, just current snapshot
+- **Per-session resource usage** - tracking total VM health, not per-process
+- **Network monitoring** - not needed for the crash-detection use case
 
 ## Acceptance Criteria
 
-- [ ] Web UI "New Session" dialog has a "Source branch" input field (defaults empty = auto-detect main/master)
-- [ ] API `POST /api/sessions` accepts optional `sourceBranch` parameter
-- [ ] CLI `orcha start` accepts `--source <branch>` flag
-- [ ] `WorktreeManager.create()` accepts optional `sourceBranch` and uses it instead of `getDefaultBranch()`
-- [ ] Session info block displays correct source (e.g. `(new, from origin/release/2.2.0)`)
-- [ ] Existing behavior unchanged when `sourceBranch` is omitted — still falls back to `origin/main` → `origin/master` → `HEAD`
-- [ ] Works with both local and remote branch refs (e.g. `release/2.2.0` resolves to `origin/release/2.2.0` if remote exists)
+- [ ] New `GET /api/health` endpoint returns current CPU %, memory used/total (GB), and uptime
+- [ ] Sidebar shows a compact health widget below the usage stats area
+- [ ] CPU and memory show as labeled progress bars with percentage
+- [ ] Bars change color: green (<60%), yellow (60-85%), red (>85%)
+- [ ] Health data refreshes on the same 3-second polling cycle as sessions
+- [ ] Zero new dependencies — uses Node.js `os` module only
+- [ ] TypeScript compiles cleanly, no regressions
 
 ## Architecture
 
 ### Data Flow
 
 ```
-User specifies source branch (UI input / CLI flag / API param)
-  ↓
-POST /api/sessions { ..., sourceBranch: "release/2.2.0" }
-  ↓
-server.ts → passes sourceBranch into SessionConfig
-  ↓
-SessionManager.createSession() → passes to WorktreeManager.create()
-  ↓
-WorktreeManager.create(sessionId, branch, sourceBranch?)
-  ↓
-If sourceBranch provided:
-  → resolve to origin ref if needed (try origin/<sourceBranch> first, then raw)
-  → git worktree add -b <branch> <path> origin/<sourceBranch>
-Else:
-  → existing getDefaultBranch() logic (origin/main → origin/master → HEAD)
-  ↓
-BranchSyncInfo.baseBranch reflects actual source used
+Node.js os module → GET /api/health → Frontend fetch (3s poll) → Sidebar widget
 ```
 
-### Components Modified
+### Components
 
-| File | Change |
-|------|--------|
-| `src/core/types.ts` | Add `sourceBranch?: string` to `SessionConfig` |
-| `src/core/worktree-manager.ts` | `create()` accepts `sourceBranch`, resolve logic |
-| `src/core/session-manager.ts` | Pass `sourceBranch` through to `worktrees.create()` |
-| `src/web/server.ts` | Accept `sourceBranch` from API, pass through |
-| `src/web/public/app.js` | Add source branch input to new-session dialog |
-| `src/cli/index.ts` | Add `--source` flag to `orcha start` |
+1. **Backend** (`server.ts`): New `/api/health` GET endpoint
+   - Uses `os.cpus()`, `os.totalmem()`, `os.freemem()`, `os.uptime()`, `os.loadavg()`
+   - Returns JSON with cpu %, mem used/total, uptime
+   - CPU calculated from 1-minute load average relative to CPU count (simple, no state needed)
 
-No new files needed. All changes are additive to existing files.
+2. **Frontend** (`app.js`):
+   - New `fetchHealth()` function alongside existing `fetchUsage()`
+   - New `updateHealthDisplay(health)` function renders widget into a new `#vm-health` div
+   - Added to the parallel `Promise.all` in `render()`
+
+3. **HTML** (`index.html`): New `<div id="vm-health"></div>` in sidebar footer
+
+4. **CSS** (`style.css`): Styles for health bars and widget
+
+### API Response Shape
+
+```json
+{
+  "cpu": 42.5,
+  "memUsed": 6.2,
+  "memTotal": 16.0,
+  "memPercent": 38.8,
+  "uptime": 86400,
+  "loadAvg": [1.2, 0.8, 0.6]
+}
+```
+
+## File Layout (Key Changes)
+
+```
+src/web/server.ts          # Add /api/health endpoint + os import
+src/web/public/index.html  # Add #vm-health div in sidebar footer
+src/web/public/app.js      # Add fetchHealth(), updateHealthDisplay(), integrate into render()
+src/web/public/style.css   # Add health widget styles
+```
+
+Plus copies to `dist/web/public/` per CLAUDE.md convention.
 
 ## Milestones
 
-### Milestone 1: Core — WorktreeManager + Types
+### Milestone 1: Backend `/api/health` Endpoint
 
-**Intent:** Thread `sourceBranch` through the core layer so worktrees branch from the right ref.
+**Intent:** Expose system health data via REST API.
 
 **Key files:**
-- `src/core/types.ts` — add `sourceBranch?: string` to `SessionConfig`
-- `src/core/worktree-manager.ts` — modify `create(sessionId, branch, sourceBranch?)`:
-  1. If `sourceBranch` provided, resolve it (try `origin/<sourceBranch>` first, then raw ref)
-  2. Validate ref exists before attempting worktree creation
-  3. Otherwise fall back to existing `getDefaultBranch()`
-  4. Use resolved ref in `git worktree add -b ...`
-- `src/core/session-manager.ts` — pass `config.sourceBranch` to `this.worktrees.create()`
+- `src/web/server.ts` — add endpoint + `os` import
+
+**Implementation:**
+- `os` module is already partially imported (`homedir`). Add `cpus`, `totalmem`, `freemem`, `uptime` as named imports.
+- Add new `GET /api/health` route near existing `/api/usage`
+- CPU % derived from 1-minute load average / CPU count × 100 (capped at 100)
+- Memory: `totalmem() - freemem()` for used, `totalmem()` for total
+- All values rounded to 1 decimal
 
 **Verification:**
 ```bash
-npx tsc --noEmit
+npm run build
+curl http://localhost:3000/api/health
 ```
 
-### Milestone 2: Web API + Server
+### Milestone 2: Frontend Health Widget
 
-**Intent:** Accept `sourceBranch` from the HTTP API and thread it to session creation.
+**Intent:** Display health data in the sidebar with color-coded progress bars.
 
 **Key files:**
-- `src/web/server.ts` — extract `sourceBranch` from request body in `POST /api/sessions`, pass to `SessionConfig`, update info block display to show actual source
+- `src/web/public/index.html` — add `<div id="vm-health"></div>` in sidebar footer
+- `src/web/public/app.js` — add fetch + render functions, integrate into render loop
+- `src/web/public/style.css` — health widget styles
+
+**Implementation:**
+- HTML: Add `<div id="vm-health"></div>` between `#usage-stats` and `#summary`
+- JS: `fetchHealth()` fetches `/api/health`, `updateHealthDisplay()` renders two labeled bars (CPU, MEM)
+- CSS: `.health-bar-track` (background track), `.health-bar-fill` (colored fill), color classes via thresholds
+- Integrate into `render()` Promise.all alongside existing fetches
+- Widget hides itself when data unavailable (same `:empty` pattern as usage stats)
 
 **Verification:**
 ```bash
-npx tsc --noEmit
+cp src/web/public/{index.html,app.js,style.css} dist/web/public/
+# Open dashboard, verify sidebar shows CPU and MEM bars
+# Verify bars update every 3 seconds
 ```
 
-### Milestone 3: Web UI
+### Milestone 3: Build + End-to-End Verification
 
-**Intent:** Add a "Source branch" input to the New Session dialog.
-
-**Key files:**
-- `src/web/public/app.js` — add input field below branch name, send `sourceBranch` in `createSession()` fetch body
-- Copy to `dist/web/public/app.js`
+**Intent:** Ensure TypeScript compiles and dist files are synced.
 
 **Verification:**
 ```bash
-cp src/web/public/app.js dist/web/public/app.js
-# Manual: open web UI, verify source branch field appears, create session with release branch
-```
-
-### Milestone 4: CLI Support
-
-**Intent:** Add `--source <branch>` flag to `orcha start`.
-
-**Key files:**
-- `src/cli/index.ts` — add `.option('--source <branch>', 'Source branch to create worktrees from')`, pass to `SessionConfig`
-
-**Verification:**
-```bash
-npx tsc --noEmit
+npm run build
+# Restart server, open dashboard
+# Confirm health widget visible with CPU/MEM bars
+# Confirm no console errors
 ```
 
 ## Risks / Unknowns
 
 | Risk | Mitigation |
-|------|------------|
-| User types `release/2.2.0` but remote ref is `origin/release/2.2.0` | Resolve logic: try `origin/<input>` first, then raw `<input>`, then fail with clear error |
-| Source branch doesn't exist | Validate ref before `git worktree add`; fail early with descriptive message |
-| `getBranchSyncStatus()` hardcodes `getDefaultBranch()` as base | Pass actual source used; `baseBranch` already exists in `BranchSyncInfo` type |
-| PR target branch should default to source branch not main | Out of scope — note for follow-up |
+|------|-----------|
+| Load average isn't "CPU %" — it's a rough proxy | Good enough for a dashboard widget. Can refine later with `/proc/stat` delta sampling if needed. |
+| WSL may report different values than native Linux | `os` module works fine on Linux/WSL. Test on actual VM. |
+| Adding to 3s poll increases API calls | Single `os.*` calls are sub-millisecond; negligible cost. |
+
+## Design Notes
+
+The health widget follows the exact same pattern as the existing usage stats widget:
+- Same `<div>` in sidebar footer
+- Same fetch-in-parallel pattern in `render()`
+- Same compact labeling style (`.usage-label` reused as `.health-label`)
+- Widget hides itself when data unavailable (same as usage stats)
 
 ---
 
-Next: /probe 'Milestone 1: Core — WorktreeManager + Types'
+Next: /probe 'Milestone 1: Backend /api/health Endpoint'
