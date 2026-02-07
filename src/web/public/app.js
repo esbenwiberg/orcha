@@ -1070,8 +1070,6 @@ function updateUsageDisplay(usage) {
     return;
   }
 
-  const days = daysSince(usage.firstSessionDate);
-
   usageStatsEl.innerHTML = `
     <div class="usage-label">All Time</div>
     <div class="usage-row">
@@ -1085,9 +1083,6 @@ function updateUsageDisplay(usage) {
     <div class="usage-row">
       <span class="usage-value">${formatNumber(usage.cacheReadTokens)}</span>
       <span class="usage-unit">cache tokens</span>
-    </div>
-    <div class="usage-row usage-days">
-      <span class="usage-unit">${days} days of Claude</span>
     </div>
   `;
 }
@@ -1151,30 +1146,16 @@ async function restartServer() {
 function renderActionBar(actions) {
   if (!actionBarEl) return;
 
-  const serverControls = `
-    <div class="server-controls">
-      <button class="server-restart-btn" onclick="restartServer()" title="Restart Orcha server">
-        <span class="action-icon">🔄</span>
-        <span class="action-name">Restart</span>
-      </button>
-    </div>
-  `;
-
   if (!actions || actions.length === 0) {
     actionBarEl.innerHTML = `
       <div class="action-bar-empty">
         <button class="action-add-btn" onclick="showActionEditorDialog()">+ Add Action</button>
       </div>
-      ${serverControls}
     `;
     return;
   }
 
   actionBarEl.innerHTML = `
-    <div class="action-bar-header">
-      <span class="usage-label">Quick Actions</span>
-      <button class="action-add-btn-small" onclick="showActionEditorDialog()" title="Add action">+</button>
-    </div>
     <div class="action-buttons">
       ${actions.map(action => `
         <button class="action-btn"
@@ -1183,11 +1164,12 @@ function renderActionBar(actions) {
                 onclick="executeAction('${action.id}', event)"
                 oncontextmenu="editAction('${action.id}', event); return false;">
           <span class="action-icon">${escapeHtml(action.icon)}</span>
-          <span class="action-name">${escapeHtml(action.name)}</span>
         </button>
       `).join('')}
+      <button class="action-btn action-add-btn-inline" onclick="showActionEditorDialog()" title="Add action">
+        <span class="action-icon">+</span>
+      </button>
     </div>
-    ${serverControls}
   `;
 }
 
@@ -3552,63 +3534,9 @@ function updateSidebar(tmuxSessions, instances = []) {
     }
   }
 
-  // Render orcha-actions at the bottom with separator
+  // Render orcha-actions at the bottom (no separator or repo-like header)
   if (actionsInstance) {
-    // Add separator
-    const separator = document.createElement('div');
-    separator.className = 'actions-separator';
-    separator.innerHTML = '<span>Quick Actions</span>';
-    sessionList.appendChild(separator);
-
-    // Render actions instance
-    const instanceId = 'orcha-actions';
     const instanceSessions = actionsInstance;
-    const providerType = getProviderType(instanceId);
-
-    // Instance header container
-    const headerContainer = document.createElement('div');
-    headerContainer.className = 'instance-header-container';
-
-    // Instance header (clickable to filter)
-    const header = document.createElement('div');
-    header.className = 'instance-header';
-    const providerBadge = getProviderBadge(providerType);
-    const repoName = 'Actions';
-    header.innerHTML = providerBadge + '<span class="instance-name">' + repoName + '</span>';
-    header.title = 'Click to show only actions';
-    header.style.cursor = 'pointer';
-    header.addEventListener('click', () => filterByInstance(instanceId));
-
-    // No batch button for actions
-    const batchBtn = document.createElement('button');
-    batchBtn.className = 'batch-issues-btn';
-    batchBtn.innerHTML = '⚡';
-    batchBtn.disabled = true;
-    batchBtn.style.opacity = '0.1';
-    batchBtn.title = 'Not applicable to actions';
-
-    // No add button for actions (actions are created via action bar)
-    const addBtn = document.createElement('button');
-    addBtn.className = 'add-session-btn';
-    addBtn.innerHTML = '+';
-    addBtn.disabled = true;
-    addBtn.style.opacity = '0.1';
-    addBtn.title = 'Actions are created via Quick Actions bar';
-
-    headerContainer.appendChild(header);
-    headerContainer.appendChild(batchBtn);
-    headerContainer.appendChild(addBtn);
-
-    // No remove button for actions (it's a special instance)
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'remove-instance-btn';
-    removeBtn.innerHTML = '×';
-    removeBtn.disabled = true;
-    removeBtn.style.opacity = '0.1';
-    removeBtn.title = 'Cannot remove actions instance';
-    headerContainer.appendChild(removeBtn);
-
-    sessionList.appendChild(headerContainer);
 
     // Render action sessions
     for (const session of instanceSessions) {
@@ -3691,7 +3619,9 @@ function updateSummary(summary) {
       <div class="summary-dot ${item.state}" style="background: var(--status-${item.state})"></div>
       <span>${item.count}</span>
     </div>
-  `).join('');
+  `).join('') + `
+    <button class="summary-restart-btn" onclick="restartServer()" title="Restart Orcha server">🔄</button>
+  `;
 }
 
 /**

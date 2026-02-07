@@ -388,15 +388,16 @@ body {
 
 .action-buttons {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
 .action-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  justify-content: center;
+  padding: 6px 8px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   border-radius: 4px;
@@ -404,13 +405,11 @@ body {
   font-size: 0.75rem;
   cursor: pointer;
   transition: all 0.15s ease;
-  text-align: left;
 }
 
 .action-btn:hover {
   background: var(--bg-secondary);
   border-color: var(--accent-purple);
-  transform: translateX(2px);
 }
 
 .action-icon {
@@ -419,44 +418,6 @@ body {
   flex-shrink: 0;
 }
 
-.action-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Server controls */
-.server-controls {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-color);
-}
-
-.server-restart-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 10px;
-  background: transparent;
-  border: 1px dashed var(--border-color);
-  border-radius: 4px;
-  color: var(--text-secondary);
-  font-size: 0.7rem;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.server-restart-btn:hover {
-  background: var(--bg-tertiary);
-  border-color: var(--accent-orange);
-  color: var(--accent-orange);
-}
-
-.server-restart-btn .action-icon {
-  font-size: 0.9rem;
-}
 
 /* Action editor dialog */
 .action-editor-overlay {
@@ -626,12 +587,6 @@ body {
   margin-bottom: 2px;
 }
 
-.usage-row.usage-days {
-  margin-top: 8px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-color);
-}
-
 .usage-value {
   font-size: 1.1rem;
   font-weight: 600;
@@ -706,6 +661,7 @@ body {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .summary-item {
@@ -718,6 +674,24 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+}
+
+.summary-restart-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  margin-left: auto;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.summary-restart-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
 }
 
 /* Terminal grid */
