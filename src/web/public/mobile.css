@@ -1,0 +1,337 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-primary: #0d0d0d;
+  --bg-secondary: #1a1a1a;
+  --bg-tertiary: #252525;
+  --text-primary: #e0e0e0;
+  --text-secondary: #888;
+  --accent-purple: #9b59b6;
+  --accent-blue: #3498db;
+  --border-color: #333;
+  --state-working: #f1c40f;
+  --state-waiting: #e67e22;
+  --state-idle: #7f8c8d;
+  --state-done: #2ecc71;
+  --state-error: #e74c3c;
+  --state-initializing: #7f8c8d;
+}
+
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  height: 100dvh;
+}
+
+/* Header */
+#header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.header-logo {
+  width: 28px;
+  height: 28px;
+}
+
+.header-title {
+  font-size: 18px;
+  font-weight: 600;
+  flex: 1;
+}
+
+.header-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 20px;
+  padding: 8px;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.header-btn:active {
+  background: var(--bg-tertiary);
+}
+
+.header-btn.active {
+  color: var(--accent-purple);
+}
+
+/* Session info bar */
+#session-info {
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+#session-info:empty {
+  display: none;
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.info-name {
+  font-size: 14px;
+  font-weight: 600;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.info-message {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Status dot */
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.working { background: var(--state-working); animation: pulse 2s infinite; }
+.status-dot.waiting { background: var(--state-waiting); animation: pulse 1.5s infinite; }
+.status-dot.idle, .status-dot.initializing { background: var(--state-idle); }
+.status-dot.done { background: var(--state-done); }
+.status-dot.error { background: var(--state-error); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* State badge */
+.card-state {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.card-state.working { background: rgba(241, 196, 15, 0.2); color: var(--state-working); }
+.card-state.waiting { background: rgba(230, 126, 34, 0.2); color: var(--state-waiting); }
+.card-state.idle, .card-state.initializing { background: rgba(127, 140, 141, 0.2); color: var(--state-idle); }
+.card-state.done { background: rgba(46, 204, 113, 0.2); color: var(--state-done); }
+.card-state.error { background: rgba(231, 76, 60, 0.2); color: var(--state-error); }
+
+/* Terminal container */
+#terminal-container {
+  flex: 1;
+  overflow: hidden;
+  background: #0d0d0d;
+}
+
+/* Make xterm fill its container */
+#terminal-container .xterm {
+  height: 100%;
+  padding: 4px;
+}
+
+/* Empty state */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 16px;
+  color: var(--text-secondary);
+}
+
+.empty-state .empty-icon {
+  font-size: 48px;
+  opacity: 0.3;
+}
+
+/* Bottom navigation */
+#bottom-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+  gap: 12px;
+  position: relative;
+}
+
+#session-dots {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 1;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.nav-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.nav-dot.active {
+  opacity: 1;
+  transform: scale(1.3);
+}
+
+.nav-dot.working { background: var(--state-working); }
+.nav-dot.waiting { background: var(--state-waiting); }
+.nav-dot.idle, .nav-dot.initializing { background: var(--state-idle); }
+.nav-dot.done { background: var(--state-done); }
+.nav-dot.error { background: var(--state-error); }
+
+/* FAB */
+.fab {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--accent-purple);
+  color: white;
+  border: none;
+  font-size: 22px;
+  font-weight: 300;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(155, 89, 182, 0.4);
+}
+
+.fab:active {
+  transform: scale(0.95);
+}
+
+/* Bottom sheet */
+.bottom-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.bottom-sheet.hidden { display: none; }
+
+.sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.sheet-content {
+  position: relative;
+  background: var(--bg-secondary);
+  border-radius: 16px 16px 0 0;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sheet-content h3 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.sheet-content label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.sheet-content select,
+.sheet-content input {
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 15px;
+  outline: none;
+}
+
+.sheet-content select:focus,
+.sheet-content input:focus {
+  border-color: var(--accent-purple);
+}
+
+.sheet-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.btn-primary, .btn-secondary {
+  flex: 1;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-primary {
+  background: var(--accent-purple);
+  color: white;
+}
+
+.btn-secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.btn-primary:active, .btn-secondary:active {
+  opacity: 0.8;
+}
+
+/* Safe area for notched phones */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  #bottom-nav {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+  .sheet-content {
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  }
+}

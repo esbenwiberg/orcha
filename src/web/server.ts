@@ -6,7 +6,7 @@
  */
 
 import express from 'express'
-import { createServer } from 'http'
+import { createServer, type IncomingMessage } from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 import * as pty from 'node-pty'
 import { join, dirname, resolve, isAbsolute } from 'path'
@@ -14,6 +14,7 @@ import { homedir, cpus, totalmem, freemem, uptime, loadavg } from 'os'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
 import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'fs'
+import type { Socket } from 'net'
 import { listInstances, getInstance, getInstanceByPath, registerInstance, unregisterInstance } from '../core/instance-registry.js'
 import { StatusMonitor, getStatusDirForInstance, migrateStatusFromLegacyPaths } from '../core/status-monitor.js'
 import { loadSessionStore, updateSessionName, saveSessionStore } from '../core/session-store.js'
@@ -24,6 +25,9 @@ import { TmuxRenderer } from '../cli/tmux-renderer.js'
 import { getProvider, parseRemoteUrl, detectProvider } from '../core/vcs-provider.js'
 import type { RepoInfo, BranchSyncInfo } from '../core/types.js'
 import { getActions, getAction, createAction, updateAction, deleteAction, executeAction } from '../core/actions-manager.js'
+import oidcPkg from 'express-openid-connect'
+const { auth, requiresAuth } = oidcPkg
+import { randomBytes } from 'crypto'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -74,9 +78,136 @@ export class WebDashboardServer {
 
   constructor(port = 3847) {
     this.port = port
-    this.wss = new WebSocketServer({ server: this.server })
+    this.wss = new WebSocketServer({ noServer: true })
+    this.setupAuth()
     this.setupRoutes()
     this.setupWebSocket()
+    this.setupUpgradeHandler()
+  }
+
+  /**
+   * Check if a request is coming from localhost (SSH tunnel)
+   */
+  private isLocalhost(req: IncomingMessage): boolean {
+    const host = req.headers.host || ''
+    return host.startsWith('localhost') || host.startsWith('127.0.0.1')
+  }
+
+  /**
+   * Setup OIDC authentication middleware (skipped for localhost)
+   */
+  private setupAuth(): void {
+    const tenantId = process.env.AZURE_TENANT_ID
+    const clientId = process.env.AZURE_CLIENT_ID
+    const clientSecret = process.env.AZURE_CLIENT_SECRET
+    const baseURL = process.env.ORCHA_BASE_URL
+
+    // Skip auth setup if env vars not configured (dev/local mode)
+    if (!tenantId || !clientId || !clientSecret || !baseURL) {
+      console.log('[Auth] OIDC not configured (missing env vars) - running without auth')
+      return
+    }
+
+    const oidcConfig = {
+      authRequired: false,
+      auth0Logout: false,
+      issuerBaseURL: `https://login.microsoftonline.com/${tenantId}/v2.0`,
+      baseURL,
+      clientID: clientId,
+      clientSecret,
+      secret: process.env.SESSION_SECRET || randomBytes(32).toString('hex'),
+      routes: {
+        login: '/auth/login',
+        logout: '/auth/logout',
+        callback: '/auth/callback',
+      },
+      session: {
+        rollingDuration: 86400,   // 24 hours rolling
+        absoluteDuration: 604800, // 7 days absolute max
+      },
+      authorizationParams: {
+        response_type: 'code',
+        scope: 'openid profile email',
+      },
+    }
+
+    this.app.use(auth(oidcConfig))
+
+    // Allowed emails (comma-separated in env var, e.g. "me@company.com,other@company.com")
+    const allowedEmails = (process.env.ALLOWED_EMAILS || '')
+      .split(',')
+      .map(e => e.trim().toLowerCase())
+      .filter(Boolean)
+
+    if (allowedEmails.length > 0) {
+      console.log(`[Auth] User allowlist enabled: ${allowedEmails.join(', ')}`)
+    }
+
+    // Protect all routes except health check, but skip for localhost
+    const authMiddleware = (req: any, res: any, next: any) => {
+      if (this.isLocalhost(req)) {
+        return next()
+      }
+      return requiresAuth()(req, res, () => {
+        // If allowlist is configured, check the user's email
+        if (allowedEmails.length > 0) {
+          const userEmail = (req.oidc?.user?.email || '').toLowerCase()
+          if (!allowedEmails.includes(userEmail)) {
+            console.warn(`[Auth] Blocked user: ${userEmail}`)
+            return res.status(403).send('Access denied. Your account is not authorized to use this application.')
+          }
+        }
+        next()
+      })
+    }
+
+    // Protect API routes (except health)
+    this.app.use('/api/sessions', authMiddleware)
+    this.app.use('/api/status', authMiddleware)
+    this.app.use('/api/usage', authMiddleware)
+    this.app.use('/api/actions', authMiddleware)
+    this.app.use('/api/instances', authMiddleware)
+    this.app.use('/api/git', authMiddleware)
+    this.app.use('/api/github', authMiddleware)
+    this.app.use('/api/batch-issues', authMiddleware)
+    this.app.use('/api/upload-image', authMiddleware)
+    this.app.use('/api/server', authMiddleware)
+
+    // Protect HTML pages (root dashboard and mobile view)
+    this.app.get('/', authMiddleware)
+    this.app.get('/index.html', authMiddleware)
+    this.app.get('/mobile', authMiddleware)
+    this.app.get('/mobile.html', authMiddleware)
+
+    console.log(`[Auth] OIDC configured with Entra ID (tenant: ${tenantId.substring(0, 8)}...)`)
+  }
+
+  /**
+   * Handle HTTP upgrade requests for WebSocket with auth
+   */
+  private setupUpgradeHandler(): void {
+    this.server.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+      // Allow localhost connections without auth (SSH tunnel)
+      if (this.isLocalhost(req)) {
+        this.wss.handleUpgrade(req, socket, head, (ws) => {
+          this.wss.emit('connection', ws, req)
+        })
+        return
+      }
+
+      // For remote connections, check for auth cookie
+      const cookies = req.headers.cookie || ''
+      if (!cookies.includes('appSession')) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+        socket.destroy()
+        return
+      }
+
+      // Cookie exists - allow the upgrade (the cookie was validated by OIDC middleware on the page load)
+      this.wss.handleUpgrade(req, socket, head, (ws) => {
+        this.wss.emit('connection', ws, req)
+      })
+    })
   }
 
   private setupRoutes(): void {
@@ -315,6 +446,84 @@ export class WebDashboardServer {
         res.json({ content, path: planPath })
       } catch (err) {
         console.error('[API] Error reading plan:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Capture terminal pane content (lightweight alternative to WebSocket PTY)
+    this.app.get('/api/sessions/:instanceId/:sessionId/capture', async (req, res) => {
+      try {
+        const { instanceId, sessionId } = req.params
+        const lines = parseInt(req.query.lines as string) || 50
+
+        const metadata = await loadSessionStore(instanceId)
+        const session = metadata.find(m => m.id === sessionId)
+
+        if (!session) {
+          res.status(404).json({ error: 'Session not found' })
+          return
+        }
+
+        const tmuxName = session.tmuxSession || `orcha-ui-${sessionId}`
+        const tmuxTarget = tmuxName.startsWith('orcha-ui-')
+          ? `${tmuxName}:0.0`
+          : `${tmuxName}:0.${session.paneIndex}`
+
+        const { spawnSync } = await import('child_process')
+        const result = spawnSync('tmux', [
+          'capture-pane', '-t', tmuxTarget, '-p', '-S', `-${lines}`
+        ], { encoding: 'utf-8', timeout: 5000 })
+
+        if (result.status !== 0) {
+          res.status(500).json({ error: 'Failed to capture pane content' })
+          return
+        }
+
+        res.json({ content: result.stdout, lines, timestamp: Date.now() })
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Send input to a session's tmux pane
+    this.app.post('/api/sessions/:instanceId/:sessionId/input', async (req, res) => {
+      try {
+        const { instanceId, sessionId } = req.params
+        const { text } = req.body as { text?: string }
+
+        if (text === undefined || text === null) {
+          res.status(400).json({ error: 'text is required' })
+          return
+        }
+
+        const metadata = await loadSessionStore(instanceId)
+        const session = metadata.find(m => m.id === sessionId)
+
+        if (!session) {
+          res.status(404).json({ error: 'Session not found' })
+          return
+        }
+
+        const tmuxName = session.tmuxSession || `orcha-ui-${sessionId}`
+        const tmuxTarget = tmuxName.startsWith('orcha-ui-')
+          ? `${tmuxName}:0.0`
+          : `${tmuxName}:0.${session.paneIndex}`
+
+        const { spawnSync } = await import('child_process')
+
+        // Escape special characters for tmux send-keys
+        const escaped = text.replace(/"/g, '\\"').replace(/\$/g, '\\$')
+        const result = spawnSync('tmux', [
+          'send-keys', '-t', tmuxTarget, escaped, 'Enter'
+        ], { encoding: 'utf-8', timeout: 5000 })
+
+        if (result.status !== 0) {
+          res.status(500).json({ error: 'Failed to send input' })
+          return
+        }
+
+        res.json({ success: true })
+      } catch (err) {
         res.status(500).json({ error: (err as Error).message })
       }
     })

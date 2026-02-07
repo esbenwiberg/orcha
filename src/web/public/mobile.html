@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#9b59b6">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Orcha Mobile</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="logo.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <link rel="stylesheet" href="mobile.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header id="header">
+      <img src="logo.png" alt="Orcha" class="header-logo">
+      <span class="header-title">Orcha</span>
+      <button id="notif-btn" class="header-btn" title="Toggle notifications">&#128276;</button>
+      <button id="refresh-btn" class="header-btn" title="Refresh">&#8635;</button>
+    </header>
+
+    <!-- Session info bar -->
+    <div id="session-info"></div>
+
+    <!-- Terminal container -->
+    <div id="terminal-container"></div>
+
+    <!-- Bottom navigation -->
+    <nav id="bottom-nav">
+      <div id="session-dots"></div>
+      <button id="create-btn" class="fab" title="Create session">+</button>
+    </nav>
+
+    <!-- Create session bottom sheet -->
+    <div id="create-sheet" class="bottom-sheet hidden">
+      <div class="sheet-backdrop"></div>
+      <div class="sheet-content">
+        <h3>New Session</h3>
+        <label>Instance
+          <select id="create-instance"></select>
+        </label>
+        <label>Branch
+          <input type="text" id="create-branch" placeholder="e.g. fix/issue-42">
+        </label>
+        <label>Mode
+          <select id="create-mode">
+            <option value="claude">Claude</option>
+            <option value="gemini">Gemini</option>
+            <option value="shell">Shell</option>
+          </select>
+        </label>
+        <div class="sheet-actions">
+          <button id="create-cancel" class="btn-secondary">Cancel</button>
+          <button id="create-submit" class="btn-primary">Create</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="mobile.js"></script>
+</body>
+</html>
