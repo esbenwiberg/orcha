@@ -789,10 +789,21 @@ export class WebDashboardServer {
             })
 
             if (cloneResult.status !== 0) {
-              const stderr = cloneResult.stderr?.toString() || 'Unknown error'
-              console.error(`[API] Clone failed:`, stderr)
-              res.status(500).json({ error: `Clone failed: ${stderr.slice(0, 200)}` })
-              return
+              const ghStderr = cloneResult.stderr?.toString() || 'Unknown error'
+              console.warn(`[API] gh clone failed (${ghStderr.slice(0, 100)}), falling back to git clone...`)
+
+              // Fall back to git clone - gh uses GraphQL which may lack org access
+              const gitResult = spawnSync('git', ['clone', cloneUrl, clonePath], {
+                stdio: 'pipe',
+                timeout: 300000,
+              })
+
+              if (gitResult.status !== 0) {
+                const stderr = gitResult.stderr?.toString() || 'Unknown error'
+                console.error(`[API] Clone failed:`, stderr)
+                res.status(500).json({ error: `Clone failed: ${stderr.slice(0, 200)}` })
+                return
+              }
             }
           } else {
             // Use git clone for Azure DevOps and other providers
