@@ -2100,7 +2100,7 @@ export class WebDashboardServer {
     // API: Approve pipeline checkpoint
     this.app.post('/api/pipelines/:id/approve', async (req, res) => {
       try {
-        const { loadPipelineRun } = await import('../pipeline/index.js')
+        const { loadPipelineRun, executeDevStage, executeGateStage, executeFixLoopStage, executeShipStage } = await import('../pipeline/index.js')
         const { approveCheckpoint } = await import('../pipeline/checkpoint.js')
         const run = await loadPipelineRun(req.params.id)
         if (!run) {
@@ -2109,10 +2109,34 @@ export class WebDashboardServer {
         }
         const updated = await approveCheckpoint(run)
         console.log(`[API] Pipeline ${run.id} approved (${run.state} -> ${updated.state})`)
-        res.json(updated)
+        res.status(202).json(updated)
+
+        // Auto-continue: kick off the next stage asynchronously
+        const continueRun = async (r: typeof updated) => {
+          let current = r
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            if (current.state === 'dev') {
+              current = await executeDevStage(current)
+            } else if (current.state === 'gate') {
+              current = await executeGateStage(current)
+            } else if (current.state === 'fix-loop') {
+              current = await executeFixLoopStage(current)
+            } else if (current.state === 'ship') {
+              current = await executeShipStage(current)
+            } else {
+              break // checkpoint, terminal, or error — stop
+            }
+          }
+        }
+        continueRun(updated).catch((err) => {
+          console.error(`[API] Pipeline ${run.id} auto-continue failed:`, (err as Error).message)
+        })
       } catch (err) {
         console.error('[API] Pipeline approve error:', err)
-        res.status(400).json({ error: (err as Error).message })
+        if (!res.headersSent) {
+          res.status(400).json({ error: (err as Error).message })
+        }
       }
     })
 
