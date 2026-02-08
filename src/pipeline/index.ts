@@ -127,6 +127,15 @@ export {
 } from './usage-tracker.js'
 export type { TokenSnapshot, StageUsage, PipelineUsage } from './usage-tracker.js'
 
+// Learning Store
+export {
+  loadLearnings,
+  appendLearning,
+  recordPipelineOutcome,
+  getRelevantHints,
+} from './learning-store.js'
+export type { PipelineOutcomeRecord, LearningHint } from './learning-store.js'
+
 // Gate Agents
 export { runTestRunner } from './gate-agents/test-runner.js'
 export { runLintRunner } from './gate-agents/lint-runner.js'

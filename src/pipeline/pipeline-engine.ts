@@ -24,6 +24,7 @@
 import type { PipelineRun, PipelineState, PipelineConfig, StageResult } from './types.js'
 import { ACTIVE_STATES, TERMINAL_STATES } from './types.js'
 import { savePipelineRun, generatePipelineId } from './pipeline-store.js'
+import { recordPipelineOutcome } from './learning-store.js'
 import { runArchitectStage } from './stages/architect.js'
 import type { ArchitectOptions } from './stages/architect.js'
 import { runDevStage } from './stages/dev.js'
@@ -186,6 +187,16 @@ export async function transition(
   }
 
   await savePipelineRun(updated)
+
+  // Record pipeline outcome to learning store when reaching a terminal state
+  if (TERMINAL_STATES.has(to)) {
+    try {
+      await recordPipelineOutcome(updated)
+    } catch {
+      // Best-effort: don't fail the transition if learning store write fails
+    }
+  }
+
   return updated
 }
 

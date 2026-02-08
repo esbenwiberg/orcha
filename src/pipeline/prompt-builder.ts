@@ -5,7 +5,7 @@
  * - Role context (what the agent is expected to do)
  * - Work item details and acceptance criteria
  * - Codebase context (tree, key files)
- * - Learning hints (placeholder for M13)
+ * - Learning hints from past pipeline outcomes
  */
 
 import { execSync } from 'child_process'
@@ -146,13 +146,24 @@ export function parseAcceptanceCriteria(issueBody: string): string[] {
 
 /**
  * Build the prompt parts for the architect stage.
+ *
+ * @param learningHints - Optional hints from past pipeline outcomes (M13 learning loop).
  */
 export function buildArchitectPrompt(
   workItem: WorkItemContext,
   codebase: CodebaseContext,
+  learningHints?: string[],
 ): PromptParts {
   const tree = getCodebaseTree(codebase.worktreePath)
   const keyFiles = getKeyFiles(codebase.worktreePath)
+
+  const learningSection = learningHints && learningHints.length > 0
+    ? [
+      '',
+      'Lessons from past pipeline runs (use these to improve your blueprint):',
+      ...learningHints.map((h) => `- ${h}`),
+    ]
+    : []
 
   const systemPrompt = [
     'You are an architect agent in the Orcha pipeline.',
@@ -165,6 +176,7 @@ export function buildArchitectPrompt(
     '- Be specific about which files to create/modify and what changes to make.',
     '- Identify risks and suggest a test strategy.',
     '- Do NOT make any changes to the code. You are read-only.',
+    ...learningSection,
     '',
     'Output your blueprint as a JSON object matching the requested schema.',
   ].join('\n')

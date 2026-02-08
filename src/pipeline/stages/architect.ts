@@ -20,6 +20,7 @@ import { getPipelineDir } from '../pipeline-store.js'
 import { runStage } from '../stage-runner.js'
 import { buildArchitectPrompt } from '../prompt-builder.js'
 import type { WorkItemContext, CodebaseContext } from '../prompt-builder.js'
+import { getRelevantHints } from '../learning-store.js'
 
 // ============================================================================
 // Blueprint JSON Schema
@@ -113,8 +114,17 @@ export async function runArchitectStage(
     sourceBranch: run.sourceBranch,
   }
 
-  // Build the prompt
-  const { systemPrompt, userPrompt } = buildArchitectPrompt(workItem, codebase)
+  // Query learning store for relevant hints from past pipeline runs
+  let learningHints: string[] = []
+  try {
+    const hints = await getRelevantHints(run.description, run.sourceBranch)
+    learningHints = hints.map((h) => h.hint)
+  } catch {
+    // Best-effort: if learning store fails, proceed without hints
+  }
+
+  // Build the prompt (with learning hints if available)
+  const { systemPrompt, userPrompt } = buildArchitectPrompt(workItem, codebase, learningHints)
 
   try {
     // Run the architect stage
