@@ -3859,6 +3859,52 @@ function connectPipelineEvents() {
           });
         }
       }
+
+      // Live-append progress entries to the activity timeline
+      if (msg.type === 'pipeline:progress' && msg.data) {
+        const { pipelineId, entry } = msg.data;
+        // Only update if we are viewing this pipeline's detail
+        if (pipelineId && entry && state.selectedPipeline === pipelineId) {
+          const container = document.getElementById('activity-timeline-' + pipelineId);
+          if (container) {
+            // Clear "No activity yet" / "Loading..." placeholder if present
+            const placeholder = container.querySelector('.timeline-empty, .timeline-loading');
+            if (placeholder) {
+              placeholder.remove();
+            }
+
+            // Update the previous last entry: remove "last" class and swap hollow dot to filled
+            const prevLast = container.querySelector('.timeline-entry.last');
+            if (prevLast) {
+              prevLast.classList.remove('last');
+              // Add a connecting line to the previous entry's gutter
+              const gutter = prevLast.querySelector('.timeline-gutter');
+              if (gutter && !gutter.querySelector('.timeline-line')) {
+                const line = document.createElement('div');
+                line.className = 'timeline-line';
+                gutter.appendChild(line);
+              }
+              // Change running (hollow) dot to completed (filled)
+              const dot = prevLast.querySelector('.timeline-dot.running');
+              if (dot) {
+                dot.classList.remove('running');
+                dot.classList.add('completed');
+                dot.innerHTML = '&#9679;';
+              }
+            }
+
+            // Render and append the new entry as the last one
+            const wrapper = document.createElement('div');
+            wrapper.innerHTML = renderTimelineEntry(entry, true);
+            const newNode = wrapper.firstElementChild;
+            if (newNode) {
+              container.appendChild(newNode);
+              // Scroll the timeline to show the new entry
+              newNode.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+          }
+        }
+      }
     } catch {
       // Ignore non-JSON or unexpected messages
     }
