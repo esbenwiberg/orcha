@@ -37,6 +37,7 @@ import { runAcValidator } from '../gate-agents/ac-validator.js'
 import { runAdversary } from '../gate-agents/adversary.js'
 import { runSecurityReview } from '../gate-agents/security-review.js'
 import { runCodeReview } from '../gate-agents/code-review.js'
+import { appendProgress } from '../progress.js'
 
 // ============================================================================
 // Types
@@ -145,6 +146,22 @@ async function runSingleGateStage(
       }, null, 2),
       'utf-8',
     )
+
+    // Emit progress for gate result
+    await appendProgress(run.id, {
+      type: 'gate-result',
+      stage: 'gate',
+      title: gateOutcome.passed ? 'Gate PASSED' : 'Gate FAILED',
+      detail: gateOutcome.summary,
+      data: {
+        passed: gateOutcome.passed,
+        results: results.map((r) => ({
+          checkName: r.checkName,
+          verdict: r.verdict,
+          summary: r.summary,
+        })),
+      },
+    }).catch(() => { /* best-effort */ })
 
     // Update gate results on the pipeline run
     run = {
@@ -276,6 +293,25 @@ async function runCompetingGateStage(
       }, null, 2),
       'utf-8',
     )
+
+    // Emit progress for competing gate result
+    await appendProgress(run.id, {
+      type: 'gate-result',
+      stage: 'gate',
+      title: `Competing gate: agent #${winner.agentIndex} won (score ${winner.score}/${winner.results.length})`,
+      detail: winner.passed ? 'Winner PASSED all checks' : 'Winner did NOT pass all checks',
+      data: {
+        competing: true,
+        winnerAgent: winner.agentIndex,
+        winnerScore: winner.score,
+        winnerPassed: winner.passed,
+        evaluations: evaluations.map((e) => ({
+          agentIndex: e.agentIndex,
+          score: e.score,
+          passed: e.passed,
+        })),
+      },
+    }).catch(() => { /* best-effort */ })
 
     // Update pipeline run with gate results from winner and competing results
     run = {

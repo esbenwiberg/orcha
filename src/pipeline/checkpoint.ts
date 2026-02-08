@@ -12,6 +12,7 @@ import type { PipelineRun } from './types.js'
 import { transition, executeArchitectStage, getRecoveryTarget, isValidTransition } from './pipeline-engine.js'
 import { loadPipelineRun, savePipelineRun } from './pipeline-store.js'
 import { pipelineEvents } from './events.js'
+import { appendProgress } from './progress.js'
 
 // ============================================================================
 // Checkpoint: Architect
@@ -29,6 +30,11 @@ export async function approveArchitectCheckpoint(
   if (run.state !== 'checkpoint:arch') {
     throw new Error(`Cannot approve: pipeline is in '${run.state}', expected 'checkpoint:arch'`)
   }
+  await appendProgress(run.id, {
+    type: 'checkpoint',
+    stage: 'checkpoint:arch',
+    title: 'Architect blueprint approved',
+  }).catch(() => { /* best-effort */ })
   return await transition(run, 'dev')
 }
 
@@ -44,6 +50,11 @@ export async function rejectArchitectCheckpoint(
   if (run.state !== 'checkpoint:arch') {
     throw new Error(`Cannot reject: pipeline is in '${run.state}', expected 'checkpoint:arch'`)
   }
+  await appendProgress(run.id, {
+    type: 'checkpoint',
+    stage: 'checkpoint:arch',
+    title: 'Architect blueprint rejected',
+  }).catch(() => { /* best-effort */ })
   return await transition(run, 'cancelled')
 }
 
@@ -62,6 +73,13 @@ export async function feedbackArchitectCheckpoint(
   if (run.state !== 'checkpoint:arch') {
     throw new Error(`Cannot give feedback: pipeline is in '${run.state}', expected 'checkpoint:arch'`)
   }
+
+  await appendProgress(run.id, {
+    type: 'checkpoint',
+    stage: 'checkpoint:arch',
+    title: 'Architect blueprint feedback — re-running architect',
+    detail: feedback,
+  }).catch(() => { /* best-effort */ })
 
   // Transition back to architect
   run = await transition(run, 'architect')
@@ -101,6 +119,11 @@ export async function approveShipCheckpoint(
   if (run.state !== 'checkpoint:ship') {
     throw new Error(`Cannot approve: pipeline is in '${run.state}', expected 'checkpoint:ship'`)
   }
+  await appendProgress(run.id, {
+    type: 'checkpoint',
+    stage: 'checkpoint:ship',
+    title: 'Ship checkpoint approved',
+  }).catch(() => { /* best-effort */ })
   return await transition(run, 'ship')
 }
 
@@ -116,6 +139,11 @@ export async function rejectShipCheckpoint(
   if (run.state !== 'checkpoint:ship') {
     throw new Error(`Cannot reject: pipeline is in '${run.state}', expected 'checkpoint:ship'`)
   }
+  await appendProgress(run.id, {
+    type: 'checkpoint',
+    stage: 'checkpoint:ship',
+    title: 'Ship checkpoint rejected',
+  }).catch(() => { /* best-effort */ })
   return await transition(run, 'cancelled')
 }
 
@@ -129,6 +157,11 @@ export async function rejectShipCheckpoint(
  * Transitions any active state to 'paused', recording which stage was active.
  */
 export async function pausePipeline(run: PipelineRun): Promise<PipelineRun> {
+  await appendProgress(run.id, {
+    type: 'info',
+    stage: run.state,
+    title: `Pipeline paused (was in ${run.state})`,
+  }).catch(() => { /* best-effort */ })
   return await transition(run, 'paused')
 }
 
@@ -145,6 +178,11 @@ export async function resumePipeline(run: PipelineRun): Promise<PipelineRun> {
   if (!run.pausedStage) {
     throw new Error('Cannot resume: no pausedStage recorded')
   }
+  await appendProgress(run.id, {
+    type: 'info',
+    stage: run.pausedStage,
+    title: `Pipeline resumed (returning to ${run.pausedStage})`,
+  }).catch(() => { /* best-effort */ })
   return await transition(run, run.pausedStage)
 }
 
@@ -172,6 +210,12 @@ export async function recoverPipeline(run: PipelineRun): Promise<PipelineRun> {
   if (!isValidTransition('error', target, undefined, target)) {
     throw new Error(`Cannot recover: transition error → ${target} is not valid`)
   }
+
+  await appendProgress(run.id, {
+    type: 'info',
+    stage: target,
+    title: `Pipeline recovered (re-entering ${target})`,
+  }).catch(() => { /* best-effort */ })
 
   // Clear error and transition to recovery target
   const now = new Date().toISOString()

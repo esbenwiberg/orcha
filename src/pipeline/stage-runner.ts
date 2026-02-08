@@ -17,6 +17,7 @@ import { resolveModel, resolveBudget } from './pipeline-config.js'
 import { getPipelineDir } from './pipeline-store.js'
 import { takeSnapshot, computeDelta, recordStageUsage } from './usage-tracker.js'
 import { pipelineEvents } from './events.js'
+import { appendProgress } from './progress.js'
 
 // ============================================================================
 // Types
@@ -95,6 +96,14 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
   const model = modelOverride ?? resolveModel(config, stageKey)
   const budget = budgetOverride ?? resolveBudget(config, stageKey)
 
+  // Emit stage-start progress
+  await appendProgress(pipelineId, {
+    type: 'stage-start',
+    stage: stageKey,
+    title: `Stage "${stageKey}" started`,
+    data: { model, budget },
+  }).catch(() => { /* best-effort */ })
+
   // Ensure logs directory exists
   const logsDir = join(getPipelineDir(pipelineId), 'logs')
   await mkdir(logsDir, { recursive: true })
@@ -145,6 +154,17 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
   const durationMs = Date.now() - stageStartTime
   const usageDelta = computeDelta(usageBefore, usageAfter, stageKey, durationMs)
   await recordStageUsage(pipelineId, usageDelta)
+
+  // Emit stage-complete or stage-error progress
+  await appendProgress(pipelineId, {
+    type: result.success ? 'stage-complete' : 'stage-error',
+    stage: stageKey,
+    title: result.success
+      ? `Stage "${stageKey}" completed successfully`
+      : `Stage "${stageKey}" failed (exit code ${result.exitCode})`,
+    detail: result.success ? undefined : result.stderr.slice(0, 500),
+    data: { model, budget, exitCode: result.exitCode, durationMs },
+  }).catch(() => { /* best-effort */ })
 
   return {
     ...result,

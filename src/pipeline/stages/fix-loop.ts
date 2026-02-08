@@ -22,6 +22,7 @@ import { resolveModel, resolveBudget } from '../pipeline-config.js'
 import { buildFixLoopPrompt } from '../prompt-builder.js'
 import type { WorkItemContext, CodebaseContext } from '../prompt-builder.js'
 import { getDiff } from '../git-utils.js'
+import { appendProgress } from '../progress.js'
 
 // ============================================================================
 // Types
@@ -63,6 +64,14 @@ export async function runFixLoopStage(
     // Increment the fix loop counter
     run = await incrementFixLoop(run)
     const attempt = run.fixLoopCount
+
+    // Emit progress for fix-loop iteration start
+    await appendProgress(run.id, {
+      type: 'fix-loop',
+      stage: 'fix-loop',
+      title: `Fix loop attempt ${attempt}/${maxFixLoops}`,
+      data: { attempt, maxAttempts: maxFixLoops },
+    }).catch(() => { /* best-effort */ })
 
     // Load the blueprint
     const blueprintPath = run.blueprintPath || join(getPipelineDir(run.id), 'blueprint.json')
@@ -135,6 +144,15 @@ export async function runFixLoopStage(
       }, null, 2),
       'utf-8',
     )
+
+    // Emit progress for fix-loop completion
+    await appendProgress(run.id, {
+      type: 'fix-loop',
+      stage: 'fix-loop',
+      title: `Fix loop attempt ${attempt} completed`,
+      detail: `Committed ${commitResult.commitSha}`,
+      data: { attempt, commitSha: commitResult.commitSha, model: result.model },
+    }).catch(() => { /* best-effort */ })
 
     // Record stage result
     const completedAt = new Date().toISOString()

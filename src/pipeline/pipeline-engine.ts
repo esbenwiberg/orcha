@@ -26,6 +26,7 @@ import { ACTIVE_STATES, TERMINAL_STATES } from './types.js'
 import { savePipelineRun, generatePipelineId } from './pipeline-store.js'
 import { recordPipelineOutcome } from './learning-store.js'
 import { pipelineEvents } from './events.js'
+import { appendProgress } from './progress.js'
 import { runArchitectStage } from './stages/architect.js'
 import type { ArchitectOptions } from './stages/architect.js'
 import { runDevStage } from './stages/dev.js'
@@ -202,6 +203,14 @@ export async function transition(
     updatedAt: updated.updatedAt,
   })
 
+  // Append progress entry for the transition
+  await appendProgress(updated.id, {
+    type: TERMINAL_STATES.has(to) ? 'stage-complete' : to === 'error' ? 'stage-error' : 'info',
+    stage: typeof to === 'string' ? to : undefined,
+    title: `Transition: ${run.state} \u2192 ${to}`,
+    data: { from: run.state, to },
+  }).catch(() => { /* best-effort */ })
+
   // Record pipeline outcome to learning store when reaching a terminal state
   if (TERMINAL_STATES.has(to)) {
     try {
@@ -285,6 +294,15 @@ export async function transitionToError(
     to: 'error',
     updatedAt: now,
   })
+
+  // Append progress entry for the error transition
+  await appendProgress(updated.id, {
+    type: 'stage-error',
+    stage: run.state,
+    title: `Error in ${run.state}`,
+    detail: errorMessage,
+    data: { from: run.state, to: 'error' },
+  }).catch(() => { /* best-effort */ })
 
   return updated
 }

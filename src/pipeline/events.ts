@@ -7,6 +7,7 @@
 
 import { EventEmitter } from 'events'
 import type { PipelineState } from './types.js'
+import type { ProgressEntry } from './progress.js'
 
 export interface PipelineStateChangeEvent {
   pipelineId: string
@@ -29,6 +30,11 @@ export interface PipelineLogEvent {
   stream: 'stdout' | 'stderr'
   data: string
   timestamp: string
+}
+
+export interface PipelineProgressEvent {
+  pipelineId: string
+  entry: ProgressEntry
 }
 
 class PipelineEventEmitter extends EventEmitter {
@@ -54,6 +60,14 @@ class PipelineEventEmitter extends EventEmitter {
 
   onLog(listener: (event: PipelineLogEvent) => void): this {
     return this.on('log', listener)
+  }
+
+  emitProgress(event: PipelineProgressEvent): void {
+    this.emit('progress', event)
+  }
+
+  onProgress(listener: (event: PipelineProgressEvent) => void): this {
+    return this.on('progress', listener)
   }
 }
 

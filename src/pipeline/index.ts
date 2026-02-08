@@ -146,7 +146,11 @@ export type { PipelineOutcomeRecord, LearningHint } from './learning-store.js'
 
 // Events
 export { pipelineEvents } from './events.js'
-export type { PipelineStateChangeEvent, PipelineAgentStatusEvent } from './events.js'
+export type { PipelineStateChangeEvent, PipelineAgentStatusEvent, PipelineProgressEvent } from './events.js'
+
+// Progress
+export { appendProgress, readProgress } from './progress.js'
+export type { ProgressEntry, ProgressType } from './progress.js'
 
 // Gate Agents
 export { runTestRunner } from './gate-agents/test-runner.js'

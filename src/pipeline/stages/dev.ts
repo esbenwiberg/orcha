@@ -30,6 +30,7 @@ import { savePipelineRun } from '../pipeline-store.js'
 import { runStage } from '../stage-runner.js'
 import { buildDevPrompt } from '../prompt-builder.js'
 import type { WorkItemContext, CodebaseContext } from '../prompt-builder.js'
+import { appendProgress } from '../progress.js'
 
 // ============================================================================
 // Types
@@ -199,6 +200,14 @@ async function runCompetingDevStage(
       acceptanceCriteria: run.acceptanceCriteria,
     }
 
+    // Emit progress for competing dev start
+    await appendProgress(run.id, {
+      type: 'competing-start',
+      stage: 'dev',
+      title: `Starting ${count} competing dev agents`,
+      data: { count },
+    }).catch(() => { /* best-effort */ })
+
     // Create N worktrees and run N agents in parallel
     const competingResults: CompetingResult[] = []
     const agentPromises: Promise<void>[] = []
@@ -265,6 +274,22 @@ async function runCompetingDevStage(
         'utf-8',
       )
     }
+
+    // Emit progress for competing dev result
+    await appendProgress(run.id, {
+      type: 'competing-result',
+      stage: 'dev',
+      title: `${successfulResults.length}/${count} competing dev agents completed`,
+      data: {
+        total: count,
+        successful: successfulResults.length,
+        agents: competingResults.map((r) => ({
+          agentIndex: r.agentIndex,
+          commitSha: r.commitSha,
+          success: r.commitSha !== '',
+        })),
+      },
+    }).catch(() => { /* best-effort */ })
 
     // Check if we have at least one successful agent
     if (successfulResults.length === 0) {
