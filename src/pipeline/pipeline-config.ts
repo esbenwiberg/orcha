@@ -20,6 +20,8 @@ const ModelConfigSchema = z.object({
   'gate:adversary': z.string().optional(),
   'gate:test-runner': z.string().optional(),
   'gate:lint-runner': z.string().optional(),
+  'gate:security': z.string().optional(),
+  'gate:code-review': z.string().optional(),
   fix: z.string().optional(),
   ship: z.string().optional(),
 })

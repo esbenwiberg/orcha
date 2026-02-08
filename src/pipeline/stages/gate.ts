@@ -5,6 +5,9 @@
  * - test-runner: Runs test command (shell, no AI)
  * - lint-runner: Runs lint on changed files (shell, no AI)
  * - ac-validator: Compares diff to ACs (AI session)
+ * - adversary: Writes adversarial tests to expose bugs (AI session)
+ * - security: Reviews diff for security vulnerabilities (AI session)
+ * - code-review: Reviews diff for correctness and quality (AI session)
  *
  * Each agent produces a GateResult. The gate passes only if ALL
  * non-skipped agents pass. Results are written to:
@@ -26,6 +29,9 @@ import { runTestRunner } from '../gate-agents/test-runner.js'
 import { runLintRunner } from '../gate-agents/lint-runner.js'
 import { runAcValidator } from '../gate-agents/ac-validator.js'
 import type { AcValidatorOptions } from '../gate-agents/ac-validator.js'
+import { runAdversary } from '../gate-agents/adversary.js'
+import { runSecurityReview } from '../gate-agents/security-review.js'
+import { runCodeReview } from '../gate-agents/code-review.js'
 
 // ============================================================================
 // Types
@@ -67,18 +73,21 @@ export async function runGateStage(
 
   try {
     // Run all gate agents in parallel
-    const acOpts: AcValidatorOptions = {
+    const agentOpts = {
       modelOverride: opts?.modelOverride,
       budgetOverride: opts?.budgetOverride,
     }
 
-    const [testResult, lintResult, acResult] = await Promise.all([
+    const [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
       runTestRunner(run.worktreePath),
       runLintRunner(run.worktreePath, run.sourceBranch),
-      runAcValidator(run, acOpts),
+      runAcValidator(run, agentOpts),
+      runAdversary(run, agentOpts),
+      runSecurityReview(run, agentOpts),
+      runCodeReview(run, agentOpts),
     ])
 
-    const results: GateResult[] = [testResult, lintResult, acResult]
+    const results: GateResult[] = [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult]
 
     // Save individual results to disk
     const gateResultsDir = join(getPipelineDir(run.id), 'gate-results')

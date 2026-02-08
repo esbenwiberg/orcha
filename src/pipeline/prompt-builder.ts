@@ -382,6 +382,201 @@ export function buildAcValidatorPrompt(
 }
 
 // ============================================================================
+// Adversary Prompt
+// ============================================================================
+
+/**
+ * Build the prompt parts for the adversary gate agent.
+ *
+ * The adversary writes tests designed to expose bugs in the dev agent's code.
+ * Tests are written to a temp directory and executed against the worktree.
+ */
+export function buildAdversaryPrompt(
+  workItem: WorkItemContext,
+  diff: DiffContext,
+  testPatterns: string,
+): PromptParts {
+  const systemPrompt = [
+    'You are an adversary agent in the Orcha pipeline gate.',
+    'Your job is to write tests that EXPOSE BUGS in the code changes.',
+    '',
+    'Guidelines:',
+    '- Study the diff carefully for edge cases, off-by-one errors, missing validation, race conditions, and incorrect assumptions.',
+    '- Write focused test files that target the weakest parts of the implementation.',
+    '- Each test should be self-contained and clearly named.',
+    '- Use the same test framework and patterns as the existing project tests.',
+    '- Only write tests — do NOT modify any source code.',
+    '- If the code looks solid, still try creative edge cases.',
+    '',
+    'Output your tests as JSON with this structure:',
+    '{',
+    '  "tests": [',
+    '    {',
+    '      "filename": "adversary-test-1.test.ts",',
+    '      "description": "Tests edge case X in module Y",',
+    '      "content": "import { ... } from \'../src/...\'; ..."',
+    '    }',
+    '  ],',
+    '  "reasoning": "Brief explanation of what bugs you are targeting"',
+    '}',
+  ].join('\n')
+
+  const userPrompt = [
+    '# Code Changes (git diff)',
+    '```diff',
+    diff.diff,
+    '```',
+    '',
+    '# Task Description',
+    workItem.description,
+    '',
+    '# Existing Test Patterns',
+    '```',
+    testPatterns || '(no existing tests found)',
+    '```',
+    '',
+    '# Instructions',
+    'Write adversarial tests that expose bugs or edge cases in the code changes above.',
+    'Output your tests as the JSON structure described in your instructions.',
+  ].join('\n')
+
+  return { systemPrompt, userPrompt }
+}
+
+// ============================================================================
+// Security Review Prompt
+// ============================================================================
+
+/**
+ * Build the prompt parts for the security review gate agent.
+ *
+ * Reviews the diff against OWASP top 10 and common security issues.
+ */
+export function buildSecurityReviewPrompt(
+  workItem: WorkItemContext,
+  diff: DiffContext,
+): PromptParts {
+  const systemPrompt = [
+    'You are a security review agent in the Orcha pipeline gate.',
+    'Your job is to identify security vulnerabilities in the code changes.',
+    '',
+    'Check for:',
+    '- OWASP Top 10 vulnerabilities (injection, XSS, CSRF, broken auth, etc.)',
+    '- Hardcoded secrets, API keys, or credentials',
+    '- Insecure cryptographic practices',
+    '- Path traversal vulnerabilities',
+    '- Unsafe deserialization',
+    '- Command injection via unsanitized inputs',
+    '- SQL injection or NoSQL injection',
+    '- Insecure direct object references',
+    '- Missing input validation at system boundaries',
+    '- Dependency vulnerabilities (if new deps are added)',
+    '',
+    'Guidelines:',
+    '- Focus ONLY on the changed code (the diff), not the entire codebase.',
+    '- Be practical: only flag real, exploitable issues — not theoretical concerns.',
+    '- Internal helper functions called only by trusted code do NOT need input validation.',
+    '- If no security issues found, that is a valid pass.',
+    '',
+    'Output your verdict as JSON:',
+    '{',
+    '  "pass": true/false,',
+    '  "summary": "Brief overall summary",',
+    '  "findings": [',
+    '    {',
+    '      "severity": "critical|high|medium|low|info",',
+    '      "category": "OWASP category or general label",',
+    '      "file": "path/to/file.ts",',
+    '      "line": 42,',
+    '      "description": "What the issue is and how to fix it"',
+    '    }',
+    '  ]',
+    '}',
+  ].join('\n')
+
+  const userPrompt = [
+    '# Code Changes (git diff)',
+    '```diff',
+    diff.diff,
+    '```',
+    '',
+    '# Task Description',
+    workItem.description,
+    '',
+    '# Instructions',
+    'Review the code changes for security vulnerabilities.',
+    'Output your verdict as the JSON structure described in your instructions.',
+  ].join('\n')
+
+  return { systemPrompt, userPrompt }
+}
+
+// ============================================================================
+// Code Review Prompt
+// ============================================================================
+
+/**
+ * Build the prompt parts for the code review gate agent.
+ *
+ * Reviews the diff for correctness, conventions, and code quality.
+ */
+export function buildCodeReviewPrompt(
+  workItem: WorkItemContext,
+  diff: DiffContext,
+): PromptParts {
+  const systemPrompt = [
+    'You are a code review agent in the Orcha pipeline gate.',
+    'Your job is to review the code changes for correctness and quality.',
+    '',
+    'Check for:',
+    '- Logic errors, off-by-one bugs, incorrect conditions',
+    '- Unhandled error cases that could crash the application',
+    '- Resource leaks (unclosed handles, missing cleanup)',
+    '- Race conditions in async code',
+    '- API contract violations (wrong types, missing fields)',
+    '- Dead code or unreachable branches introduced by the changes',
+    '- Obvious performance issues (N+1 queries, unbounded loops, missing indexes)',
+    '',
+    'Guidelines:',
+    '- Focus ONLY on the changed code (the diff), not the entire codebase.',
+    '- Be practical: only flag real bugs or significant issues.',
+    '- Do NOT nitpick style, naming, or formatting — lint handles that.',
+    '- Do NOT suggest refactors, abstractions, or "improvements".',
+    '- If the code is correct and clean, that is a valid pass.',
+    '',
+    'Output your verdict as JSON:',
+    '{',
+    '  "pass": true/false,',
+    '  "summary": "Brief overall summary",',
+    '  "findings": [',
+    '    {',
+    '      "severity": "critical|major|minor|suggestion",',
+    '      "file": "path/to/file.ts",',
+    '      "line": 42,',
+    '      "description": "What the issue is"',
+    '    }',
+    '  ]',
+    '}',
+  ].join('\n')
+
+  const userPrompt = [
+    '# Code Changes (git diff)',
+    '```diff',
+    diff.diff,
+    '```',
+    '',
+    '# Task Description',
+    workItem.description,
+    '',
+    '# Instructions',
+    'Review the code changes for correctness and quality issues.',
+    'Output your verdict as the JSON structure described in your instructions.',
+  ].join('\n')
+
+  return { systemPrompt, userPrompt }
+}
+
+// ============================================================================
 // Fix Loop Prompt
 // ============================================================================
 

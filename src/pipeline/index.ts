@@ -73,6 +73,9 @@ export {
   buildArchitectPrompt,
   buildDevPrompt,
   buildAcValidatorPrompt,
+  buildAdversaryPrompt,
+  buildSecurityReviewPrompt,
+  buildCodeReviewPrompt,
   buildFixLoopPrompt,
   buildStagePrompt,
 } from './prompt-builder.js'
@@ -128,3 +131,9 @@ export { runTestRunner } from './gate-agents/test-runner.js'
 export { runLintRunner } from './gate-agents/lint-runner.js'
 export { runAcValidator } from './gate-agents/ac-validator.js'
 export type { AcValidatorOptions } from './gate-agents/ac-validator.js'
+export { runAdversary } from './gate-agents/adversary.js'
+export type { AdversaryOptions } from './gate-agents/adversary.js'
+export { runSecurityReview } from './gate-agents/security-review.js'
+export type { SecurityReviewOptions } from './gate-agents/security-review.js'
+export { runCodeReview } from './gate-agents/code-review.js'
+export type { CodeReviewOptions } from './gate-agents/code-review.js'
