@@ -20,7 +20,7 @@
     mermaid.initialize({ startOnLoad: false, theme: 'dark' });
   </script>
 
-  <link rel="stylesheet" href="style.css?v=9">
+  <link rel="stylesheet" href="style.css?v=10">
 </head>
 <body>
   <div id="app">
@@ -31,6 +31,7 @@
         <span class="subtitle" id="catchphrase">herd your AI agents</span>
       </div>
       <div id="session-list"></div>
+      <div id="pipeline-list"></div>
       <div class="sidebar-footer">
         <div id="action-bar"></div>
         <div id="usage-stats"></div>
@@ -39,10 +40,13 @@
       </div>
     </aside>
 
-    <!-- Main terminal grid -->
+    <!-- Main content area -->
     <main id="terminal-grid"></main>
+
+    <!-- Pipeline detail panel (hidden by default) -->
+    <div id="pipeline-detail" class="pipeline-detail" style="display: none;"></div>
   </div>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>

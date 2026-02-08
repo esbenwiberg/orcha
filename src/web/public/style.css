@@ -2300,3 +2300,408 @@ body {
     display: none;
   }
 }
+
+/* =========================================================================
+   Pipeline View Styles
+   ========================================================================= */
+
+/* Pipeline sidebar section */
+#pipeline-list {
+  border-top: 1px solid var(--border-color);
+  padding: 0;
+}
+
+.pipelines-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pipeline-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-left: 3px solid transparent;
+}
+
+.pipeline-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.pipeline-item.active {
+  background: var(--bg-tertiary);
+  border-left-color: var(--accent-purple);
+}
+
+.pipeline-state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.pipeline-state-dot.created { background: var(--status-idle); }
+.pipeline-state-dot.architect,
+.pipeline-state-dot.dev,
+.pipeline-state-dot.gate,
+.pipeline-state-dot.fix-loop,
+.pipeline-state-dot.ship { background: var(--status-working); animation: pulse 1.5s infinite; }
+.pipeline-state-dot.checkpoint\:arch,
+.pipeline-state-dot.checkpoint\:ship { background: var(--status-waiting); animation: pulse 1.5s infinite; }
+.pipeline-state-dot.completed { background: var(--status-done); }
+.pipeline-state-dot.cancelled,
+.pipeline-state-dot.error { background: var(--status-error); }
+.pipeline-state-dot.escalated { background: var(--status-error); }
+.pipeline-state-dot.paused { background: var(--status-idle); }
+
+.pipeline-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.pipeline-item-name {
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pipeline-item-state {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+}
+
+/* Pipeline detail panel */
+.pipeline-detail {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  padding: 24px;
+}
+
+.pipeline-detail-header {
+  margin-bottom: 24px;
+}
+
+.pipeline-detail-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.pipeline-detail-id {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+/* Stage progress bar */
+.pipeline-stages {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 24px;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.pipeline-stage {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.pipeline-stage.completed {
+  background: rgba(46, 204, 113, 0.15);
+  color: var(--status-done);
+}
+
+.pipeline-stage.active {
+  background: rgba(241, 196, 15, 0.15);
+  color: var(--status-working);
+  animation: pulse 2s infinite;
+}
+
+.pipeline-stage.failed {
+  background: rgba(231, 76, 60, 0.15);
+  color: var(--status-error);
+}
+
+.pipeline-stage.waiting {
+  background: rgba(230, 126, 34, 0.15);
+  color: var(--status-waiting);
+}
+
+.pipeline-stage-arrow {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+/* Gate results */
+.pipeline-section {
+  margin-bottom: 20px;
+}
+
+.pipeline-section-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.gate-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.gate-result-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gate-result-card.pass {
+  border-left: 3px solid var(--status-done);
+}
+
+.gate-result-card.fail {
+  border-left: 3px solid var(--status-error);
+}
+
+.gate-result-card.skip {
+  border-left: 3px solid var(--status-idle);
+  opacity: 0.6;
+}
+
+.gate-result-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.gate-result-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.gate-result-name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.gate-result-summary {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Checkpoint controls */
+.checkpoint-controls {
+  display: flex;
+  gap: 8px;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.checkpoint-btn {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.checkpoint-btn:hover {
+  opacity: 0.9;
+}
+
+.checkpoint-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.checkpoint-btn.approve {
+  background: var(--status-done);
+  color: #1a1a1a;
+}
+
+.checkpoint-btn.reject {
+  background: var(--status-error);
+  color: white;
+}
+
+.checkpoint-btn.feedback {
+  background: var(--status-waiting);
+  color: #1a1a1a;
+}
+
+/* Competing agents display */
+.competing-agents {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.competing-agent-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.competing-agent-card.winner {
+  border-color: var(--status-done);
+  background: rgba(46, 204, 113, 0.05);
+}
+
+.competing-agent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.competing-agent-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.competing-agent-badge {
+  font-size: 0.65rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.competing-agent-badge.winner {
+  background: rgba(46, 204, 113, 0.2);
+  color: var(--status-done);
+}
+
+.competing-agent-score {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* Usage display */
+.pipeline-usage {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.usage-item {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 16px;
+  text-align: center;
+}
+
+.usage-item-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.usage-item-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Pipeline info rows */
+.pipeline-info {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 4px 12px;
+  font-size: 0.8rem;
+  margin-bottom: 16px;
+}
+
+.pipeline-info-label {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.pipeline-info-value {
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+/* Back button for pipeline detail */
+.pipeline-back-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-bottom: 16px;
+  transition: all 0.15s;
+}
+
+.pipeline-back-btn:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+/* Feedback textarea */
+.feedback-textarea {
+  width: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  padding: 10px 12px;
+  border-radius: 4px;
+  resize: vertical;
+  min-height: 60px;
+  font-family: inherit;
+}
+
+.feedback-textarea:focus {
+  border-color: var(--accent-purple);
+  outline: none;
+}
+
+.feedback-textarea::placeholder {
+  color: var(--text-muted);
+}

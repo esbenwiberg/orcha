@@ -16,6 +16,7 @@ export type {
   Blueprint,
   UsageSnapshot,
   LearningRecord,
+  CompetingResult,
   PipelineRun,
 } from './types.js'
 

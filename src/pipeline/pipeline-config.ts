@@ -56,6 +56,7 @@ export const PipelineConfigSchema = z.object({
     ship: 1.0,
   }),
   maxFixLoops: z.number().int().nonnegative().default(3),
+  competingAgents: z.number().int().min(1).max(10).default(1),
 })
 
 // ============================================================================

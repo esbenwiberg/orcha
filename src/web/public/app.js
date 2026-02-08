@@ -16,6 +16,8 @@ const state = {
   usage: null, // { date, tokens, messages, sessions } or null
   gridLayout: { cols: 1, rows: 1 }, // Current grid layout for 2D navigation
   actions: [], // Custom action buttons
+  pipelines: [], // Pipeline runs
+  selectedPipeline: null, // Currently selected pipeline ID
 };
 
 // DOM elements
@@ -3693,13 +3695,14 @@ function applyGridLayout(count) {
  * Main render function
  */
 async function render() {
-  // Fetch sessions, instances, usage, and actions in parallel
-  const [{ sessions, summary }, instances, usage, actions, health] = await Promise.all([
+  // Fetch sessions, instances, usage, actions, health, and pipelines in parallel
+  const [{ sessions, summary }, instances, usage, actions, health, pipelines] = await Promise.all([
     fetchSessions(),
     fetchInstances(),
     fetchUsage(),
     fetchActions(),
     fetchHealth(),
+    fetchPipelines(),
   ]);
 
   // Store all sessions (for sidebar)
@@ -3707,6 +3710,7 @@ async function render() {
   state.instances = instances;
   state.usage = usage;
   state.actions = actions;
+  state.pipelines = pipelines;
 
   // Dedupe by tmux session for terminal panels (1 panel per tmux session)
   const tmuxSessions = dedupeByTmuxSession(sessions);
@@ -3714,10 +3718,16 @@ async function render() {
   // Update sidebar (1 entry per tmux session, matching panels)
   // Pass instances to show empty repos too
   updateSidebar(tmuxSessions, instances);
+  updatePipelineSidebar(pipelines);
   updateSummary(summary);
   renderActionBar(actions);
   updateUsageDisplay(usage);
   updateHealthDisplay(health);
+
+  // If a pipeline is selected, refresh its detail view
+  if (state.selectedPipeline) {
+    renderPipelineDetail(state.selectedPipeline);
+  }
 
   if (tmuxSessions.length === 0) {
     showEmptyState();
@@ -4013,6 +4023,408 @@ function initCatchphrases() {
   // Also allow click to rotate
   el.style.cursor = 'pointer';
   el.addEventListener('click', rotate);
+}
+
+// =========================================================================
+// Pipeline View
+// =========================================================================
+
+const pipelineListEl = document.getElementById('pipeline-list');
+const pipelineDetailEl = document.getElementById('pipeline-detail');
+const terminalGrid = document.getElementById('terminal-grid');
+
+/**
+ * Fetch pipeline runs from the API
+ */
+async function fetchPipelines() {
+  try {
+    const res = await fetch('/api/pipelines');
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Pipeline stage order for progress bar
+ */
+const PIPELINE_STAGE_ORDER = [
+  'created', 'architect', 'checkpoint:arch', 'dev', 'gate',
+  'fix-loop', 'checkpoint:ship', 'ship', 'completed'
+];
+
+const PIPELINE_STAGE_LABELS = {
+  'created': 'Created',
+  'architect': 'Architect',
+  'checkpoint:arch': 'Review',
+  'dev': 'Dev',
+  'gate': 'Gate',
+  'fix-loop': 'Fix',
+  'checkpoint:ship': 'Ship Review',
+  'ship': 'Ship',
+  'completed': 'Done',
+};
+
+/**
+ * Update the pipeline sidebar section
+ */
+function updatePipelineSidebar(pipelines) {
+  if (!pipelineListEl) return;
+
+  // Don't render if no pipelines
+  if (!pipelines || pipelines.length === 0) {
+    pipelineListEl.innerHTML = '';
+    return;
+  }
+
+  pipelineListEl.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'pipelines-header';
+  header.innerHTML = '<span>Pipelines</span>';
+  pipelineListEl.appendChild(header);
+
+  for (const pipeline of pipelines) {
+    const item = document.createElement('div');
+    item.className = 'pipeline-item';
+    if (state.selectedPipeline === pipeline.id) {
+      item.classList.add('active');
+    }
+
+    const dot = document.createElement('div');
+    // Escape colons in class name for CSS
+    const stateClass = pipeline.state.replace(':', '\\:');
+    dot.className = `pipeline-state-dot ${pipeline.state}`;
+
+    const info = document.createElement('div');
+    info.className = 'pipeline-item-info';
+
+    const name = document.createElement('div');
+    name.className = 'pipeline-item-name';
+    const desc = pipeline.description || pipeline.id;
+    name.textContent = desc.length > 25 ? desc.slice(0, 22) + '...' : desc;
+    name.title = desc;
+
+    const stateLabel = document.createElement('div');
+    stateLabel.className = 'pipeline-item-state';
+    stateLabel.textContent = pipeline.state;
+
+    info.appendChild(name);
+    info.appendChild(stateLabel);
+
+    item.appendChild(dot);
+    item.appendChild(info);
+
+    item.addEventListener('click', () => selectPipeline(pipeline.id));
+    pipelineListEl.appendChild(item);
+  }
+}
+
+/**
+ * Select a pipeline to show its detail view
+ */
+function selectPipeline(pipelineId) {
+  if (state.selectedPipeline === pipelineId) {
+    // Deselect: go back to terminal view
+    state.selectedPipeline = null;
+    pipelineDetailEl.style.display = 'none';
+    document.getElementById('terminal-grid').style.display = '';
+    // Re-render sidebar to remove active state
+    updatePipelineSidebar(state.pipelines);
+    return;
+  }
+
+  state.selectedPipeline = pipelineId;
+
+  // Hide terminal grid, show pipeline detail
+  document.getElementById('terminal-grid').style.display = 'none';
+  pipelineDetailEl.style.display = '';
+
+  // Render the detail
+  renderPipelineDetail(pipelineId);
+
+  // Re-render sidebar to show active state
+  updatePipelineSidebar(state.pipelines);
+}
+
+/**
+ * Render the pipeline detail panel
+ */
+function renderPipelineDetail(pipelineId) {
+  const pipeline = state.pipelines.find(p => p.id === pipelineId);
+  if (!pipeline) {
+    pipelineDetailEl.innerHTML = '<div class="empty-state"><p>Pipeline not found</p></div>';
+    return;
+  }
+
+  let html = '';
+
+  // Back button
+  html += '<button class="pipeline-back-btn" onclick="selectPipeline(\'' + pipeline.id + '\')">&larr; Back to terminals</button>';
+
+  // Header
+  html += '<div class="pipeline-detail-header">';
+  html += '<div class="pipeline-detail-title">' + escapeHtml(pipeline.description || 'Pipeline') + '</div>';
+  html += '<div class="pipeline-detail-id">' + pipeline.id + '</div>';
+  html += '</div>';
+
+  // Stage progress bar
+  html += '<div class="pipeline-stages">';
+  const currentIndex = PIPELINE_STAGE_ORDER.indexOf(pipeline.state);
+  const terminalStates = ['completed', 'cancelled', 'escalated', 'error'];
+
+  for (let i = 0; i < PIPELINE_STAGE_ORDER.length; i++) {
+    const stage = PIPELINE_STAGE_ORDER[i];
+    let stageClass = '';
+
+    if (terminalStates.includes(pipeline.state)) {
+      if (pipeline.state === 'completed') {
+        stageClass = 'completed';
+      } else if (i <= currentIndex) {
+        stageClass = i === currentIndex ? 'failed' : 'completed';
+      }
+    } else if (i < currentIndex) {
+      stageClass = 'completed';
+    } else if (i === currentIndex) {
+      stageClass = pipeline.state.startsWith('checkpoint') ? 'waiting' : 'active';
+    }
+
+    html += '<div class="pipeline-stage ' + stageClass + '">';
+    html += (PIPELINE_STAGE_LABELS[stage] || stage);
+    html += '</div>';
+
+    if (i < PIPELINE_STAGE_ORDER.length - 1) {
+      html += '<span class="pipeline-stage-arrow">&rarr;</span>';
+    }
+  }
+  html += '</div>';
+
+  // Checkpoint controls
+  if (pipeline.state === 'checkpoint:arch' || pipeline.state === 'checkpoint:ship') {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Checkpoint: ' + (pipeline.state === 'checkpoint:arch' ? 'Architect Review' : 'Ship Review') + '</div>';
+    html += '<div class="checkpoint-controls">';
+    html += '<button class="checkpoint-btn approve" onclick="pipelineApprove(\'' + pipeline.id + '\')">Approve</button>';
+    html += '<button class="checkpoint-btn reject" onclick="pipelineReject(\'' + pipeline.id + '\')">Reject</button>';
+    if (pipeline.state === 'checkpoint:arch') {
+      html += '<button class="checkpoint-btn feedback" onclick="pipelineFeedback(\'' + pipeline.id + '\')">Feedback</button>';
+    }
+    html += '</div>';
+    if (pipeline.state === 'checkpoint:arch') {
+      html += '<textarea id="pipeline-feedback-text" class="feedback-textarea" placeholder="Enter feedback for the architect..." style="display:none;"></textarea>';
+    }
+    html += '</div>';
+  }
+
+  // Pipeline info
+  html += '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Details</div>';
+  html += '<div class="pipeline-info">';
+  html += '<div class="pipeline-info-label">State</div><div class="pipeline-info-value">' + pipeline.state + '</div>';
+  html += '<div class="pipeline-info-label">Source branch</div><div class="pipeline-info-value">' + escapeHtml(pipeline.sourceBranch) + '</div>';
+  html += '<div class="pipeline-info-label">Worktree</div><div class="pipeline-info-value">' + escapeHtml(pipeline.worktreePath) + '</div>';
+  html += '<div class="pipeline-info-label">Fix loops</div><div class="pipeline-info-value">' + pipeline.fixLoopCount + ' / ' + (pipeline.config?.maxFixLoops || 3) + '</div>';
+  html += '<div class="pipeline-info-label">Created</div><div class="pipeline-info-value">' + formatTimestamp(pipeline.createdAt) + '</div>';
+  html += '<div class="pipeline-info-label">Updated</div><div class="pipeline-info-value">' + formatTimestamp(pipeline.updatedAt) + '</div>';
+  if (pipeline.error) {
+    html += '<div class="pipeline-info-label">Error</div><div class="pipeline-info-value" style="color:var(--status-error)">' + escapeHtml(pipeline.error) + '</div>';
+  }
+  html += '</div>';
+  html += '</div>';
+
+  // Competing agents
+  if (pipeline.competingResults && pipeline.competingResults.length > 0) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Competing Agents (' + pipeline.competingResults.length + ')</div>';
+    html += '<div class="competing-agents">';
+    for (const agent of pipeline.competingResults) {
+      const cardClass = agent.winner ? 'competing-agent-card winner' : 'competing-agent-card';
+      html += '<div class="' + cardClass + '">';
+      html += '<div class="competing-agent-header">';
+      html += '<span class="competing-agent-name">Agent #' + agent.agentIndex + '</span>';
+      if (agent.winner) {
+        html += '<span class="competing-agent-badge winner">Winner</span>';
+      }
+      html += '</div>';
+      html += '<div class="competing-agent-score">Score: ' + (agent.gateScore >= 0 ? agent.gateScore : 'pending') + '</div>';
+      if (agent.commitSha) {
+        html += '<div style="font-size:0.7rem;color:var(--text-muted);font-family:monospace;margin-top:4px">' + agent.commitSha.slice(0, 8) + '</div>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Gate results
+  if (pipeline.gateResults && pipeline.gateResults.length > 0) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Gate Results</div>';
+    html += '<div class="gate-results">';
+    for (const result of pipeline.gateResults) {
+      const verdictIcon = result.verdict === 'pass' ? '&#10003;' : result.verdict === 'fail' ? '&#10007;' : '&#8212;';
+      html += '<div class="gate-result-card ' + result.verdict + '">';
+      html += '<div class="gate-result-icon">' + verdictIcon + '</div>';
+      html += '<div class="gate-result-info">';
+      html += '<div class="gate-result-name">' + escapeHtml(result.checkName) + '</div>';
+      html += '<div class="gate-result-summary">' + escapeHtml(result.summary || '') + '</div>';
+      html += '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Usage
+  if (pipeline.usageSnapshot) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Token Usage</div>';
+    html += '<div class="pipeline-usage">';
+    if (pipeline.usageSnapshot.totalCostUsd !== undefined) {
+      html += '<div class="usage-item"><div class="usage-item-label">Est. Cost</div><div class="usage-item-value">$' + pipeline.usageSnapshot.totalCostUsd.toFixed(2) + '</div></div>';
+    }
+    if (pipeline.usageSnapshot.inputTokens) {
+      html += '<div class="usage-item"><div class="usage-item-label">Input</div><div class="usage-item-value">' + formatTokens(pipeline.usageSnapshot.inputTokens) + '</div></div>';
+    }
+    if (pipeline.usageSnapshot.outputTokens) {
+      html += '<div class="usage-item"><div class="usage-item-label">Output</div><div class="usage-item-value">' + formatTokens(pipeline.usageSnapshot.outputTokens) + '</div></div>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Stage history
+  if (pipeline.stageHistory && pipeline.stageHistory.length > 0) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Stage History</div>';
+    html += '<div style="font-size:0.8rem">';
+    for (const stage of pipeline.stageHistory) {
+      html += '<div style="padding:4px 0;border-bottom:1px solid var(--border-color)">';
+      html += '<span style="color:var(--accent-purple);font-weight:500">' + stage.stage + '</span>';
+      html += ' <span style="color:var(--text-muted)">' + formatTimestamp(stage.startedAt) + '</span>';
+      if (stage.model) html += ' <span style="color:var(--text-secondary);font-size:0.7rem">(' + stage.model + ')</span>';
+      if (stage.output) html += '<div style="color:var(--text-secondary);font-size:0.75rem;margin-top:2px">' + escapeHtml(stage.output) + '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Acceptance criteria
+  if (pipeline.acceptanceCriteria && pipeline.acceptanceCriteria.length > 0) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Acceptance Criteria</div>';
+    html += '<ul style="font-size:0.85rem;color:var(--text-secondary);padding-left:20px">';
+    for (const ac of pipeline.acceptanceCriteria) {
+      html += '<li>' + escapeHtml(ac) + '</li>';
+    }
+    html += '</ul>';
+    html += '</div>';
+  }
+
+  pipelineDetailEl.innerHTML = html;
+}
+
+/**
+ * Pipeline checkpoint actions
+ */
+async function pipelineApprove(pipelineId) {
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/approve', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Approve failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Pipeline approved', 'success');
+    // Refresh
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Approve failed: ' + err.message, 'error');
+  }
+}
+
+async function pipelineReject(pipelineId) {
+  if (!confirm('Reject this pipeline? This will cancel it.')) return;
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/reject', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Reject failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Pipeline rejected', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Reject failed: ' + err.message, 'error');
+  }
+}
+
+async function pipelineFeedback(pipelineId) {
+  const textarea = document.getElementById('pipeline-feedback-text');
+  if (!textarea) return;
+
+  // Toggle textarea visibility
+  if (textarea.style.display === 'none') {
+    textarea.style.display = '';
+    textarea.focus();
+    return;
+  }
+
+  const feedback = textarea.value.trim();
+  if (!feedback) {
+    showToast('Please enter feedback', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedback }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Feedback failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Feedback sent, architect re-running', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Feedback failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Helpers
+ */
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function formatTimestamp(iso) {
+  if (!iso) return 'N/A';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return iso;
+  }
+}
+
+function formatTokens(count) {
+  if (!count) return '0';
+  if (count >= 1000000) return (count / 1000000).toFixed(1) + 'M';
+  if (count >= 1000) return (count / 1000).toFixed(0) + 'K';
+  return String(count);
 }
 
 // Start app

@@ -14,6 +14,11 @@
  *   ~/.orcha/pipelines/{id}/gate-results/{checkName}.json
  *   ~/.orcha/pipelines/{id}/gate-results/verdict.json
  *
+ * Competing mode:
+ * When competingResults are present on the pipeline run, the gate runs
+ * on each competing agent's worktree, scores them, and selects the best.
+ * The winner's worktree becomes the pipeline worktree, losers are cleaned up.
+ *
  * State transitions:
  * - All pass → checkpoint:ship
  * - Any fail → fix-loop (if fix loops remain) or escalated
@@ -21,14 +26,14 @@
 
 import { writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
-import type { PipelineRun, GateResult, StageResult } from '../types.js'
+import { execSync } from 'child_process'
+import type { PipelineRun, GateResult, StageResult, CompetingResult } from '../types.js'
 import { transition, recordStageResult, transitionToError } from '../pipeline-engine.js'
 import { getPipelineDir } from '../pipeline-store.js'
 import { savePipelineRun } from '../pipeline-store.js'
 import { runTestRunner } from '../gate-agents/test-runner.js'
 import { runLintRunner } from '../gate-agents/lint-runner.js'
 import { runAcValidator } from '../gate-agents/ac-validator.js'
-import type { AcValidatorOptions } from '../gate-agents/ac-validator.js'
 import { runAdversary } from '../gate-agents/adversary.js'
 import { runSecurityReview } from '../gate-agents/security-review.js'
 import { runCodeReview } from '../gate-agents/code-review.js'
@@ -64,8 +69,27 @@ export interface GateStageResult {
  * On all-pass: transitions to 'checkpoint:ship'.
  * On any fail: transitions to 'fix-loop'.
  * On error: transitions to 'error'.
+ *
+ * In competing mode, runs gate on all competitors and selects the best.
  */
 export async function runGateStage(
+  run: PipelineRun,
+  opts?: GateOptions,
+): Promise<PipelineRun> {
+  // Check if we're in competing mode
+  const competitors = run.competingResults?.filter((r) => r.commitSha !== '')
+  if (competitors && competitors.length > 1) {
+    return runCompetingGateStage(run, competitors, opts)
+  }
+
+  return runSingleGateStage(run, opts)
+}
+
+// ============================================================================
+// Single Gate (standard mode)
+// ============================================================================
+
+async function runSingleGateStage(
   run: PipelineRun,
   opts?: GateOptions,
 ): Promise<PipelineRun> {
@@ -154,6 +178,206 @@ export async function runGateStage(
       return await transitionToError(run, errorMsg)
     } catch {
       return { ...run, state: 'error', error: errorMsg }
+    }
+  }
+}
+
+// ============================================================================
+// Competing Gate — evaluate all competitors and pick the best
+// ============================================================================
+
+async function runCompetingGateStage(
+  run: PipelineRun,
+  competitors: CompetingResult[],
+  opts?: GateOptions,
+): Promise<PipelineRun> {
+  const startedAt = new Date().toISOString()
+
+  try {
+    // Run gate on each competitor in parallel
+    const evaluations = await Promise.all(
+      competitors.map((competitor) => evaluateCompetitor(run, competitor, opts)),
+    )
+
+    // Score each competitor: count of passed checks
+    for (const evaluation of evaluations) {
+      const competitor = competitors.find((c) => c.agentIndex === evaluation.agentIndex)
+      if (competitor) {
+        competitor.gateScore = evaluation.score
+        competitor.gateResults = evaluation.results
+      }
+    }
+
+    // Save per-competitor gate results
+    const gateResultsDir = join(getPipelineDir(run.id), 'gate-results')
+    await mkdir(gateResultsDir, { recursive: true })
+
+    for (const evaluation of evaluations) {
+      const competitorDir = join(gateResultsDir, `competitor-${evaluation.agentIndex}`)
+      await mkdir(competitorDir, { recursive: true })
+
+      await Promise.all(
+        evaluation.results.map((r) =>
+          writeFile(
+            join(competitorDir, `${r.checkName}.json`),
+            JSON.stringify(r, null, 2),
+            'utf-8',
+          ),
+        ),
+      )
+
+      await writeFile(
+        join(competitorDir, 'verdict.json'),
+        JSON.stringify({
+          agentIndex: evaluation.agentIndex,
+          passed: evaluation.passed,
+          score: evaluation.score,
+          summary: evaluation.summary,
+          results: evaluation.results.map((r) => ({
+            checkName: r.checkName,
+            verdict: r.verdict,
+            summary: r.summary,
+          })),
+          timestamp: new Date().toISOString(),
+        }, null, 2),
+        'utf-8',
+      )
+    }
+
+    // Select winner: highest score, among those with all-pass; fallback to highest score overall
+    const sortedByScore = [...evaluations].sort((a, b) => b.score - a.score)
+    const passingEvals = sortedByScore.filter((e) => e.passed)
+    const winner = passingEvals[0] ?? sortedByScore[0]
+
+    // Mark winner in competing results
+    const updatedCompetingResults = competitors.map((c) => ({
+      ...c,
+      winner: c.agentIndex === winner.agentIndex,
+    }))
+
+    // Update the pipeline run's worktree to the winner's worktree
+    const winnerCompetitor = competitors.find((c) => c.agentIndex === winner.agentIndex)!
+
+    // Write overall verdict
+    await writeFile(
+      join(gateResultsDir, 'verdict.json'),
+      JSON.stringify({
+        competing: true,
+        winnerAgent: winner.agentIndex,
+        winnerScore: winner.score,
+        winnerPassed: winner.passed,
+        evaluations: evaluations.map((e) => ({
+          agentIndex: e.agentIndex,
+          score: e.score,
+          passed: e.passed,
+          summary: e.summary,
+        })),
+        timestamp: new Date().toISOString(),
+      }, null, 2),
+      'utf-8',
+    )
+
+    // Update pipeline run with gate results from winner and competing results
+    run = {
+      ...run,
+      worktreePath: winnerCompetitor.worktreePath,
+      gateResults: winner.results,
+      competingResults: updatedCompetingResults,
+      updatedAt: new Date().toISOString(),
+    }
+    await savePipelineRun(run)
+
+    // Clean up losing worktrees
+    await cleanupLosingWorktrees(run, updatedCompetingResults)
+
+    // Record stage result
+    const completedAt = new Date().toISOString()
+    const stageResult: StageResult = {
+      stage: 'gate',
+      startedAt,
+      completedAt,
+      output: `Competing gate: agent #${winner.agentIndex} won (score ${winner.score}/${winner.results.length}). ${winner.passed ? 'PASSED' : 'FAILED'}`,
+    }
+    run = await recordStageResult(run, stageResult)
+
+    // Transition based on winner's verdict
+    if (winner.passed) {
+      run = await transition(run, 'checkpoint:ship')
+    } else {
+      run = await transition(run, 'fix-loop')
+    }
+
+    return run
+  } catch (err) {
+    const errorMsg = `Competing gate stage error: ${(err as Error).message}`
+    try {
+      return await transitionToError(run, errorMsg)
+    } catch {
+      return { ...run, state: 'error', error: errorMsg }
+    }
+  }
+}
+
+interface CompetitorEvaluation {
+  agentIndex: number
+  results: GateResult[]
+  passed: boolean
+  score: number
+  summary: string
+}
+
+/**
+ * Run all gate agents against a single competitor's worktree.
+ */
+async function evaluateCompetitor(
+  run: PipelineRun,
+  competitor: CompetingResult,
+  opts?: GateOptions,
+): Promise<CompetitorEvaluation> {
+  const agentOpts = {
+    modelOverride: opts?.modelOverride,
+    budgetOverride: opts?.budgetOverride,
+  }
+
+  // Create a temporary PipelineRun pointing to competitor's worktree
+  const competitorRun: PipelineRun = {
+    ...run,
+    worktreePath: competitor.worktreePath,
+  }
+
+  const [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
+    runTestRunner(competitor.worktreePath),
+    runLintRunner(competitor.worktreePath, run.sourceBranch),
+    runAcValidator(competitorRun, agentOpts),
+    runAdversary(competitorRun, agentOpts),
+    runSecurityReview(competitorRun, agentOpts),
+    runCodeReview(competitorRun, agentOpts),
+  ])
+
+  const results: GateResult[] = [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult]
+  const { passed, summary } = aggregateVerdicts(results)
+  const score = results.filter((r) => r.verdict === 'pass').length
+
+  return { agentIndex: competitor.agentIndex, results, passed, score, summary }
+}
+
+/**
+ * Remove worktrees for losing competitors.
+ */
+async function cleanupLosingWorktrees(
+  run: PipelineRun,
+  competingResults: CompetingResult[],
+): Promise<void> {
+  const losers = competingResults.filter((c) => !c.winner && c.worktreePath)
+  for (const loser of losers) {
+    try {
+      execSync(`git worktree remove --force "${loser.worktreePath}"`, {
+        cwd: run.worktreePath,
+        encoding: 'utf-8',
+        timeout: 15000,
+      })
+    } catch {
+      // Best effort cleanup — worktree may already be gone
     }
   }
 }

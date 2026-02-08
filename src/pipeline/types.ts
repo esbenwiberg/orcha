@@ -91,6 +91,8 @@ export interface PipelineConfig {
   models: ModelConfig
   budgets: BudgetConfig
   maxFixLoops?: number // Default: 3
+  /** Number of competing dev agents (default: 1 = no competition). */
+  competingAgents?: number // Default: 1
 }
 
 // ============================================================================
@@ -163,6 +165,29 @@ export interface LearningRecord {
 }
 
 // ============================================================================
+// Competing Dev Agents
+// ============================================================================
+
+export interface CompetingResult {
+  /** Zero-based index of the competing agent. */
+  agentIndex: number
+  /** Branch name this agent worked on. */
+  branch: string
+  /** Worktree path for this agent. */
+  worktreePath: string
+  /** Git diff produced by this agent. */
+  diff: string
+  /** Commit SHA after auto-commit. */
+  commitSha: string
+  /** Gate score (higher is better). -1 if gate not yet run. */
+  gateScore: number
+  /** Whether this agent was selected as the winner. */
+  winner: boolean
+  /** Gate results for this agent (populated after gate runs). */
+  gateResults?: GateResult[]
+}
+
+// ============================================================================
 // Pipeline Run (the main aggregate)
 // ============================================================================
 
@@ -199,6 +224,8 @@ export interface PipelineRun {
   gateResults: GateResult[]
   /** How many fix-loop iterations have been run so far. */
   fixLoopCount: number
+  /** Results from competing dev agents (populated if competingAgents > 1). */
+  competingResults?: CompetingResult[]
 
   // --- Usage ---
   /** Aggregated token/cost usage snapshot. */

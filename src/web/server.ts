@@ -1994,6 +1994,100 @@ export class WebDashboardServer {
       }
     })
 
+    // =========================================================================
+    // Pipeline API
+    // =========================================================================
+
+    // API: List all pipeline runs
+    this.app.get('/api/pipelines', async (_req, res) => {
+      try {
+        const { listPipelineRuns } = await import('../pipeline/index.js')
+        const runs = await listPipelineRuns()
+        res.json(runs)
+      } catch (err) {
+        console.error('[API] Pipeline list error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Get a single pipeline run
+    this.app.get('/api/pipelines/:id', async (req, res) => {
+      try {
+        const { loadPipelineRun } = await import('../pipeline/index.js')
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+        res.json(run)
+      } catch (err) {
+        console.error('[API] Pipeline get error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Approve pipeline checkpoint
+    this.app.post('/api/pipelines/:id/approve', async (req, res) => {
+      try {
+        const { loadPipelineRun } = await import('../pipeline/index.js')
+        const { approveCheckpoint } = await import('../pipeline/checkpoint.js')
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+        const updated = await approveCheckpoint(run)
+        console.log(`[API] Pipeline ${run.id} approved (${run.state} -> ${updated.state})`)
+        res.json(updated)
+      } catch (err) {
+        console.error('[API] Pipeline approve error:', err)
+        res.status(400).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Reject pipeline checkpoint
+    this.app.post('/api/pipelines/:id/reject', async (req, res) => {
+      try {
+        const { loadPipelineRun } = await import('../pipeline/index.js')
+        const { rejectCheckpoint } = await import('../pipeline/checkpoint.js')
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+        const updated = await rejectCheckpoint(run)
+        console.log(`[API] Pipeline ${run.id} rejected (${run.state} -> ${updated.state})`)
+        res.json(updated)
+      } catch (err) {
+        console.error('[API] Pipeline reject error:', err)
+        res.status(400).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Provide feedback on architect checkpoint
+    this.app.post('/api/pipelines/:id/feedback', async (req, res) => {
+      try {
+        const { loadPipelineRun } = await import('../pipeline/index.js')
+        const { feedbackArchitectCheckpoint } = await import('../pipeline/checkpoint.js')
+        const { feedback } = req.body as { feedback: string }
+        if (!feedback) {
+          res.status(400).json({ error: 'feedback is required' })
+          return
+        }
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+        const updated = await feedbackArchitectCheckpoint(run, feedback)
+        console.log(`[API] Pipeline ${run.id} feedback sent, re-running architect`)
+        res.json(updated)
+      } catch (err) {
+        console.error('[API] Pipeline feedback error:', err)
+        res.status(400).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Restart server (graceful)
     this.app.post('/api/server/restart', async (_req, res) => {
       try {

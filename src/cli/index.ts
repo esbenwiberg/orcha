@@ -1703,6 +1703,7 @@ pipelineCmd
   .option('--model-fix <model>', 'Override model for fix stage')
   .option('--model-ship <model>', 'Override model for ship stage')
   .option('--max-budget-usd <amount>', 'Override default budget per stage', parseFloat)
+  .option('--competing <count>', 'Run N competing dev agents in parallel', parseInt)
   .action(async (options) => {
     const {
       workItem,
@@ -1716,6 +1717,7 @@ pipelineCmd
       modelFix,
       modelShip,
       maxBudgetUsd,
+      competing,
     } = options
 
     // Require at least a description or work item
@@ -1753,6 +1755,10 @@ pipelineCmd
     if (maxBudgetUsd !== undefined) {
       budgetOverrides.default = maxBudgetUsd
       configOverrides.budgets = budgetOverrides
+    }
+
+    if (competing !== undefined && competing > 1) {
+      configOverrides.competingAgents = competing
     }
 
     let config
@@ -1835,6 +1841,13 @@ pipelineCmd
       console.log(`  Updated: ${run.updatedAt}`)
       if (run.blueprintPath) console.log(`  Blueprint: ${run.blueprintPath}`)
       if (run.error) console.log(`  Error: ${run.error}`)
+      if (run.competingResults && run.competingResults.length > 0) {
+        console.log(`  Competing agents: ${run.competingResults.length}`)
+        for (const c of run.competingResults) {
+          const status = c.winner ? ' (WINNER)' : c.gateScore >= 0 ? '' : ' (pending)'
+          console.log(`    Agent #${c.agentIndex}: score=${c.gateScore}${status}`)
+        }
+      }
       if (run.stageHistory.length > 0) {
         console.log(`  Stage history:`)
         for (const stage of run.stageHistory) {
