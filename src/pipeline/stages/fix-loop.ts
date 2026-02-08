@@ -184,7 +184,11 @@ function buildFailureReport(gateResults: GateResult[]): string {
       lines.push('')
       lines.push('Details:')
       lines.push('```json')
-      lines.push(JSON.stringify(f.details, null, 2))
+      try {
+        lines.push(JSON.stringify(f.details, null, 2))
+      } catch {
+        lines.push('(details could not be serialized)')
+      }
       lines.push('```')
     }
     return lines.join('\n')

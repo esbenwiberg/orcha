@@ -8,6 +8,18 @@
 import { execSync } from 'child_process'
 
 // ============================================================================
+// Branch Name Validation
+// ============================================================================
+
+const SAFE_BRANCH_RE = /^[a-zA-Z0-9\/_.\-]+$/
+
+function assertSafeBranch(branch: string): void {
+  if (!SAFE_BRANCH_RE.test(branch)) {
+    throw new Error(`Invalid branch name: ${branch}`)
+  }
+}
+
+// ============================================================================
 // Diff Retrieval
 // ============================================================================
 
@@ -21,6 +33,7 @@ import { execSync } from 'child_process'
  * Returns null if no diff can be obtained.
  */
 export function getDiff(worktreePath: string, sourceBranch: string): string | null {
+  assertSafeBranch(sourceBranch)
   const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
 
   try {
@@ -52,6 +65,7 @@ const LINTABLE_EXTENSIONS = /\.(ts|js|tsx|jsx)$/
  * Uses git diff --name-only with extension filters.
  */
 export function getChangedLintableFiles(worktreePath: string, sourceBranch: string): string[] {
+  assertSafeBranch(sourceBranch)
   const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
 
   try {

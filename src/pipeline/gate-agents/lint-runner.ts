@@ -139,7 +139,7 @@ async function detectLintStrategy(worktreePath: string): Promise<LintStrategy | 
 }
 
 function buildLintCommand(strategy: LintStrategy, changedFiles: string[]): string {
-  const fileList = changedFiles.map((f) => `"${f}"`).join(' ')
+  const fileList = changedFiles.map((f) => `"${f.replace(/["\\$`]/g, '\\$&')}"`).join(' ')
 
   switch (strategy) {
     case 'npm-lint':

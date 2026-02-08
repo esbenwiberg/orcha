@@ -1758,8 +1758,19 @@ pipelineCmd
       configOverrides.budgets = budgetOverrides
     }
 
-    if (competing !== undefined && competing > 1) {
-      configOverrides.competingAgents = competing
+    if (competing !== undefined) {
+      if (isNaN(competing) || competing < 1 || competing > 10) {
+        console.error('Error: --competing must be between 1 and 10')
+        process.exit(1)
+      }
+      if (competing > 1) {
+        configOverrides.competingAgents = competing
+      }
+    }
+
+    if (maxBudgetUsd !== undefined && isNaN(maxBudgetUsd)) {
+      console.error('Error: --max-budget-usd must be a number')
+      process.exit(1)
     }
 
     let config

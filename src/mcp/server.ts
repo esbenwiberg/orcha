@@ -125,6 +125,13 @@ export function createMcpServer(statusDir = DEFAULT_STATUS_DIR): McpServer {
       },
     },
     async (args) => {
+      // Validate pipeline ID format to prevent path traversal
+      if (!/^pl-[\da-f\-]+$/i.test(args.pipelineId)) {
+        return {
+          content: [{ type: 'text', text: `Invalid pipeline ID format: ${args.pipelineId}` }],
+        }
+      }
+
       const pipelinesDir = join(homedir(), '.orcha', 'pipelines')
       const dir = join(pipelinesDir, args.pipelineId)
 

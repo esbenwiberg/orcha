@@ -173,6 +173,7 @@ export class WebDashboardServer {
     this.app.use('/api/batch-issues', authMiddleware)
     this.app.use('/api/upload-image', authMiddleware)
     this.app.use('/api/server', authMiddleware)
+    this.app.use('/api/pipelines', authMiddleware)
 
     // Protect HTML pages (root dashboard and mobile view)
     this.app.get('/', authMiddleware)
