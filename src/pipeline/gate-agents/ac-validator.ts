@@ -137,9 +137,9 @@ function parseAcVerdict(stdout: string, timestamp: string): GateResult {
 
   if (!parsed) {
     return {
-      verdict: 'pass',
+      verdict: 'fail',
       checkName: 'ac-validator',
-      summary: 'AC validator produced unstructured output — assuming pass',
+      summary: 'AC validator produced unstructured output — cannot verify acceptance criteria',
       details: { rawOutput: stdout.slice(0, 2000) },
       timestamp,
     }

@@ -11,9 +11,9 @@
  * - If no tests written or all tests pass → pass
  */
 
-import { execSync } from 'child_process'
-import { mkdtemp, writeFile, rm } from 'fs/promises'
-import { join } from 'path'
+import { execSync, execFileSync } from 'child_process'
+import { mkdtemp, writeFile, readFile, rm } from 'fs/promises'
+import { join, resolve, relative } from 'path'
 import { tmpdir } from 'os'
 import type { PipelineRun, GateResult } from '../types.js'
 import { runStage } from '../stage-runner.js'
@@ -132,7 +132,10 @@ export async function runAdversary(
     tempDir = await mkdtemp(join(tmpdir(), 'orcha-adversary-'))
     for (const test of adversaryOutput.tests) {
       const safeName = test.filename.replace(/[^a-zA-Z0-9._-]/g, '_')
-      await writeFile(join(tempDir, safeName), test.content, 'utf-8')
+      const targetPath = join(tempDir, safeName)
+      // Validate path stays within tempDir (prevent traversal via crafted filenames)
+      if (!resolve(targetPath).startsWith(resolve(tempDir))) continue
+      await writeFile(targetPath, test.content, 'utf-8')
     }
 
     // Execute each test against the worktree
@@ -200,7 +203,7 @@ export async function runAdversary(
  */
 function getTestPatterns(worktreePath: string): string {
   try {
-    // Find test files and grab first few lines as patterns
+    // Find test files — static command, no interpolation
     const testFiles = execSync(
       'find . -maxdepth 4 -type f \\( -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" -o -name "*.spec.js" \\) | head -5',
       { cwd: worktreePath, encoding: 'utf-8', timeout: 5000 },
@@ -209,13 +212,12 @@ function getTestPatterns(worktreePath: string): string {
     if (!testFiles) return ''
 
     const patterns: string[] = []
+    const { readFileSync } = require('fs')
     for (const file of testFiles.split('\n').filter(Boolean).slice(0, 3)) {
       try {
-        const content = execSync(`head -30 "${file}"`, {
-          cwd: worktreePath,
-          encoding: 'utf-8',
-          timeout: 3000,
-        }).trim()
+        const fullPath = join(worktreePath, file)
+        const content = (readFileSync(fullPath, 'utf-8') as string)
+          .split('\n').slice(0, 30).join('\n')
         patterns.push(`--- ${file} ---\n${content}`)
       } catch { /* skip unreadable files */ }
     }
@@ -244,11 +246,19 @@ async function executeTests(
     const safeName = test.filename.replace(/[^a-zA-Z0-9._-]/g, '_')
     const testPath = join(tempDir, safeName)
 
+    // Validate the resolved test path stays within tempDir (prevent traversal)
+    const resolvedTestPath = resolve(testPath)
+    const relPath = relative(tempDir, resolvedTestPath)
+    if (relPath.startsWith('..') || resolve(relPath) !== resolvedTestPath) {
+      results.push({ filename: safeName, compiled: false, passed: false, output: 'Path traversal detected' })
+      continue
+    }
+
     // Try to run the test using npx with the worktree as context
-    // Use NODE_PATH to resolve imports from the worktree
+    // Use execFileSync to avoid shell injection via testPath
     try {
-      const output = execSync(
-        `npx tsx "${testPath}"`,
+      const output = execFileSync(
+        'npx', ['tsx', testPath],
         {
           cwd: worktreePath,
           encoding: 'utf-8',

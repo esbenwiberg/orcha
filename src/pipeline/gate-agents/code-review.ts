@@ -123,9 +123,9 @@ function parseCodeReviewVerdict(stdout: string, timestamp: string): GateResult {
 
   if (!parsed) {
     return {
-      verdict: 'pass',
+      verdict: 'fail',
       checkName: 'code-review',
-      summary: 'Code review produced unstructured output — assuming pass',
+      summary: 'Code review produced unstructured output — cannot verify code quality',
       details: { rawOutput: stdout.slice(0, 2000) },
       timestamp,
     }

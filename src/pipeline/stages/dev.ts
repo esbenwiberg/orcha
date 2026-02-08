@@ -230,10 +230,13 @@ async function runCompetingDevStage(
     // Sort by agent index for consistent ordering
     competingResults.sort((a, b) => a.agentIndex - b.agentIndex)
 
-    // Save competing results to pipeline run
+    // Filter out failed agents (empty commitSha) — gate cannot evaluate stubs
+    const successfulResults = competingResults.filter((r) => r.commitSha !== '')
+
+    // Save competing results to pipeline run (only successful ones)
     run = {
       ...run,
-      competingResults,
+      competingResults: successfulResults,
       updatedAt: new Date().toISOString(),
     }
     await savePipelineRun(run)
@@ -264,8 +267,7 @@ async function runCompetingDevStage(
     }
 
     // Check if we have at least one successful agent
-    const successfulAgents = competingResults.filter((r) => r.commitSha !== '')
-    if (successfulAgents.length === 0) {
+    if (successfulResults.length === 0) {
       return await transitionToError(run, 'All competing dev agents failed')
     }
 
@@ -275,7 +277,7 @@ async function runCompetingDevStage(
       stage: 'dev',
       startedAt,
       completedAt,
-      output: `${successfulAgents.length}/${count} competing agents completed successfully`,
+      output: `${successfulResults.length}/${count} competing agents completed successfully`,
     }
     run = await recordStageResult(run, stageResult)
 
@@ -381,15 +383,6 @@ async function autoCommit(worktreePath: string, sourceBranch: string): Promise<D
   // Get the current branch name
   const branch = execSync('git rev-parse --abbrev-ref HEAD', execOpts).trim()
 
-  // Get the diff before committing (for recording purposes)
-  let diff: string
-  try {
-    diff = execSync(`git diff ${sourceBranch}...HEAD`, execOpts).trim()
-  } catch {
-    // If the source branch doesn't exist locally, diff against HEAD
-    diff = execSync('git diff HEAD', execOpts).trim()
-  }
-
   // Stage all changes
   execSync('git add -A', execOpts)
 
@@ -403,17 +396,20 @@ async function autoCommit(worktreePath: string, sourceBranch: string): Promise<D
       'git commit -m "pipeline: dev agent implementation"',
       execOpts,
     )
-    commitSha = execSync('git rev-parse HEAD', execOpts).trim()
+  }
 
-    // Re-capture diff after commit (now includes the commit)
+  commitSha = execSync('git rev-parse HEAD', execOpts).trim()
+
+  // Capture diff after commit (consistent: always use three-dot syntax)
+  let diff: string
+  try {
+    diff = execSync(`git diff ${sourceBranch}...HEAD`, execOpts).trim()
+  } catch {
     try {
-      diff = execSync(`git diff ${sourceBranch}...HEAD`, execOpts).trim()
+      diff = execSync(`git diff origin/${sourceBranch}...HEAD`, execOpts).trim()
     } catch {
       diff = execSync('git diff HEAD~1', execOpts).trim()
     }
-  } else {
-    // No changes to commit (unusual but possible)
-    commitSha = execSync('git rev-parse HEAD', execOpts).trim()
   }
 
   return { diff, branch, commitSha }

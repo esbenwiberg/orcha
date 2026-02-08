@@ -2076,17 +2076,27 @@ export class WebDashboardServer {
           res.status(400).json({ error: 'feedback is required' })
           return
         }
+        if (typeof feedback !== 'string' || feedback.length > 5000) {
+          res.status(400).json({ error: 'feedback must be a string of at most 5000 characters' })
+          return
+        }
         const run = await loadPipelineRun(req.params.id)
         if (!run) {
           res.status(404).json({ error: 'Pipeline not found' })
           return
         }
-        const updated = await feedbackArchitectCheckpoint(run, feedback)
-        console.log(`[API] Pipeline ${run.id} feedback sent, re-running architect`)
-        res.json(updated)
+        // Return 202 immediately — architect re-run is long-running
+        // Progress is delivered via WebSocket pipeline events
+        res.status(202).json({ message: 'Feedback accepted, re-running architect', pipelineId: run.id })
+        console.log(`[API] Pipeline ${run.id} feedback accepted, re-running architect async`)
+        feedbackArchitectCheckpoint(run, feedback.trim()).catch((err) => {
+          console.error(`[API] Pipeline ${run.id} feedback/architect re-run failed:`, (err as Error).message)
+        })
       } catch (err) {
         console.error('[API] Pipeline feedback error:', err)
-        res.status(400).json({ error: (err as Error).message })
+        if (!res.headersSent) {
+          res.status(400).json({ error: (err as Error).message })
+        }
       }
     })
 

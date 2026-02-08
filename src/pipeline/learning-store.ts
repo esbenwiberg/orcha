@@ -8,7 +8,7 @@
  * and provides relevant hints to the architect for future pipeline runs.
  */
 
-import { readFile, writeFile, rename, mkdir, unlink, stat } from 'fs/promises'
+import { readFile, writeFile, rename, mkdir, rm, unlink, stat } from 'fs/promises'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { getPipelinesRoot } from './pipeline-store.js'
@@ -86,9 +86,9 @@ function lockFilePath(): string {
 }
 
 /**
- * Acquire an exclusive lockfile. Uses `wx` flag which fails atomically if
- * the file already exists. Retries with jittered backoff. Stale locks
- * (older than LOCK_STALE_MS) are force-removed.
+ * Acquire an exclusive lock directory. Uses `mkdir` which is atomic on POSIX
+ * (fails if directory already exists). Retries with jittered backoff.
+ * Stale locks (older than LOCK_STALE_MS) are force-removed.
  *
  * Returns a release function that must be called when done.
  */
@@ -97,10 +97,11 @@ async function acquireLock(): Promise<() => Promise<void>> {
 
   for (let attempt = 0; attempt < LOCK_MAX_RETRIES; attempt++) {
     try {
-      await writeFile(lockPath, `${process.pid}:${Date.now()}`, { flag: 'wx' })
+      // mkdir is atomic on POSIX — fails with EEXIST if lock already held
+      await mkdir(lockPath, { recursive: false })
       return async () => {
         try {
-          await unlink(lockPath)
+          await rm(lockPath, { recursive: true, force: true })
         } catch {
           // Lock already removed — not a problem
         }
@@ -112,7 +113,7 @@ async function acquireLock(): Promise<() => Promise<void>> {
       try {
         const info = await stat(lockPath)
         if (Date.now() - info.mtimeMs > LOCK_STALE_MS) {
-          await unlink(lockPath)
+          await rm(lockPath, { recursive: true, force: true })
           continue // Retry immediately after removing stale lock
         }
       } catch {

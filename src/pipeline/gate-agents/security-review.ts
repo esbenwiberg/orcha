@@ -124,9 +124,9 @@ function parseSecurityVerdict(stdout: string, timestamp: string): GateResult {
 
   if (!parsed) {
     return {
-      verdict: 'pass',
+      verdict: 'fail',
       checkName: 'security',
-      summary: 'Security review produced unstructured output — assuming pass',
+      summary: 'Security review produced unstructured output — cannot verify security',
       details: { rawOutput: stdout.slice(0, 2000) },
       timestamp,
     }
