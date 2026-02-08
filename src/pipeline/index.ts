@@ -55,6 +55,8 @@ export {
   getAvailableTransitions,
   createPipelineRun,
   executeArchitectStage,
+  executeDevStage,
+  executeGateStage,
 } from './pipeline-engine.js'
 
 export type { CreatePipelineRunOptions } from './pipeline-engine.js'
@@ -67,10 +69,26 @@ export type { StageRunnerOptions, StageRunnerResult } from './stage-runner.js'
 export {
   parseAcceptanceCriteria,
   buildArchitectPrompt,
+  buildDevPrompt,
+  buildAcValidatorPrompt,
   buildStagePrompt,
 } from './prompt-builder.js'
-export type { WorkItemContext, CodebaseContext, PromptParts } from './prompt-builder.js'
+export type { WorkItemContext, CodebaseContext, BlueprintContext, DiffContext, PromptParts } from './prompt-builder.js'
 
-// Stages
+// Stages — Architect
 export { runArchitectStage, BLUEPRINT_SCHEMA } from './stages/architect.js'
 export type { BlueprintOutput, ArchitectOptions } from './stages/architect.js'
+
+// Stages — Dev
+export { runDevStage } from './stages/dev.js'
+export type { DevOptions, DevResult } from './stages/dev.js'
+
+// Stages — Gate
+export { runGateStage } from './stages/gate.js'
+export type { GateOptions, GateStageResult } from './stages/gate.js'
+
+// Gate Agents
+export { runTestRunner } from './gate-agents/test-runner.js'
+export { runLintRunner } from './gate-agents/lint-runner.js'
+export { runAcValidator } from './gate-agents/ac-validator.js'
+export type { AcValidatorOptions } from './gate-agents/ac-validator.js'

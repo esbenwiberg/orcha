@@ -26,6 +26,10 @@ import { ACTIVE_STATES, TERMINAL_STATES } from './types.js'
 import { savePipelineRun, generatePipelineId } from './pipeline-store.js'
 import { runArchitectStage } from './stages/architect.js'
 import type { ArchitectOptions } from './stages/architect.js'
+import { runDevStage } from './stages/dev.js'
+import type { DevOptions } from './stages/dev.js'
+import { runGateStage } from './stages/gate.js'
+import type { GateOptions } from './stages/gate.js'
 
 // ============================================================================
 // Transition Table
@@ -332,6 +336,53 @@ export async function executeArchitectStage(
 
   // Run the architect stage (handles checkpoint:arch transition internally)
   run = await runArchitectStage(run, opts)
+
+  return run
+}
+
+// ============================================================================
+// Dev Stage Orchestration
+// ============================================================================
+
+/**
+ * Transition from 'checkpoint:arch' to 'dev' and execute the dev stage.
+ *
+ * Expects the pipeline to be in 'checkpoint:arch' (i.e. architect approved).
+ * Returns the updated PipelineRun (which will be in 'gate' on success,
+ * or 'error' on failure).
+ */
+export async function executeDevStage(
+  run: PipelineRun,
+  opts?: DevOptions,
+): Promise<PipelineRun> {
+  // Transition: checkpoint:arch -> dev
+  run = await transition(run, 'dev')
+
+  // Run the dev stage (handles gate transition internally)
+  run = await runDevStage(run, opts)
+
+  return run
+}
+
+// ============================================================================
+// Gate Stage Orchestration
+// ============================================================================
+
+/**
+ * Execute the gate stage (runs immediately after dev completes).
+ *
+ * Expects the pipeline to already be in 'gate' state (the dev stage
+ * transitions to 'gate' on completion). Returns the updated PipelineRun
+ * (which will be in 'checkpoint:ship' if gate passes, 'fix-loop' if
+ * it fails, or 'error' on unrecoverable failure).
+ */
+export async function executeGateStage(
+  run: PipelineRun,
+  opts?: GateOptions,
+): Promise<PipelineRun> {
+  // The pipeline should already be in 'gate' state (set by dev stage).
+  // Run the gate stage (handles checkpoint:ship / fix-loop transition internally)
+  run = await runGateStage(run, opts)
 
   return run
 }

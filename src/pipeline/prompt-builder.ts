@@ -215,7 +215,7 @@ export function buildArchitectPrompt(
 }
 
 /**
- * Build a generic stage prompt (for future stages like dev, fix, ship).
+ * Build a generic stage prompt (for future stages like fix, ship).
  * Placeholder — will be expanded in later milestones.
  */
 export function buildStagePrompt(
@@ -242,6 +242,128 @@ export function buildStagePrompt(
     workItem.description,
     ...acSection,
   ].filter((line) => line !== '').join('\n')
+
+  return { systemPrompt, userPrompt }
+}
+
+// ============================================================================
+// Dev Stage Prompt
+// ============================================================================
+
+export interface BlueprintContext {
+  /** The blueprint JSON content as a string. */
+  blueprintJson: string
+}
+
+/**
+ * Build the prompt parts for the dev stage.
+ *
+ * The dev agent receives the full blueprint via --append-system-prompt and
+ * implements the changes described in it. The project's CLAUDE.md is picked
+ * up automatically from the worktree by Claude Code.
+ */
+export function buildDevPrompt(
+  workItem: WorkItemContext,
+  codebase: CodebaseContext,
+  blueprint: BlueprintContext,
+): PromptParts {
+  const systemPrompt = [
+    'You are a dev agent in the Orcha pipeline.',
+    'Your job is to implement the changes described in the blueprint below.',
+    '',
+    'Guidelines:',
+    '- Follow the blueprint steps precisely.',
+    '- Create and modify only the files listed in filesToTouch.',
+    '- Follow the existing code conventions and patterns in the codebase.',
+    '- Write clean, well-structured code.',
+    '- Do NOT run tests — that is the gate stage\'s job.',
+    '- Do NOT commit your changes — the pipeline handles commits automatically.',
+    '- If the blueprint is ambiguous, make reasonable decisions and note them.',
+    '',
+    '## Blueprint',
+    blueprint.blueprintJson,
+  ].join('\n')
+
+  const acSection = workItem.acceptanceCriteria.length > 0
+    ? ['', '## Acceptance Criteria', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
+    : []
+
+  const userPrompt = [
+    '# Task',
+    workItem.workItemId ? `Work Item: ${workItem.workItemId}` : '',
+    '',
+    '## Description',
+    workItem.description,
+    ...acSection,
+    '',
+    '# Instructions',
+    'Implement the changes described in the blueprint.',
+    'Work through each step in order. Create or modify the listed files.',
+    `Source branch: ${codebase.sourceBranch}`,
+  ].filter((line) => line !== '').join('\n')
+
+  return { systemPrompt, userPrompt }
+}
+
+// ============================================================================
+// AC Validator Prompt
+// ============================================================================
+
+export interface DiffContext {
+  /** The git diff output showing changes made. */
+  diff: string
+}
+
+/**
+ * Build the prompt parts for the AC validator gate agent.
+ *
+ * The AC validator compares the git diff against the acceptance criteria
+ * and produces a structured pass/fail verdict.
+ */
+export function buildAcValidatorPrompt(
+  workItem: WorkItemContext,
+  diff: DiffContext,
+): PromptParts {
+  const systemPrompt = [
+    'You are an acceptance criteria validator in the Orcha pipeline gate.',
+    'Your job is to determine whether the code changes satisfy the acceptance criteria.',
+    '',
+    'Guidelines:',
+    '- Compare each acceptance criterion against the diff carefully.',
+    '- Be practical: if the AC is clearly met by the code changes, mark it as passing.',
+    '- If an AC is partially met or unclear, explain what is missing.',
+    '- Do NOT nitpick style or minor issues — focus on whether ACs are satisfied.',
+    '',
+    'Output your verdict as JSON with this structure:',
+    '{',
+    '  "pass": true/false,',
+    '  "summary": "Brief overall summary",',
+    '  "criteria": [',
+    '    { "criterion": "the AC text", "met": true/false, "explanation": "why" }',
+    '  ]',
+    '}',
+  ].join('\n')
+
+  const acSection = workItem.acceptanceCriteria.length > 0
+    ? workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`).join('\n')
+    : '(No explicit acceptance criteria provided — use your best judgment based on the description.)'
+
+  const userPrompt = [
+    '# Acceptance Criteria',
+    acSection,
+    '',
+    '# Task Description',
+    workItem.description,
+    '',
+    '# Code Changes (git diff)',
+    '```diff',
+    diff.diff,
+    '```',
+    '',
+    '# Instructions',
+    'Evaluate whether the code changes above satisfy each acceptance criterion.',
+    'Output your verdict as the JSON structure described in your instructions.',
+  ].join('\n')
 
   return { systemPrompt, userPrompt }
 }
