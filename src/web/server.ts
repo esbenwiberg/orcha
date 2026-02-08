@@ -2263,17 +2263,26 @@ export class WebDashboardServer {
 
         // Give time for response to be sent
         setTimeout(() => {
-          const { spawn } = require('child_process')
-          // Use the restart script which handles graceful shutdown
-          const restartScript = join(homedir(), 'restart-orcha-web.sh')
-          if (existsSync(restartScript)) {
+          const { spawn, execSync } = require('child_process')
+          // Check for restart script in multiple locations
+          const projectScript = join(__dirname, '../../scripts/restart-orcha-web.sh')
+          const homeScript = join(homedir(), 'restart-orcha-web.sh')
+          const restartScript = existsSync(projectScript) ? projectScript : existsSync(homeScript) ? homeScript : null
+
+          if (restartScript) {
             spawn('bash', [restartScript], {
               detached: true,
               stdio: 'ignore',
             }).unref()
           } else {
-            // Fallback: just exit and let tmux restart
-            process.exit(0)
+            // Fallback: try to respawn via tmux directly
+            try {
+              const orchaDir = process.cwd()
+              execSync(`tmux respawn-pane -k -t orcha-web "cd ${orchaDir} && npm run web:dev"`, { stdio: 'ignore' })
+            } catch {
+              // Last resort: just exit
+              process.exit(0)
+            }
           }
         }, 500)
       } catch (err) {
