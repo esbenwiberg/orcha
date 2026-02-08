@@ -278,6 +278,14 @@ export async function transitionToError(
     updatedAt: now,
   }
   await savePipelineRun(updated)
+
+  pipelineEvents.emitStateChange({
+    pipelineId: updated.id,
+    from: run.state,
+    to: 'error',
+    updatedAt: now,
+  })
+
   return updated
 }
 

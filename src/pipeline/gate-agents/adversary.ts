@@ -12,6 +12,7 @@
  */
 
 import { execSync, execFileSync } from 'child_process'
+import { readFileSync } from 'fs'
 import { mkdtemp, writeFile, readFile, rm } from 'fs/promises'
 import { join, resolve, relative } from 'path'
 import { tmpdir } from 'os'
@@ -212,7 +213,6 @@ function getTestPatterns(worktreePath: string): string {
     if (!testFiles) return ''
 
     const patterns: string[] = []
-    const { readFileSync } = require('fs')
     for (const file of testFiles.split('\n').filter(Boolean).slice(0, 3)) {
       try {
         const fullPath = join(worktreePath, file)
@@ -282,12 +282,10 @@ async function executeTests(
       const execError = err as { status?: number; stdout?: string; stderr?: string }
       const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
 
-      // Distinguish compile errors from test failures
+      // Distinguish compile/import errors from test failures
       const isCompileError = output.includes('SyntaxError')
         || output.includes('Cannot find module')
-        || output.includes('TypeError: Cannot read properties')
         || output.includes('ERR_MODULE_NOT_FOUND')
-        || output.includes('is not a function')
 
       if (isCompileError) {
         results.push({

@@ -104,12 +104,8 @@ export async function listPipelineIds(): Promise<string[]> {
  */
 export async function listPipelineRuns(): Promise<PipelineRun[]> {
   const ids = await listPipelineIds()
-  const runs: PipelineRun[] = []
-  for (const id of ids) {
-    const run = await loadPipelineRun(id)
-    if (run) runs.push(run)
-  }
-  return runs
+  const results = await Promise.all(ids.map((id) => loadPipelineRun(id)))
+  return results.filter((run): run is PipelineRun => run !== null)
 }
 
 /**
