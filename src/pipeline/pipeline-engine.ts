@@ -1,0 +1,272 @@
+/**
+ * Pipeline Engine — State Machine
+ *
+ * Owns the transition table and validates every state change.
+ * No stage execution logic lives here — this is purely the skeleton
+ * state machine that future milestones will drive.
+ *
+ * Transition table (from the architecture doc):
+ *
+ *   created        -> architect
+ *   architect      -> checkpoint:arch
+ *   checkpoint:arch -> dev | cancelled | architect   (approve / reject / feedback)
+ *   dev            -> gate
+ *   gate           -> fix-loop | checkpoint:ship
+ *   fix-loop       -> gate | escalated
+ *   checkpoint:ship -> ship | cancelled
+ *   ship           -> completed
+ *
+ *   Any ACTIVE state -> paused             (via orcha stop)
+ *   paused          -> (previous active)   (via resume)
+ *   Any state        -> error              (on unrecoverable failure)
+ */
+
+import type { PipelineRun, PipelineState, StageResult } from './types.js'
+import { ACTIVE_STATES, TERMINAL_STATES } from './types.js'
+import { savePipelineRun } from './pipeline-store.js'
+
+// ============================================================================
+// Transition Table
+// ============================================================================
+
+/**
+ * Map from a source state to the set of states it can transition to.
+ * "paused" and "error" are handled as special cases (see below).
+ */
+const TRANSITION_TABLE: ReadonlyMap<PipelineState, ReadonlySet<PipelineState>> = new Map([
+  ['created', new Set<PipelineState>(['architect'])],
+  ['architect', new Set<PipelineState>(['checkpoint:arch'])],
+  ['checkpoint:arch', new Set<PipelineState>(['dev', 'cancelled', 'architect'])],
+  ['dev', new Set<PipelineState>(['gate'])],
+  ['gate', new Set<PipelineState>(['fix-loop', 'checkpoint:ship'])],
+  ['fix-loop', new Set<PipelineState>(['gate', 'escalated'])],
+  ['checkpoint:ship', new Set<PipelineState>(['ship', 'cancelled'])],
+  ['ship', new Set<PipelineState>(['completed'])],
+])
+
+// ============================================================================
+// Validation
+// ============================================================================
+
+export class InvalidTransitionError extends Error {
+  constructor(
+    public readonly from: PipelineState,
+    public readonly to: PipelineState,
+    message?: string,
+  ) {
+    super(message ?? `Invalid pipeline transition: ${from} -> ${to}`)
+    this.name = 'InvalidTransitionError'
+  }
+}
+
+/**
+ * Check whether a transition from `from` to `to` is valid.
+ *
+ * Special rules:
+ * - Any ACTIVE state can transition to "paused".
+ * - "paused" can transition back to its saved `pausedStage` only.
+ * - Any non-terminal state can transition to "error".
+ * - Terminal states (completed, cancelled, escalated) cannot transition anywhere.
+ */
+export function isValidTransition(
+  from: PipelineState,
+  to: PipelineState,
+  pausedStage?: PipelineState,
+): boolean {
+  // Cannot leave terminal states.
+  if (TERMINAL_STATES.has(from)) {
+    return false
+  }
+
+  // Any non-terminal state -> error
+  if (to === 'error') {
+    return true
+  }
+
+  // Any active state -> paused
+  if (to === 'paused' && ACTIVE_STATES.has(from)) {
+    return true
+  }
+
+  // paused -> previous active state (resume)
+  if (from === 'paused') {
+    if (pausedStage && to === pausedStage) {
+      return true
+    }
+    return false
+  }
+
+  // error -> nowhere (error is terminal-like unless we add recovery later)
+  if (from === 'error') {
+    return false
+  }
+
+  // Check the explicit transition table.
+  const allowed = TRANSITION_TABLE.get(from)
+  return allowed?.has(to) ?? false
+}
+
+/**
+ * Assert a transition is valid, throwing InvalidTransitionError if not.
+ */
+export function assertValidTransition(
+  from: PipelineState,
+  to: PipelineState,
+  pausedStage?: PipelineState,
+): void {
+  if (!isValidTransition(from, to, pausedStage)) {
+    throw new InvalidTransitionError(from, to)
+  }
+}
+
+// ============================================================================
+// State Machine Operations
+// ============================================================================
+
+/**
+ * Transition a pipeline run to a new state, persisting the change.
+ *
+ * Returns the updated PipelineRun (the input object is not mutated).
+ * Throws InvalidTransitionError if the transition is not allowed.
+ */
+export async function transition(
+  run: PipelineRun,
+  to: PipelineState,
+): Promise<PipelineRun> {
+  assertValidTransition(run.state, to, run.pausedStage)
+
+  const now = new Date().toISOString()
+  let updated: PipelineRun = { ...run, updatedAt: now }
+
+  // --- Handle pause ---
+  if (to === 'paused') {
+    updated = {
+      ...updated,
+      state: 'paused',
+      pausedAt: now,
+      pausedStage: run.state,
+      currentStage: null,
+    }
+  }
+  // --- Handle resume from paused ---
+  else if (run.state === 'paused') {
+    updated = {
+      ...updated,
+      state: to,
+      pausedAt: undefined,
+      pausedStage: undefined,
+      currentStage: to,
+    }
+  }
+  // --- Handle terminal / error ---
+  else if (TERMINAL_STATES.has(to) || to === 'error') {
+    updated = {
+      ...updated,
+      state: to,
+      currentStage: null,
+    }
+  }
+  // --- Normal forward transition ---
+  else {
+    updated = {
+      ...updated,
+      state: to,
+      currentStage: to,
+    }
+  }
+
+  await savePipelineRun(updated)
+  return updated
+}
+
+/**
+ * Record a completed stage result and persist.
+ * This does NOT change the pipeline state -- call `transition()` for that.
+ */
+export async function recordStageResult(
+  run: PipelineRun,
+  result: StageResult,
+): Promise<PipelineRun> {
+  const updated: PipelineRun = {
+    ...run,
+    stageHistory: [...run.stageHistory, result],
+    updatedAt: new Date().toISOString(),
+  }
+  await savePipelineRun(updated)
+  return updated
+}
+
+/**
+ * Increment the fix-loop counter and persist.
+ */
+export async function incrementFixLoop(run: PipelineRun): Promise<PipelineRun> {
+  const updated: PipelineRun = {
+    ...run,
+    fixLoopCount: run.fixLoopCount + 1,
+    updatedAt: new Date().toISOString(),
+  }
+  await savePipelineRun(updated)
+  return updated
+}
+
+/**
+ * Set an error message on the pipeline (typically used alongside transition to 'error').
+ */
+export async function setError(
+  run: PipelineRun,
+  errorMessage: string,
+): Promise<PipelineRun> {
+  const updated: PipelineRun = {
+    ...run,
+    error: errorMessage,
+    updatedAt: new Date().toISOString(),
+  }
+  await savePipelineRun(updated)
+  return updated
+}
+
+/**
+ * Convenience: transition to 'error' and record the error message in one step.
+ */
+export async function transitionToError(
+  run: PipelineRun,
+  errorMessage: string,
+): Promise<PipelineRun> {
+  assertValidTransition(run.state, 'error', run.pausedStage)
+
+  const now = new Date().toISOString()
+  const updated: PipelineRun = {
+    ...run,
+    state: 'error',
+    currentStage: null,
+    error: errorMessage,
+    updatedAt: now,
+  }
+  await savePipelineRun(updated)
+  return updated
+}
+
+/**
+ * Return all states reachable from the current state (useful for UI hints).
+ */
+export function getAvailableTransitions(
+  run: PipelineRun,
+): PipelineState[] {
+  const { state, pausedStage } = run
+  const result: PipelineState[] = []
+
+  // Check each possible target state.
+  const allStates: PipelineState[] = [
+    'created', 'architect', 'checkpoint:arch', 'dev', 'gate',
+    'fix-loop', 'checkpoint:ship', 'ship', 'completed',
+    'cancelled', 'escalated', 'paused', 'error',
+  ]
+
+  for (const target of allStates) {
+    if (target === state) continue
+    if (isValidTransition(state, target, pausedStage)) {
+      result.push(target)
+    }
+  }
+  return result
+}
