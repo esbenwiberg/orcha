@@ -216,11 +216,24 @@ function connectTerminal(session) {
     term.write('\r\n\x1b[33m[Disconnected]\x1b[0m\r\n')
   }
 
-  // Terminal input -> WebSocket
+  // Terminal input -> WebSocket (with Ctrl modifier support)
   term.onData((data) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'input', data }))
+    if (ws.readyState !== WebSocket.OPEN) return
+
+    // If Ctrl modifier is active, convert a-z/A-Z to Ctrl sequence
+    if (state.ctrlActive && data.length === 1) {
+      const ch = data.toLowerCase()
+      if (ch >= 'a' && ch <= 'z') {
+        const ctrlCode = String.fromCharCode(ch.charCodeAt(0) - 96) // Ctrl+a=1, Ctrl+c=3, etc.
+        ws.send(JSON.stringify({ type: 'input', data: ctrlCode }))
+        state.ctrlActive = false
+        const ctrlBtn = document.querySelector('[data-key="ctrl"]')
+        if (ctrlBtn) ctrlBtn.classList.remove('active')
+        return
+      }
     }
+
+    ws.send(JSON.stringify({ type: 'input', data }))
   })
 
   // Handle resize
@@ -424,26 +437,13 @@ async function showPlanMobile(session) {
       return
     }
     const data = await res.json()
-    body.innerHTML = `<div class="plan-markdown">${simpleMarkdown(data.content)}</div>`
+    body.innerHTML = `<div class="plan-markdown">${marked.parse(data.content)}</div>`
   } catch (err) {
     body.innerHTML = `<div style="color:var(--state-error);padding:20px;">Failed to load: ${escapeHtml(err.message)}</div>`
   }
 }
 
-function simpleMarkdown(text) {
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code>$1</code>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`)
-    .replace(/^(?!<[hulo])(.*\S.*)$/gm, '<p>$1</p>')
-    .replace(/\n{2,}/g, '')
-}
+// simpleMarkdown removed - using marked.js instead
 
 function renderEmpty() {
   const container = document.getElementById('terminal-container')
@@ -597,6 +597,65 @@ function setupSwipe() {
 }
 
 // ============================================================================
+// Key toolbar
+// ============================================================================
+
+function setupKeyToolbar() {
+  const toolbar = document.getElementById('key-toolbar')
+
+  // Ctrl modifier state lives on the shared state so onData can see it
+  state.ctrlActive = false
+
+  function sendKey(data) {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return
+    state.ws.send(JSON.stringify({ type: 'input', data }))
+  }
+
+  function updateCtrlBtn() {
+    const ctrlBtn = toolbar.querySelector('[data-key="ctrl"]')
+    if (ctrlBtn) ctrlBtn.classList.toggle('active', state.ctrlActive)
+  }
+
+  toolbar.addEventListener('click', (e) => {
+    const btn = e.target.closest('.key-btn')
+    if (!btn) return
+
+    const key = btn.dataset.key
+
+    // Ctrl is a modifier toggle
+    if (key === 'ctrl') {
+      state.ctrlActive = !state.ctrlActive
+      updateCtrlBtn()
+      return
+    }
+
+    // Map key names to escape sequences
+    const keyMap = {
+      esc: '\x1b',
+      tab: '\t',
+      up: '\x1b[A',
+      down: '\x1b[B',
+      right: '\x1b[C',
+      left: '\x1b[D',
+    }
+
+    let seq = keyMap[key]
+    if (!seq) return
+
+    // Clear Ctrl after sending a toolbar key
+    if (state.ctrlActive) {
+      state.ctrlActive = false
+      updateCtrlBtn()
+    }
+
+    sendKey(seq)
+
+    // Refocus terminal so it stays interactive
+    if (state.terminal) state.terminal.focus()
+  })
+}
+
+// ============================================================================
 // Create session
 // ============================================================================
 
@@ -703,9 +762,10 @@ async function init() {
   }
 
   setupSwipe()
+  setupKeyToolbar()
   setupCreateSheet()
   document.getElementById('notif-btn').addEventListener('click', toggleNotifications)
-  document.getElementById('refresh-btn').addEventListener('click', refresh)
+  document.getElementById('refresh-btn').addEventListener('click', () => location.reload())
 
   await refresh()
 
