@@ -4353,7 +4353,8 @@ function selectPipeline(pipelineId) {
 }
 
 /**
- * Render the pipeline detail panel
+ * Render the pipeline detail panel — two-column layout with
+ * activity timeline (left) and details side panel (right).
  */
 function renderPipelineDetail(pipelineId) {
   const pipeline = state.pipelines.find(p => p.id === pipelineId);
@@ -4382,7 +4383,98 @@ function renderPipelineDetail(pipelineId) {
   html += '</div>';
 
   // Stage progress bar
-  html += '<div class="pipeline-stages">';
+  html += renderStageProgressBar(pipeline);
+
+  // Checkpoint controls (above the two-column layout)
+  html += renderCheckpointControls(pipeline);
+
+  // Two-column layout
+  html += '<div class="pipeline-layout">';
+
+  // --- Left / main column ---
+  html += '<div class="pipeline-main-col">';
+
+  // Collapsible Blueprint section
+  html += renderCollapsibleBlueprint(pipeline);
+
+  // Activity Timeline (populated async)
+  html += '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Activity Timeline</div>';
+  html += '<div id="activity-timeline-' + pipeline.id + '" class="activity-timeline">';
+  html += '<div class="timeline-loading">Loading activity...</div>';
+  html += '</div>';
+  html += '</div>';
+
+  html += '</div>'; // end pipeline-main-col
+
+  // --- Right column / side panel ---
+  html += '<div class="side-panel" id="side-panel">';
+  html += '<button class="side-panel-close" onclick="toggleSidePanel()" title="Close panel">&times;</button>';
+
+  // Details
+  html += '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Details</div>';
+  html += '<div class="pipeline-info">';
+  html += '<div class="pipeline-info-label">State</div><div class="pipeline-info-value">' + pipeline.state + '</div>';
+  html += '<div class="pipeline-info-label">Branch</div><div class="pipeline-info-value">' + escapeHtml(pipeline.sourceBranch) + '</div>';
+  html += '<div class="pipeline-info-label">Worktree</div><div class="pipeline-info-value">' + escapeHtml(pipeline.worktreePath) + '</div>';
+  html += '<div class="pipeline-info-label">Fix loops</div><div class="pipeline-info-value">' + pipeline.fixLoopCount + ' / ' + (pipeline.config?.maxFixLoops || 3) + '</div>';
+  html += '<div class="pipeline-info-label">Created</div><div class="pipeline-info-value">' + formatTimestamp(pipeline.createdAt) + '</div>';
+  html += '<div class="pipeline-info-label">Updated</div><div class="pipeline-info-value">' + formatTimestamp(pipeline.updatedAt) + '</div>';
+  if (pipeline.error) {
+    html += '<div class="pipeline-info-label">Error</div><div class="pipeline-info-value" style="color:var(--status-error)">' + escapeHtml(pipeline.error) + '</div>';
+  }
+  html += '</div>';
+  html += '</div>';
+
+  // Usage (in side panel)
+  if (pipeline.usageSnapshot) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Usage</div>';
+    html += '<div class="pipeline-usage">';
+    if (pipeline.usageSnapshot.totalCostUsd !== undefined) {
+      html += '<div class="usage-item"><div class="usage-item-label">Est. Cost</div><div class="usage-item-value">$' + pipeline.usageSnapshot.totalCostUsd.toFixed(2) + '</div></div>';
+    }
+    if (pipeline.usageSnapshot.inputTokens) {
+      html += '<div class="usage-item"><div class="usage-item-label">Input</div><div class="usage-item-value">' + formatTokens(pipeline.usageSnapshot.inputTokens) + '</div></div>';
+    }
+    if (pipeline.usageSnapshot.outputTokens) {
+      html += '<div class="usage-item"><div class="usage-item-label">Output</div><div class="usage-item-value">' + formatTokens(pipeline.usageSnapshot.outputTokens) + '</div></div>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Acceptance criteria (in side panel)
+  if (pipeline.acceptanceCriteria && pipeline.acceptanceCriteria.length > 0) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Acceptance Criteria</div>';
+    html += '<ul class="acceptance-criteria-list">';
+    for (const ac of pipeline.acceptanceCriteria) {
+      html += '<li>' + escapeHtml(ac) + '</li>';
+    }
+    html += '</ul>';
+    html += '</div>';
+  }
+
+  html += '</div>'; // end side-panel
+
+  html += '</div>'; // end pipeline-layout
+
+  // Side panel toggle button (floating, shows when panel is closed)
+  html += '<button class="side-panel-toggle" id="side-panel-toggle" onclick="toggleSidePanel()" title="Toggle details panel">&#9776; Details</button>';
+
+  pipelineDetailEl.innerHTML = html;
+
+  // Fetch and render the activity timeline asynchronously
+  fetchAndRenderTimeline(pipeline.id);
+}
+
+/**
+ * Render the stage progress bar (extracted for clarity).
+ */
+function renderStageProgressBar(pipeline) {
+  let html = '<div class="pipeline-stages">';
   const currentIndex = PIPELINE_STAGE_ORDER.indexOf(pipeline.state);
   const terminalStates = ['completed', 'cancelled', 'escalated', 'error'];
 
@@ -4411,192 +4503,232 @@ function renderPipelineDetail(pipelineId) {
     }
   }
   html += '</div>';
+  return html;
+}
 
-  // Blueprint section (fetch async after render)
-  const showBlueprintStates = ['checkpoint:arch', 'dev', 'gate', 'fix-loop', 'checkpoint:ship', 'ship', 'completed', 'error'];
-  if (showBlueprintStates.includes(pipeline.state)) {
-    html += '<div class="pipeline-section">';
-    html += '<div class="pipeline-section-title">Blueprint</div>';
-    html += '<div id="pipeline-blueprint" class="pipeline-blueprint">Loading blueprint...</div>';
-    html += '</div>';
+/**
+ * Render checkpoint controls if pipeline is in a checkpoint state.
+ */
+function renderCheckpointControls(pipeline) {
+  if (pipeline.state !== 'checkpoint:arch' && pipeline.state !== 'checkpoint:ship') {
+    return '';
   }
-
-  // Checkpoint controls
-  if (pipeline.state === 'checkpoint:arch' || pipeline.state === 'checkpoint:ship') {
-    html += '<div class="pipeline-section">';
-    html += '<div class="pipeline-section-title">Checkpoint: ' + (pipeline.state === 'checkpoint:arch' ? 'Architect Review' : 'Ship Review') + '</div>';
-    html += '<div class="checkpoint-controls">';
-    html += '<button class="checkpoint-btn approve" onclick="pipelineApprove(\'' + pipeline.id + '\')">Approve</button>';
-    html += '<button class="checkpoint-btn reject" onclick="pipelineReject(\'' + pipeline.id + '\')">Reject</button>';
-    if (pipeline.state === 'checkpoint:arch') {
-      html += '<button class="checkpoint-btn feedback" onclick="pipelineFeedback(\'' + pipeline.id + '\')">Feedback</button>';
-    }
-    html += '</div>';
-    if (pipeline.state === 'checkpoint:arch') {
-      html += '<textarea id="pipeline-feedback-text" class="feedback-textarea" placeholder="Enter feedback for the architect..." style="display:none;"></textarea>';
-    }
-    html += '</div>';
-  }
-
-  // Pipeline info
-  html += '<div class="pipeline-section">';
-  html += '<div class="pipeline-section-title">Details</div>';
-  html += '<div class="pipeline-info">';
-  html += '<div class="pipeline-info-label">State</div><div class="pipeline-info-value">' + pipeline.state + '</div>';
-  html += '<div class="pipeline-info-label">Source branch</div><div class="pipeline-info-value">' + escapeHtml(pipeline.sourceBranch) + '</div>';
-  html += '<div class="pipeline-info-label">Worktree</div><div class="pipeline-info-value">' + escapeHtml(pipeline.worktreePath) + '</div>';
-  html += '<div class="pipeline-info-label">Fix loops</div><div class="pipeline-info-value">' + pipeline.fixLoopCount + ' / ' + (pipeline.config?.maxFixLoops || 3) + '</div>';
-  html += '<div class="pipeline-info-label">Created</div><div class="pipeline-info-value">' + formatTimestamp(pipeline.createdAt) + '</div>';
-  html += '<div class="pipeline-info-label">Updated</div><div class="pipeline-info-value">' + formatTimestamp(pipeline.updatedAt) + '</div>';
-  if (pipeline.error) {
-    html += '<div class="pipeline-info-label">Error</div><div class="pipeline-info-value" style="color:var(--status-error)">' + escapeHtml(pipeline.error) + '</div>';
+  let html = '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Checkpoint: ' + (pipeline.state === 'checkpoint:arch' ? 'Architect Review' : 'Ship Review') + '</div>';
+  html += '<div class="checkpoint-controls">';
+  html += '<button class="checkpoint-btn approve" onclick="pipelineApprove(\'' + pipeline.id + '\')">Approve</button>';
+  html += '<button class="checkpoint-btn reject" onclick="pipelineReject(\'' + pipeline.id + '\')">Reject</button>';
+  if (pipeline.state === 'checkpoint:arch') {
+    html += '<button class="checkpoint-btn feedback" onclick="pipelineFeedback(\'' + pipeline.id + '\')">Feedback</button>';
   }
   html += '</div>';
+  if (pipeline.state === 'checkpoint:arch') {
+    html += '<textarea id="pipeline-feedback-text" class="feedback-textarea" placeholder="Enter feedback for the architect..." style="display:none;"></textarea>';
+  }
   html += '</div>';
+  return html;
+}
 
-  // Competing agents
-  if (pipeline.competingResults && pipeline.competingResults.length > 0) {
-    html += '<div class="pipeline-section">';
-    html += '<div class="pipeline-section-title">Competing Agents (' + pipeline.competingResults.length + ')</div>';
-    html += '<div class="competing-agents">';
-    for (const agent of pipeline.competingResults) {
-      const cardClass = agent.winner ? 'competing-agent-card winner' : 'competing-agent-card';
-      html += '<div class="' + cardClass + '">';
-      html += '<div class="competing-agent-header">';
-      html += '<span class="competing-agent-name">Agent #' + agent.agentIndex + '</span>';
-      if (agent.winner) {
-        html += '<span class="competing-agent-badge winner">Winner</span>';
-      }
-      html += '</div>';
-      html += '<div class="competing-agent-score">Score: ' + (agent.gateScore >= 0 ? agent.gateScore : 'pending') + '</div>';
-      if (agent.commitSha) {
-        html += '<div style="font-size:0.7rem;color:var(--text-muted);font-family:monospace;margin-top:4px">' + agent.commitSha.slice(0, 8) + '</div>';
-      }
-      html += '</div>';
-    }
-    html += '</div>';
-    html += '</div>';
-  }
-
-  // Gate results
-  if (pipeline.gateResults && pipeline.gateResults.length > 0) {
-    html += '<div class="pipeline-section">';
-    html += '<div class="pipeline-section-title">Gate Results</div>';
-    html += '<div class="gate-results">';
-    for (const result of pipeline.gateResults) {
-      const verdictIcon = result.verdict === 'pass' ? '&#10003;' : result.verdict === 'fail' ? '&#10007;' : '&#8212;';
-      html += '<div class="gate-result-card ' + result.verdict + '">';
-      html += '<div class="gate-result-icon">' + verdictIcon + '</div>';
-      html += '<div class="gate-result-info">';
-      html += '<div class="gate-result-name">' + escapeHtml(result.checkName) + '</div>';
-      html += '<div class="gate-result-summary">' + escapeHtml(result.summary || '') + '</div>';
-      html += '</div>';
-      html += '</div>';
-    }
-    html += '</div>';
-    html += '</div>';
-  }
-
-  // Usage
-  if (pipeline.usageSnapshot) {
-    html += '<div class="pipeline-section">';
-    html += '<div class="pipeline-section-title">Token Usage</div>';
-    html += '<div class="pipeline-usage">';
-    if (pipeline.usageSnapshot.totalCostUsd !== undefined) {
-      html += '<div class="usage-item"><div class="usage-item-label">Est. Cost</div><div class="usage-item-value">$' + pipeline.usageSnapshot.totalCostUsd.toFixed(2) + '</div></div>';
-    }
-    if (pipeline.usageSnapshot.inputTokens) {
-      html += '<div class="usage-item"><div class="usage-item-label">Input</div><div class="usage-item-value">' + formatTokens(pipeline.usageSnapshot.inputTokens) + '</div></div>';
-    }
-    if (pipeline.usageSnapshot.outputTokens) {
-      html += '<div class="usage-item"><div class="usage-item-label">Output</div><div class="usage-item-value">' + formatTokens(pipeline.usageSnapshot.outputTokens) + '</div></div>';
-    }
-    html += '</div>';
-    html += '</div>';
-  }
-
-  // Stage history
+/**
+ * Render the collapsible blueprint section.
+ * Shows architect output from stageHistory if available.
+ */
+function renderCollapsibleBlueprint(pipeline) {
+  // Find architect stage output for blueprint content
+  let blueprintText = '';
   if (pipeline.stageHistory && pipeline.stageHistory.length > 0) {
-    html += '<div class="pipeline-section">';
-    html += '<div class="pipeline-section-title">Stage History</div>';
-    html += '<div style="font-size:0.8rem">';
-    for (const stage of pipeline.stageHistory) {
-      html += '<div style="padding:4px 0;border-bottom:1px solid var(--border-color)">';
-      html += '<span style="color:var(--accent-purple);font-weight:500">' + stage.stage + '</span>';
-      html += ' <span style="color:var(--text-muted)">' + formatTimestamp(stage.startedAt) + '</span>';
-      if (stage.model) html += ' <span style="color:var(--text-secondary);font-size:0.7rem">(' + stage.model + ')</span>';
-      if (stage.output) html += '<div style="color:var(--text-secondary);font-size:0.75rem;margin-top:2px">' + escapeHtml(stage.output) + '</div>';
-      html += '</div>';
+    const archStage = pipeline.stageHistory.find(function(s) { return s.stage === 'architect'; });
+    if (archStage && archStage.output) {
+      blueprintText = archStage.output;
     }
-    html += '</div>';
-    html += '</div>';
   }
 
-  // Acceptance criteria
-  if (pipeline.acceptanceCriteria && pipeline.acceptanceCriteria.length > 0) {
-    html += '<div class="pipeline-section">';
-    html += '<div class="pipeline-section-title">Acceptance Criteria</div>';
-    html += '<ul style="font-size:0.85rem;color:var(--text-secondary);padding-left:20px">';
-    for (const ac of pipeline.acceptanceCriteria) {
-      html += '<li>' + escapeHtml(ac) + '</li>';
-    }
-    html += '</ul>';
-    html += '</div>';
+  if (!blueprintText) {
+    return ''; // No blueprint available yet
   }
 
-  // Live log area (shows during active stages, persists for review)
-  const isActive = !['completed', 'cancelled', 'escalated', 'error'].includes(pipeline.state) || pipeline.state === 'error';
-  html += '<div class="pipeline-section">';
-  html += '<div class="pipeline-section-title">Live Output</div>';
-  html += '<pre class="pipeline-live-log" id="pipeline-live-log" data-pipeline-id="' + pipeline.id + '"></pre>';
-  html += '<div style="display:flex;gap:6px;margin-top:6px;">';
-  html += '<button class="pipeline-logs-btn" onclick="showPipelineLogs(\'' + pipeline.id + '\')" style="background:transparent;border:1px solid var(--border-color);color:var(--text-secondary);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:0.75rem;">Full Logs</button>';
+  let html = '<div class="collapsible-section">';
+  html += '<button class="collapsible-header" onclick="toggleCollapsible(this)">';
+  html += '<span class="collapsible-arrow">&#9656;</span> Blueprint';
+  html += '</button>';
+  html += '<div class="collapsible-body" style="display:none;">';
+  html += '<pre class="blueprint-content">' + escapeHtml(blueprintText) + '</pre>';
   html += '</div>';
   html += '</div>';
+  return html;
+}
 
-  pipelineDetailEl.innerHTML = html;
+/**
+ * Toggle a collapsible section open/closed.
+ */
+function toggleCollapsible(headerEl) {
+  const body = headerEl.nextElementSibling;
+  const arrow = headerEl.querySelector('.collapsible-arrow');
+  if (body.style.display === 'none') {
+    body.style.display = '';
+    arrow.innerHTML = '&#9662;'; // down arrow
+  } else {
+    body.style.display = 'none';
+    arrow.innerHTML = '&#9656;'; // right arrow
+  }
+}
 
-  // Populate live log with any buffered data
-  const logEl = document.getElementById('pipeline-live-log');
-  if (logEl && state.pipelineLogs && state.pipelineLogs[pipeline.id]) {
-    logEl.textContent = state.pipelineLogs[pipeline.id];
-    logEl.scrollTop = logEl.scrollHeight;
+/**
+ * Toggle the side panel open/closed.
+ */
+function toggleSidePanel() {
+  const panel = document.getElementById('side-panel');
+  const toggle = document.getElementById('side-panel-toggle');
+  if (!panel) return;
+
+  panel.classList.toggle('collapsed');
+  if (toggle) {
+    toggle.classList.toggle('visible', panel.classList.contains('collapsed'));
+  }
+}
+
+/**
+ * Fetch progress entries and render the activity timeline.
+ */
+async function fetchAndRenderTimeline(pipelineId) {
+  const container = document.getElementById('activity-timeline-' + pipelineId);
+  if (!container) return;
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/progress');
+    if (!res.ok) {
+      container.innerHTML = '<div class="timeline-empty">Failed to load activity</div>';
+      return;
+    }
+    const entries = await res.json();
+
+    if (!entries || entries.length === 0) {
+      container.innerHTML = '<div class="timeline-empty">No activity yet</div>';
+      return;
+    }
+
+    container.innerHTML = renderTimelineEntries(entries);
+  } catch (err) {
+    container.innerHTML = '<div class="timeline-empty">Failed to load activity</div>';
+  }
+}
+
+/**
+ * Render all timeline entries as HTML.
+ */
+function renderTimelineEntries(entries) {
+  let html = '';
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const isLast = (i === entries.length - 1);
+    html += renderTimelineEntry(entry, isLast);
+  }
+  return html;
+}
+
+/**
+ * Render a single timeline entry.
+ */
+function renderTimelineEntry(entry, isLast) {
+  const isCompleted = entry.type === 'stage-complete' || entry.type === 'checkpoint' || entry.type === 'info';
+  const isError = entry.type === 'stage-error';
+  const isRunning = isLast && (entry.type === 'stage-start' || entry.type === 'competing-start');
+
+  let dotClass = 'timeline-dot';
+  if (isRunning) dotClass += ' running';
+  else if (isError) dotClass += ' error';
+  else if (isCompleted) dotClass += ' completed';
+
+  const timeStr = formatTimeOnly(entry.timestamp);
+
+  let html = '<div class="timeline-entry' + (isLast ? ' last' : '') + '">';
+
+  // Vertical line + dot
+  html += '<div class="timeline-gutter">';
+  html += '<div class="' + dotClass + '">' + (isRunning ? '&#9675;' : '&#9679;') + '</div>';
+  if (!isLast) {
+    html += '<div class="timeline-line"></div>';
+  }
+  html += '</div>';
+
+  // Content
+  html += '<div class="timeline-content">';
+  html += '<div class="timeline-header">';
+  html += '<span class="timeline-time">' + timeStr + '</span>';
+  html += '<span class="timeline-title">' + escapeHtml(entry.title) + '</span>';
+  html += '</div>';
+
+  if (entry.detail) {
+    html += '<div class="timeline-detail">' + escapeHtml(entry.detail) + '</div>';
   }
 
-  // Fetch and render blueprint
-  const blueprintEl = document.getElementById('pipeline-blueprint');
-  if (blueprintEl) {
-    fetch('/api/pipelines/' + pipeline.id + '/blueprint')
-      .then(res => res.ok ? res.json() : null)
-      .then(bp => {
-        if (!bp) {
-          blueprintEl.textContent = 'No blueprint available.';
-          return;
-        }
-        let md = '### ' + (bp.approach || '') + '\n\n';
-        if (bp.steps && bp.steps.length > 0) {
-          md += '**Steps:**\n';
-          bp.steps.forEach((s, i) => { md += (i + 1) + '. **' + s.description + '** — ' + s.details + '\n'; });
-          md += '\n';
-        }
-        if (bp.filesToTouch && bp.filesToTouch.length > 0) {
-          md += '**Files:** `' + bp.filesToTouch.join('`, `') + '`\n\n';
-        }
-        if (bp.testStrategy) {
-          md += '**Test strategy:** ' + bp.testStrategy + '\n\n';
-        }
-        if (bp.risks && bp.risks.length > 0) {
-          md += '**Risks:**\n';
-          bp.risks.forEach(r => { md += '- ' + r + '\n'; });
-        }
-        // Use marked if available, otherwise show as-is
-        if (window.marked) {
-          blueprintEl.innerHTML = window.marked.parse(md);
-        } else {
-          blueprintEl.textContent = md;
-        }
-      })
-      .catch(() => { blueprintEl.textContent = 'Failed to load blueprint.'; });
+  // Special rendering for gate-result entries
+  if (entry.type === 'gate-result' && entry.data && entry.data.checks) {
+    html += renderTimelineGateChecks(entry.data.checks);
+  }
+
+  // Special rendering for competing-result entries
+  if (entry.type === 'competing-result' && entry.data && entry.data.agents) {
+    html += renderTimelineCompetingAgents(entry.data.agents);
+  }
+
+  html += '</div>'; // end timeline-content
+  html += '</div>'; // end timeline-entry
+  return html;
+}
+
+/**
+ * Render gate check cards within a timeline entry.
+ */
+function renderTimelineGateChecks(checks) {
+  if (!Array.isArray(checks) || checks.length === 0) return '';
+
+  let html = '<div class="timeline-gate-checks">';
+  for (const check of checks) {
+    const verdict = check.verdict || 'skip';
+    const icon = verdict === 'pass' ? '&#10003;' : verdict === 'fail' ? '&#10007;' : '&#8212;';
+    html += '<div class="timeline-gate-card ' + verdict + '">';
+    html += '<span class="timeline-gate-icon">' + icon + '</span>';
+    html += '<span class="timeline-gate-name">' + escapeHtml(check.checkName || check.name || '') + '</span>';
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Render competing agent cards within a timeline entry.
+ */
+function renderTimelineCompetingAgents(agents) {
+  if (!Array.isArray(agents) || agents.length === 0) return '';
+
+  let html = '<div class="timeline-competing-agents">';
+  for (const agent of agents) {
+    const isWinner = agent.winner;
+    html += '<div class="timeline-agent-card' + (isWinner ? ' winner' : '') + '">';
+    html += '<span class="timeline-agent-name">Agent #' + (agent.agentIndex != null ? agent.agentIndex : '?') + '</span>';
+    if (agent.gateScore != null && agent.gateScore >= 0) {
+      html += '<span class="timeline-agent-score">Score: ' + agent.gateScore + '</span>';
+    }
+    if (isWinner) {
+      html += '<span class="timeline-agent-badge">Winner</span>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Format a timestamp to time-only (e.g. "19:48").
+ */
+function formatTimeOnly(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch {
+    return '';
   }
 }
 
