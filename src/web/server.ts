@@ -2192,6 +2192,18 @@ export class WebDashboardServer {
       }
     })
 
+    // API: Get pipeline progress entries
+    this.app.get('/api/pipelines/:id/progress', async (req, res) => {
+      try {
+        const { readProgress } = await import('../pipeline/index.js')
+        const entries = await readProgress(req.params.id)
+        res.json(entries)
+      } catch (err) {
+        console.error('[API] Pipeline progress error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Delete a pipeline run
     this.app.delete('/api/pipelines/:id', async (req, res) => {
       try {
@@ -2254,6 +2266,7 @@ export class WebDashboardServer {
         }
       }
     })
+
 
     // API: Restart server (graceful)
     this.app.post('/api/server/restart', async (_req, res) => {
@@ -2481,6 +2494,22 @@ export class WebDashboardServer {
             state: event.to,
             from: event.from,
             updatedAt: event.updatedAt,
+          },
+        })
+
+        for (const client of this.wss.clients) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(message)
+          }
+        }
+      })
+
+      pipelineEvents.onProgress((event) => {
+        const message = JSON.stringify({
+          type: 'pipeline:progress',
+          data: {
+            pipelineId: event.pipelineId,
+            entry: event.entry,
           },
         })
 
