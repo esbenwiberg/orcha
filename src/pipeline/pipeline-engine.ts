@@ -21,9 +21,11 @@
  *   Any state        -> error              (on unrecoverable failure)
  */
 
-import type { PipelineRun, PipelineState, StageResult } from './types.js'
+import type { PipelineRun, PipelineState, PipelineConfig, StageResult } from './types.js'
 import { ACTIVE_STATES, TERMINAL_STATES } from './types.js'
-import { savePipelineRun } from './pipeline-store.js'
+import { savePipelineRun, generatePipelineId } from './pipeline-store.js'
+import { runArchitectStage } from './stages/architect.js'
+import type { ArchitectOptions } from './stages/architect.js'
 
 // ============================================================================
 // Transition Table
@@ -269,4 +271,67 @@ export function getAvailableTransitions(
     }
   }
   return result
+}
+
+// ============================================================================
+// Pipeline Run Factory
+// ============================================================================
+
+export interface CreatePipelineRunOptions {
+  config: PipelineConfig
+  description: string
+  acceptanceCriteria: string[]
+  sourceBranch: string
+  worktreePath: string
+  workItemId?: string
+}
+
+/**
+ * Create a new PipelineRun in the 'created' state and persist it.
+ */
+export async function createPipelineRun(
+  opts: CreatePipelineRunOptions,
+): Promise<PipelineRun> {
+  const now = new Date().toISOString()
+  const run: PipelineRun = {
+    id: generatePipelineId(),
+    state: 'created',
+    config: opts.config,
+    workItemId: opts.workItemId,
+    description: opts.description,
+    acceptanceCriteria: opts.acceptanceCriteria,
+    sourceBranch: opts.sourceBranch,
+    worktreePath: opts.worktreePath,
+    stageHistory: [],
+    currentStage: null,
+    gateResults: [],
+    fixLoopCount: 0,
+    createdAt: now,
+    updatedAt: now,
+  }
+  await savePipelineRun(run)
+  return run
+}
+
+// ============================================================================
+// Architect Stage Orchestration
+// ============================================================================
+
+/**
+ * Transition from 'created' to 'architect' and execute the architect stage.
+ *
+ * Returns the updated PipelineRun (which will be in 'checkpoint:arch' on
+ * success, or 'error' on failure).
+ */
+export async function executeArchitectStage(
+  run: PipelineRun,
+  opts?: ArchitectOptions,
+): Promise<PipelineRun> {
+  // Transition: created -> architect
+  run = await transition(run, 'architect')
+
+  // Run the architect stage (handles checkpoint:arch transition internally)
+  run = await runArchitectStage(run, opts)
+
+  return run
 }

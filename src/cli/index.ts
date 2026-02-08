@@ -44,6 +44,14 @@ import { runDashboard } from './dashboard.js'
 import { runBlessedDashboard } from './blessed-dashboard.js'
 import { StatusBar } from './status-bar.js'
 import { WorktreeManager } from '../core/worktree-manager.js'
+import {
+  defaultPipelineConfig,
+  parsePipelineConfig,
+  createPipelineRun,
+  executeArchitectStage,
+  getPipelineDir,
+} from '../pipeline/index.js'
+import { parseAcceptanceCriteria } from '../pipeline/prompt-builder.js'
 
 import { rm } from 'fs/promises'
 import { existsSync } from 'fs'
@@ -1658,6 +1666,217 @@ presetCmd
     } catch (err) {
       console.error('Error:', (err as Error).message)
       process.exit(1)
+    }
+  })
+
+// =============================================================================
+// orcha pipeline (parent command)
+// =============================================================================
+const pipelineCmd = program
+  .command('pipeline')
+  .description('Manage pipeline runs')
+
+// orcha pipeline run
+pipelineCmd
+  .command('run')
+  .description('Run a pipeline (architect stage only for now)')
+  .option('--work-item <id>', 'GitHub issue number or ADO work item ID')
+  .option('--description <text>', 'Inline description of the work')
+  .option('--ac <criteria>', 'Inline acceptance criteria (comma-separated)')
+  .option('--source-branch <branch>', 'Source branch (default: main)')
+  .option('--worktree-path <path>', 'Path to an existing worktree to use')
+  .option('--model-architect <model>', 'Override model for architect stage')
+  .option('--model-dev <model>', 'Override model for dev stage')
+  .option('--model-gate <model>', 'Override model for gate stage')
+  .option('--model-fix <model>', 'Override model for fix stage')
+  .option('--model-ship <model>', 'Override model for ship stage')
+  .option('--max-budget-usd <amount>', 'Override default budget per stage', parseFloat)
+  .action(async (options) => {
+    const {
+      workItem,
+      description,
+      ac,
+      sourceBranch,
+      worktreePath,
+      modelArchitect,
+      modelDev,
+      modelGate,
+      modelFix,
+      modelShip,
+      maxBudgetUsd,
+    } = options
+
+    // Require at least a description or work item
+    if (!description && !workItem) {
+      console.error('Error: Provide at least --description or --work-item')
+      process.exit(1)
+    }
+
+    // Determine the worktree path (required for now)
+    const resolvedWorktreePath = worktreePath ? resolve(worktreePath) : resolve('.')
+    const resolvedSourceBranch = sourceBranch || 'main'
+    const resolvedDescription = description || `Work item ${workItem}`
+
+    // Parse acceptance criteria
+    let acceptanceCriteria: string[] = []
+    if (ac) {
+      acceptanceCriteria = ac.split(',').map((c: string) => c.trim()).filter(Boolean)
+    }
+
+    // Build pipeline config with overrides
+    const configOverrides: Record<string, unknown> = {}
+    const modelOverrides: Record<string, string> = {}
+    const budgetOverrides: Record<string, number> = {}
+
+    if (modelArchitect) modelOverrides.architect = modelArchitect
+    if (modelDev) modelOverrides.dev = modelDev
+    if (modelGate) modelOverrides.gate = modelGate
+    if (modelFix) modelOverrides.fix = modelFix
+    if (modelShip) modelOverrides.ship = modelShip
+
+    if (Object.keys(modelOverrides).length > 0) {
+      configOverrides.models = modelOverrides
+    }
+
+    if (maxBudgetUsd !== undefined) {
+      budgetOverrides.default = maxBudgetUsd
+      configOverrides.budgets = budgetOverrides
+    }
+
+    let config
+    try {
+      config = Object.keys(configOverrides).length > 0
+        ? parsePipelineConfig(configOverrides)
+        : defaultPipelineConfig()
+    } catch (err) {
+      console.error('Error parsing pipeline config:', (err as Error).message)
+      process.exit(1)
+    }
+
+    console.log('Creating pipeline run...')
+    console.log(`  Description: ${resolvedDescription}`)
+    console.log(`  Source branch: ${resolvedSourceBranch}`)
+    console.log(`  Worktree: ${resolvedWorktreePath}`)
+    if (workItem) console.log(`  Work item: ${workItem}`)
+    if (acceptanceCriteria.length > 0) {
+      console.log(`  Acceptance criteria: ${acceptanceCriteria.length} item(s)`)
+    }
+
+    try {
+      // Create the pipeline run
+      let run = await createPipelineRun({
+        config,
+        description: resolvedDescription,
+        acceptanceCriteria,
+        sourceBranch: resolvedSourceBranch,
+        worktreePath: resolvedWorktreePath,
+        workItemId: workItem,
+      })
+
+      console.log(`\nPipeline created: ${run.id}`)
+      console.log(`  State dir: ${getPipelineDir(run.id)}`)
+      console.log(`\nStarting architect stage...`)
+
+      // Execute the architect stage
+      run = await executeArchitectStage(run, {
+        modelOverride: modelArchitect,
+      })
+
+      if (run.state === 'error') {
+        console.error(`\nArchitect stage failed: ${run.error}`)
+        process.exit(1)
+      }
+
+      console.log(`\nArchitect stage completed successfully.`)
+      console.log(`  State: ${run.state}`)
+      if (run.blueprintPath) {
+        console.log(`  Blueprint: ${run.blueprintPath}`)
+      }
+      console.log(`  Pipeline dir: ${getPipelineDir(run.id)}`)
+      console.log(`\nPipeline is now at checkpoint:arch.`)
+      console.log(`Review the blueprint and proceed with: orcha pipeline approve ${run.id}`)
+    } catch (err) {
+      console.error('Pipeline error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// orcha pipeline status
+pipelineCmd
+  .command('status [id]')
+  .description('Show pipeline status')
+  .action(async (id?: string) => {
+    const { listPipelineRuns, loadPipelineRun } = await import('../pipeline/index.js')
+
+    if (id) {
+      const run = await loadPipelineRun(id)
+      if (!run) {
+        console.error(`Pipeline not found: ${id}`)
+        process.exit(1)
+      }
+      console.log(`Pipeline: ${run.id}`)
+      console.log(`  State: ${run.state}`)
+      console.log(`  Description: ${run.description}`)
+      console.log(`  Source branch: ${run.sourceBranch}`)
+      console.log(`  Worktree: ${run.worktreePath}`)
+      console.log(`  Created: ${run.createdAt}`)
+      console.log(`  Updated: ${run.updatedAt}`)
+      if (run.blueprintPath) console.log(`  Blueprint: ${run.blueprintPath}`)
+      if (run.error) console.log(`  Error: ${run.error}`)
+      if (run.stageHistory.length > 0) {
+        console.log(`  Stage history:`)
+        for (const stage of run.stageHistory) {
+          console.log(`    - ${stage.stage}: ${stage.startedAt} -> ${stage.completedAt} (model: ${stage.model || 'N/A'})`)
+        }
+      }
+    } else {
+      const runs = await listPipelineRuns()
+      if (runs.length === 0) {
+        console.log('No pipeline runs found.')
+        console.log('\nStart a pipeline with: orcha pipeline run --description "..."')
+        return
+      }
+      console.log('PIPELINE'.padEnd(25) + 'STATE'.padEnd(20) + 'DESCRIPTION'.padEnd(40) + 'UPDATED')
+      console.log('-'.repeat(95))
+      for (const run of runs) {
+        const shortDesc = run.description.length > 38
+          ? run.description.slice(0, 35) + '...'
+          : run.description
+        console.log(
+          run.id.padEnd(25) +
+          run.state.padEnd(20) +
+          shortDesc.padEnd(40) +
+          run.updatedAt
+        )
+      }
+    }
+  })
+
+// orcha pipeline list
+pipelineCmd
+  .command('list')
+  .alias('ls')
+  .description('List all pipeline runs')
+  .action(async () => {
+    const { listPipelineRuns } = await import('../pipeline/index.js')
+    const runs = await listPipelineRuns()
+
+    if (runs.length === 0) {
+      console.log('No pipeline runs found.')
+      return
+    }
+
+    console.log('PIPELINE'.padEnd(25) + 'STATE'.padEnd(20) + 'DESCRIPTION')
+    console.log('-'.repeat(75))
+    for (const run of runs) {
+      const shortDesc = run.description.length > 38
+        ? run.description.slice(0, 35) + '...'
+        : run.description
+      console.log(
+        run.id.padEnd(25) +
+        run.state.padEnd(20) +
+        shortDesc
+      )
     }
   })
 
