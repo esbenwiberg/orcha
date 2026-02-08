@@ -43,6 +43,72 @@ async function createSession(instanceId, branch, mode) {
 }
 
 // ============================================================================
+// Terminal touch scroll — document-level capture to intercept before xterm
+// ============================================================================
+
+function setupTermTouchScroll(container) {
+  let startX = 0, startY = 0, lastY = 0
+  let scrollMode = false
+  let decided = false
+
+  // Send mouse wheel escape sequences to tmux via WebSocket
+  // tmux mouse mode interprets these as scroll up/down
+  function sendWheelEvents(lines) {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return
+    const up = lines < 0
+    const count = Math.abs(lines)
+    // SGR mouse encoding: \x1b[<64;col;rowM = wheel up, \x1b[<65;col;rowM = wheel down
+    const code = up ? 64 : 65
+    const seq = `\x1b[<${code};1;1M`
+    for (let i = 0; i < count; i++) {
+      state.ws.send(JSON.stringify({ type: 'input', data: seq }))
+    }
+  }
+
+  document.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return
+    if (!container.contains(e.target)) return
+    startX = e.touches[0].clientX
+    startY = e.touches[0].clientY
+    lastY = startY
+    scrollMode = false
+    decided = false
+  }, { capture: true, passive: true })
+
+  document.addEventListener('touchmove', (e) => {
+    if (e.touches.length !== 1) return
+    if (!container.contains(e.target)) return
+
+    const x = e.touches[0].clientX
+    const y = e.touches[0].clientY
+
+    if (!decided) {
+      const dx = Math.abs(x - startX)
+      const dy = Math.abs(y - startY)
+      if (dx < 10 && dy < 10) return
+      decided = true
+      scrollMode = dy > dx
+    }
+
+    if (scrollMode) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      const delta = lastY - y
+      const lines = Math.trunc(delta / 20)
+      if (lines !== 0) {
+        sendWheelEvents(lines)
+        lastY = y
+      }
+    }
+  }, { capture: true, passive: false })
+
+  document.addEventListener('touchend', () => {
+    scrollMode = false
+    decided = false
+  }, { capture: true, passive: true })
+}
+
+// ============================================================================
 // Terminal
 // ============================================================================
 
@@ -107,6 +173,9 @@ function connectTerminal(session) {
   const fitAddon = new FitAddon.FitAddon()
   term.loadAddon(fitAddon)
   term.open(container)
+
+  // Enable touch scrolling — sends mouse wheel sequences to tmux via WebSocket
+  setupTermTouchScroll(container)
 
   // Connect WebSocket
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -218,9 +287,162 @@ function renderSessionInfo(session) {
       <div class="status-dot ${st}"></div>
       <span class="info-name">${escapeHtml(name)}</span>
       <span class="card-state ${st}">${st}</span>
+      <button class="info-menu-btn" title="Session actions">&#8942;</button>
     </div>
     ${session.message ? `<div class="info-message">${escapeHtml(session.message)}</div>` : ''}
   `
+
+  infoEl.querySelector('.info-menu-btn').addEventListener('click', (e) => {
+    e.stopPropagation()
+    showSessionMenu(session)
+  })
+}
+
+function showToast(message, type = 'info') {
+  const existing = document.querySelector('.mobile-toast')
+  if (existing) existing.remove()
+
+  const toast = document.createElement('div')
+  toast.className = `mobile-toast ${type}`
+  toast.textContent = message
+  document.body.appendChild(toast)
+  setTimeout(() => toast.classList.add('visible'), 10)
+  setTimeout(() => {
+    toast.classList.remove('visible')
+    setTimeout(() => toast.remove(), 300)
+  }, 3000)
+}
+
+function showSessionMenu(session) {
+  const existing = document.querySelector('.session-menu-overlay')
+  if (existing) existing.remove()
+
+  const overlay = document.createElement('div')
+  overlay.className = 'session-menu-overlay'
+
+  const instanceId = session.instanceId
+  const sessionKey = `${session.instanceId}/${session.tmuxSession}/${session.paneIndex}`
+
+  const actions = [
+    { icon: '☰', label: 'View plan', action: () => showPlanMobile(session) },
+    { icon: '↓', label: 'Pull', action: () => gitAction('/api/git/pull', instanceId, 'Pull') },
+    { icon: '↑', label: 'Push', action: () => gitAction('/api/git/push', instanceId, 'Push') },
+    { icon: '↙', label: 'Merge main', action: () => gitAction('/api/git/pull-main', instanceId, 'Merge') },
+    { icon: '×', label: 'Close session', danger: true, action: () => closeSessionMobile(session, sessionKey) },
+  ]
+
+  const sheet = document.createElement('div')
+  sheet.className = 'session-menu-sheet'
+
+  const title = document.createElement('div')
+  title.className = 'session-menu-title'
+  title.textContent = session.customName || session.id
+  sheet.appendChild(title)
+
+  actions.forEach(a => {
+    const btn = document.createElement('button')
+    btn.className = 'session-menu-item' + (a.danger ? ' danger' : '')
+    btn.innerHTML = `<span class="session-menu-icon">${a.icon}</span>${a.label}`
+    btn.addEventListener('click', () => {
+      overlay.remove()
+      a.action()
+    })
+    sheet.appendChild(btn)
+  })
+
+  overlay.appendChild(sheet)
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove()
+  })
+  document.body.appendChild(overlay)
+  requestAnimationFrame(() => overlay.classList.add('visible'))
+}
+
+async function gitAction(url, instanceId, label) {
+  showToast(`${label}ing...`, 'info')
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instanceId }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || `${label} failed`)
+    showToast(`${label} successful`, 'success')
+  } catch (err) {
+    showToast(`${label} failed: ${err.message}`, 'error')
+  }
+}
+
+async function closeSessionMobile(session, sessionKey) {
+  try {
+    const res = await fetch(`/api/sessions/${session.instanceId}/${session.id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const data = await res.json()
+      throw new Error(data.error || 'Close failed')
+    }
+    disconnectTerminal()
+    showToast('Session closed', 'success')
+    // Re-fetch sessions
+    await pollStatus()
+  } catch (err) {
+    showToast(`Close failed: ${err.message}`, 'error')
+  }
+}
+
+async function showPlanMobile(session) {
+  const overlay = document.createElement('div')
+  overlay.className = 'plan-overlay'
+
+  overlay.innerHTML = `
+    <div class="plan-dialog-mobile">
+      <div class="plan-dialog-header-mobile">
+        <span class="plan-dialog-title-mobile">Plan: ${escapeHtml(session.customName || session.id)}</span>
+        <button class="plan-dialog-close-mobile">&times;</button>
+      </div>
+      <div class="plan-dialog-body-mobile">
+        <div style="color:var(--text-secondary);padding:20px;text-align:center;">Loading plan...</div>
+      </div>
+    </div>
+  `
+
+  const body = overlay.querySelector('.plan-dialog-body-mobile')
+  const closeBtn = overlay.querySelector('.plan-dialog-close-mobile')
+
+  closeBtn.addEventListener('click', () => overlay.remove())
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove()
+  })
+
+  document.body.appendChild(overlay)
+  requestAnimationFrame(() => overlay.classList.add('visible'))
+
+  try {
+    const res = await fetch(`/api/sessions/${session.instanceId}/${session.id}/plan`)
+    if (!res.ok) {
+      body.innerHTML = `<div style="color:var(--text-secondary);padding:20px;text-align:center;">No plan found.<br><br><span style="font-size:12px;">Create a plan file at <code>.claude/plan.md</code></span></div>`
+      return
+    }
+    const data = await res.json()
+    body.innerHTML = `<div class="plan-markdown">${simpleMarkdown(data.content)}</div>`
+  } catch (err) {
+    body.innerHTML = `<div style="color:var(--state-error);padding:20px;">Failed to load: ${escapeHtml(err.message)}</div>`
+  }
+}
+
+function simpleMarkdown(text) {
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`(.+?)`/g, '<code>$1</code>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`)
+    .replace(/^(?!<[hulo])(.*\S.*)$/gm, '<p>$1</p>')
+    .replace(/\n{2,}/g, '')
 }
 
 function renderEmpty() {
@@ -331,17 +553,20 @@ async function toggleNotifications() {
 // ============================================================================
 
 function setupSwipe() {
-  const container = document.getElementById('session-info')
+  const targets = [
+    document.getElementById('session-info'),
+    document.getElementById('bottom-nav'),
+  ]
   let startX = 0, startTime = 0, swiping = false
 
-  container.addEventListener('touchstart', (e) => {
+  function onTouchStart(e) {
     if (state.sessions.length <= 1) return
     startX = e.touches[0].clientX
     startTime = Date.now()
     swiping = true
-  }, { passive: true })
+  }
 
-  container.addEventListener('touchend', (e) => {
+  function onTouchEnd(e) {
     if (!swiping) return
     swiping = false
 
@@ -362,7 +587,13 @@ function setupSwipe() {
         renderDots(state.sessions)
       }
     }
-  }, { passive: true })
+  }
+
+  targets.forEach(el => {
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchend', onTouchEnd, { passive: true })
+  })
+
 }
 
 // ============================================================================

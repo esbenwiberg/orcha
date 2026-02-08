@@ -13,7 +13,7 @@ import { join, dirname, resolve, isAbsolute } from 'path'
 import { homedir, cpus, totalmem, freemem, uptime, loadavg } from 'os'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
-import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, rmSync } from 'fs'
 import type { Socket } from 'net'
 import { listInstances, getInstance, getInstanceByPath, registerInstance, unregisterInstance } from '../core/instance-registry.js'
 import { StatusMonitor, getStatusDirForInstance, migrateStatusFromLegacyPaths } from '../core/status-monitor.js'
@@ -211,9 +211,15 @@ export class WebDashboardServer {
   }
 
   private setupRoutes(): void {
-    // Serve static files from public directory
+    // Serve static files from public directory (no cache for HTML to pick up updates)
     const publicDir = resolvePublicDir()
-    this.app.use(express.static(publicDir))
+    this.app.use(express.static(publicDir, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+        }
+      }
+    }))
 
     // API: Get all sessions
     this.app.get('/api/sessions', async (_req, res) => {
@@ -1001,17 +1007,41 @@ export class WebDashboardServer {
               const ghStderr = cloneResult.stderr?.toString() || 'Unknown error'
               console.warn(`[API] gh clone failed (${ghStderr.slice(0, 100)}), falling back to git clone...`)
 
-              // Fall back to git clone - gh uses GraphQL which may lack org access
-              const gitResult = spawnSync('git', ['clone', cloneUrl, clonePath], {
+              // Clean up any partial directory gh may have created
+              if (existsSync(clonePath)) {
+                rmSync(clonePath, { recursive: true, force: true })
+              }
+
+              // Fall back to git clone with SSH - gh uses GraphQL which may lack org access,
+              // and gh as credential helper causes HTTPS to fail the same way
+              const sshUrl = `git@github.com:${finalRepoInfo.owner}/${finalRepoInfo.repo}.git`
+              console.log(`[API] Trying SSH clone: ${sshUrl}`)
+              const sshResult = spawnSync('git', ['clone', sshUrl, clonePath], {
                 stdio: 'pipe',
                 timeout: 300000,
               })
 
-              if (gitResult.status !== 0) {
-                const stderr = gitResult.stderr?.toString() || 'Unknown error'
-                console.error(`[API] Clone failed:`, stderr)
-                res.status(500).json({ error: `Clone failed: ${stderr.slice(0, 200)}` })
-                return
+              if (sshResult.status !== 0) {
+                const sshStderr = sshResult.stderr?.toString() || ''
+                console.warn(`[API] SSH clone failed (${sshStderr.slice(0, 100)}), trying HTTPS...`)
+
+                // Clean up again before HTTPS attempt
+                if (existsSync(clonePath)) {
+                  rmSync(clonePath, { recursive: true, force: true })
+                }
+
+                // Try HTTPS as last resort (may work if gh credential helper isn't set up)
+                const gitResult = spawnSync('git', ['clone', cloneUrl, clonePath], {
+                  stdio: 'pipe',
+                  timeout: 300000,
+                })
+
+                if (gitResult.status !== 0) {
+                  const stderr = gitResult.stderr?.toString() || 'Unknown error'
+                  console.error(`[API] All clone methods failed for ${repoSlug}`)
+                  res.status(500).json({ error: `Clone failed. gh: ${ghStderr.slice(0, 100)}. git SSH: ${sshStderr.slice(0, 100)}. git HTTPS: ${stderr.slice(0, 100)}` })
+                  return
+                }
               }
             }
           } else {
