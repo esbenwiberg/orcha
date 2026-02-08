@@ -18,6 +18,7 @@ const state = {
   actions: [], // Custom action buttons
   pipelines: [], // Pipeline runs
   selectedPipeline: null, // Currently selected pipeline ID
+  pipelineLogs: {}, // pipelineId -> accumulated log text
 };
 
 // DOM elements
@@ -3724,9 +3725,15 @@ async function render() {
   updateUsageDisplay(usage);
   updateHealthDisplay(health);
 
-  // If a pipeline is selected, refresh its detail view
+  // If a pipeline is selected, only re-render if state actually changed
   if (state.selectedPipeline) {
-    renderPipelineDetail(state.selectedPipeline);
+    const cur = pipelines.find(p => p.id === state.selectedPipeline);
+    const prev = state._prevPipelineSnapshot;
+    const snap = cur ? (cur.state + '|' + cur.updatedAt + '|' + (cur.fixLoopCount || 0) + '|' + (cur.gateResults || []).length) : '';
+    if (snap !== prev) {
+      state._prevPipelineSnapshot = snap;
+      renderPipelineDetail(state.selectedPipeline);
+    }
   }
 
   if (tmuxSessions.length === 0) {
@@ -3817,6 +3824,22 @@ function connectPipelineEvents() {
   ws.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data);
+      if (msg.type === 'pipeline:log' && msg.data) {
+        const { id, stage, stream, text } = msg.data;
+        // Buffer the log data
+        if (!state.pipelineLogs[id]) state.pipelineLogs[id] = '';
+        // For stderr, show as-is (progress info). For stdout, skip (it's the big JSON result).
+        if (stream === 'stderr') {
+          state.pipelineLogs[id] += text;
+          // If this pipeline's detail is currently shown, append to the live log
+          const logEl = document.getElementById('pipeline-live-log');
+          if (logEl && logEl.dataset.pipelineId === id) {
+            logEl.textContent = state.pipelineLogs[id];
+            logEl.scrollTop = logEl.scrollHeight;
+          }
+        }
+      }
+
       if (msg.type === 'pipeline:state-change' && msg.data) {
         // Update cached pipeline state inline if possible
         const existing = state.pipelines.find(p => p.id === msg.data.id);
@@ -3827,6 +3850,7 @@ function connectPipelineEvents() {
         // Re-render pipeline sidebar and detail immediately
         updatePipelineSidebar(state.pipelines);
         if (state.selectedPipeline) {
+          state._prevPipelineSnapshot = null; // force re-render on real state change
           // Fetch full data for the detail view
           fetchPipelines().then(pipelines => {
             state.pipelines = pipelines;
@@ -4085,7 +4109,6 @@ function initCatchphrases() {
 
 const pipelineListEl = document.getElementById('pipeline-list');
 const pipelineDetailEl = document.getElementById('pipeline-detail');
-const terminalGrid = document.getElementById('terminal-grid');
 
 /**
  * Fetch pipeline runs from the API
@@ -4126,18 +4149,26 @@ const PIPELINE_STAGE_LABELS = {
 function updatePipelineSidebar(pipelines) {
   if (!pipelineListEl) return;
 
-  // Don't render if no pipelines
-  if (!pipelines || pipelines.length === 0) {
-    pipelineListEl.innerHTML = '';
-    return;
-  }
-
   pipelineListEl.innerHTML = '';
 
+  // Always show header with + button
   const header = document.createElement('div');
   header.className = 'pipelines-header';
-  header.innerHTML = '<span>Pipelines</span>';
+  header.innerHTML = '<span>Pipelines</span><button class="pipeline-add-btn" title="New Pipeline">+</button>';
   pipelineListEl.appendChild(header);
+
+  header.querySelector('.pipeline-add-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    showNewPipelineDialog();
+  });
+
+  if (!pipelines || pipelines.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'pipeline-empty';
+    empty.textContent = 'No pipelines yet';
+    pipelineListEl.appendChild(empty);
+    return;
+  }
 
   for (const pipeline of pipelines) {
     const item = document.createElement('div');
@@ -4147,8 +4178,6 @@ function updatePipelineSidebar(pipelines) {
     }
 
     const dot = document.createElement('div');
-    // Escape colons in class name for CSS
-    const stateClass = pipeline.state.replace(':', '\\:');
     dot.className = `pipeline-state-dot ${pipeline.state}`;
 
     const info = document.createElement('div');
@@ -4176,6 +4205,126 @@ function updatePipelineSidebar(pipelines) {
 }
 
 /**
+ * Show dialog to create a new pipeline run
+ */
+function showNewPipelineDialog() {
+  const existingDialog = document.querySelector('.new-session-overlay');
+  if (existingDialog) existingDialog.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;';
+
+  // Build repo options from instances
+  const instances = state.instances || [];
+  const repoOptions = instances.map(inst => {
+    const name = inst.instanceId || inst.repoPath;
+    return `<option value="${escapeHtml(inst.repoPath)}">${escapeHtml(name)}</option>`;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="new-session-dialog" style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:400px;max-width:500px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+      <h3 style="margin:0 0 16px;font-size:1rem;color:#e0e0e0;">New Pipeline</h3>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Repository *</label>
+          <select class="pipeline-repo" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+            ${repoOptions || '<option value="">No repos registered</option>'}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Description *</label>
+          <input type="text" class="pipeline-description" placeholder="What should be built or fixed?" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+        </div>
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Acceptance Criteria (one per line)</label>
+          <textarea class="pipeline-ac" rows="4" placeholder="GET /health returns 200&#10;Response includes uptime field&#10;Unit test added" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+        </div>
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Source Branch</label>
+          <input type="text" class="pipeline-source-branch" value="main" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+        </div>
+        <div class="pipeline-dialog-error" style="color:#e74c3c;font-size:0.8rem;display:none;"></div>
+        <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end;">
+          <button class="pipeline-cancel-btn" style="background:transparent;border:1px solid #333;color:#888;font-size:0.85rem;padding:8px 16px;border-radius:4px;cursor:pointer;">Cancel</button>
+          <button class="pipeline-create-btn" style="background:#9b59b6;border:none;color:white;font-size:0.85rem;padding:8px 16px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:8px;">Start Pipeline</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const repoSelect = overlay.querySelector('.pipeline-repo');
+  const descInput = overlay.querySelector('.pipeline-description');
+  const acTextarea = overlay.querySelector('.pipeline-ac');
+  const branchInput = overlay.querySelector('.pipeline-source-branch');
+  const errorEl = overlay.querySelector('.pipeline-dialog-error');
+  const createBtn = overlay.querySelector('.pipeline-create-btn');
+  const cancelBtn = overlay.querySelector('.pipeline-cancel-btn');
+
+  const closeDialog = () => overlay.remove();
+
+  cancelBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+
+  createBtn.addEventListener('click', async () => {
+    const worktreePath = repoSelect.value;
+    if (!worktreePath) {
+      errorEl.textContent = 'Please select a repository';
+      errorEl.style.display = '';
+      return;
+    }
+
+    const description = descInput.value.trim();
+    if (!description) {
+      errorEl.textContent = 'Description is required';
+      errorEl.style.display = '';
+      descInput.focus();
+      return;
+    }
+
+    const acText = acTextarea.value.trim();
+    const acceptanceCriteria = acText ? acText.split('\n').map(l => l.trim()).filter(Boolean) : [];
+    const sourceBranch = branchInput.value.trim() || 'main';
+
+    createBtn.disabled = true;
+    createBtn.textContent = 'Starting...';
+    errorEl.style.display = 'none';
+
+    try {
+      const res = await fetch('/api/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description, acceptanceCriteria, sourceBranch, worktreePath }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to create pipeline');
+      }
+
+      const run = await res.json();
+      showToast('Pipeline started: ' + run.id, 'success');
+      closeDialog();
+
+      // Refresh pipeline list
+      state.pipelines = await fetchPipelines();
+      updatePipelineSidebar(state.pipelines);
+      selectPipeline(run.id);
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.style.display = '';
+      createBtn.disabled = false;
+      createBtn.textContent = 'Start Pipeline';
+    }
+  });
+
+  document.body.appendChild(overlay);
+  descInput.focus();
+}
+
+/**
  * Select a pipeline to show its detail view
  */
 function selectPipeline(pipelineId) {
@@ -4190,6 +4339,7 @@ function selectPipeline(pipelineId) {
   }
 
   state.selectedPipeline = pipelineId;
+  state._prevPipelineSnapshot = null; // force re-render
 
   // Hide terminal grid, show pipeline detail
   document.getElementById('terminal-grid').style.display = 'none';
@@ -4219,8 +4369,16 @@ function renderPipelineDetail(pipelineId) {
 
   // Header
   html += '<div class="pipeline-detail-header">';
+  html += '<div style="flex:1">';
   html += '<div class="pipeline-detail-title">' + escapeHtml(pipeline.description || 'Pipeline') + '</div>';
   html += '<div class="pipeline-detail-id">' + pipeline.id + '</div>';
+  html += '</div>';
+  html += '<div class="pipeline-detail-actions">';
+  if (pipeline.state === 'error') {
+    html += '<button class="pipeline-action-btn retry" onclick="pipelineRecover(\'' + pipeline.id + '\')" title="Retry from failed stage">Retry</button>';
+  }
+  html += '<button class="pipeline-action-btn delete" onclick="pipelineDelete(\'' + pipeline.id + '\')" title="Delete this pipeline">Delete</button>';
+  html += '</div>';
   html += '</div>';
 
   // Stage progress bar
@@ -4253,6 +4411,15 @@ function renderPipelineDetail(pipelineId) {
     }
   }
   html += '</div>';
+
+  // Blueprint section (fetch async after render)
+  const showBlueprintStates = ['checkpoint:arch', 'dev', 'gate', 'fix-loop', 'checkpoint:ship', 'ship', 'completed', 'error'];
+  if (showBlueprintStates.includes(pipeline.state)) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Blueprint</div>';
+    html += '<div id="pipeline-blueprint" class="pipeline-blueprint">Loading blueprint...</div>';
+    html += '</div>';
+  }
 
   // Checkpoint controls
   if (pipeline.state === 'checkpoint:arch' || pipeline.state === 'checkpoint:ship') {
@@ -4377,7 +4544,128 @@ function renderPipelineDetail(pipelineId) {
     html += '</div>';
   }
 
+  // Live log area (shows during active stages, persists for review)
+  const isActive = !['completed', 'cancelled', 'escalated', 'error'].includes(pipeline.state) || pipeline.state === 'error';
+  html += '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Live Output</div>';
+  html += '<pre class="pipeline-live-log" id="pipeline-live-log" data-pipeline-id="' + pipeline.id + '"></pre>';
+  html += '<div style="display:flex;gap:6px;margin-top:6px;">';
+  html += '<button class="pipeline-logs-btn" onclick="showPipelineLogs(\'' + pipeline.id + '\')" style="background:transparent;border:1px solid var(--border-color);color:var(--text-secondary);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:0.75rem;">Full Logs</button>';
+  html += '</div>';
+  html += '</div>';
+
   pipelineDetailEl.innerHTML = html;
+
+  // Populate live log with any buffered data
+  const logEl = document.getElementById('pipeline-live-log');
+  if (logEl && state.pipelineLogs && state.pipelineLogs[pipeline.id]) {
+    logEl.textContent = state.pipelineLogs[pipeline.id];
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // Fetch and render blueprint
+  const blueprintEl = document.getElementById('pipeline-blueprint');
+  if (blueprintEl) {
+    fetch('/api/pipelines/' + pipeline.id + '/blueprint')
+      .then(res => res.ok ? res.json() : null)
+      .then(bp => {
+        if (!bp) {
+          blueprintEl.textContent = 'No blueprint available.';
+          return;
+        }
+        let md = '### ' + (bp.approach || '') + '\n\n';
+        if (bp.steps && bp.steps.length > 0) {
+          md += '**Steps:**\n';
+          bp.steps.forEach((s, i) => { md += (i + 1) + '. **' + s.description + '** — ' + s.details + '\n'; });
+          md += '\n';
+        }
+        if (bp.filesToTouch && bp.filesToTouch.length > 0) {
+          md += '**Files:** `' + bp.filesToTouch.join('`, `') + '`\n\n';
+        }
+        if (bp.testStrategy) {
+          md += '**Test strategy:** ' + bp.testStrategy + '\n\n';
+        }
+        if (bp.risks && bp.risks.length > 0) {
+          md += '**Risks:**\n';
+          bp.risks.forEach(r => { md += '- ' + r + '\n'; });
+        }
+        // Use marked if available, otherwise show as-is
+        if (window.marked) {
+          blueprintEl.innerHTML = window.marked.parse(md);
+        } else {
+          blueprintEl.textContent = md;
+        }
+      })
+      .catch(() => { blueprintEl.textContent = 'Failed to load blueprint.'; });
+  }
+}
+
+/**
+ * Show pipeline stage logs in a dialog
+ */
+async function showPipelineLogs(pipelineId) {
+  const existingDialog = document.querySelector('.new-session-overlay');
+  if (existingDialog) existingDialog.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;';
+
+  overlay.innerHTML = `
+    <div class="new-session-dialog" style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:600px;max-width:80vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3 style="margin:0;font-size:1rem;color:#e0e0e0;">Pipeline Logs</h3>
+        <button class="logs-close-btn" style="background:transparent;border:none;color:#888;font-size:1.2rem;cursor:pointer;">&times;</button>
+      </div>
+      <div class="logs-tabs" style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;"></div>
+      <pre class="logs-content" style="flex:1;overflow:auto;background:#0d0d0d;border:1px solid #333;border-radius:4px;padding:12px;margin:0;font-size:0.75rem;color:#ccc;white-space:pre-wrap;word-break:break-all;max-height:60vh;"></pre>
+    </div>
+  `;
+
+  const closeBtn = overlay.querySelector('.logs-close-btn');
+  const tabsEl = overlay.querySelector('.logs-tabs');
+  const contentEl = overlay.querySelector('.logs-content');
+
+  closeBtn.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  document.body.appendChild(overlay);
+  contentEl.textContent = 'Loading...';
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/logs');
+    if (!res.ok) throw new Error('Failed to fetch logs');
+    const data = await res.json();
+    const logs = data.logs || {};
+    const stages = Object.keys(logs);
+
+    if (stages.length === 0) {
+      contentEl.textContent = 'No logs available yet.';
+      return;
+    }
+
+    function showStage(stage) {
+      contentEl.textContent = logs[stage] || 'Empty log';
+      tabsEl.querySelectorAll('button').forEach(b => b.style.background = 'transparent');
+      const activeBtn = tabsEl.querySelector('[data-stage="' + stage + '"]');
+      if (activeBtn) activeBtn.style.background = '#333';
+    }
+
+    for (const stage of stages) {
+      const btn = document.createElement('button');
+      btn.textContent = stage;
+      btn.dataset.stage = stage;
+      btn.style.cssText = 'background:transparent;border:1px solid #444;color:#ccc;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:0.75rem;';
+      btn.addEventListener('click', () => showStage(stage));
+      tabsEl.appendChild(btn);
+    }
+
+    showStage(stages[0]);
+  } catch (err) {
+    contentEl.textContent = 'Error loading logs: ' + err.message;
+  }
 }
 
 /**
@@ -4453,6 +4741,50 @@ async function pipelineFeedback(pipelineId) {
     updatePipelineSidebar(state.pipelines);
   } catch (err) {
     showToast('Feedback failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Recover (retry) a failed pipeline from its last stage
+ */
+async function pipelineRecover(pipelineId) {
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/recover', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Retry failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    const updated = await res.json();
+    showToast('Pipeline retrying from: ' + updated.state, 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Retry failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Delete a pipeline run
+ */
+async function pipelineDelete(pipelineId) {
+  if (!confirm('Delete this pipeline? This cannot be undone.')) return;
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Delete failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Pipeline deleted', 'success');
+    state.selectedPipeline = null;
+    pipelineDetailEl.style.display = 'none';
+    document.getElementById('terminal-grid').style.display = '';
+    state.pipelines = await fetchPipelines();
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Delete failed: ' + err.message, 'error');
   }
 }
 

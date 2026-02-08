@@ -2012,6 +2012,48 @@ export class WebDashboardServer {
       }
     })
 
+    // API: Create a new pipeline run
+    this.app.post('/api/pipelines', async (req, res) => {
+      try {
+        const { createPipelineRun, executeArchitectStage } = await import('../pipeline/index.js')
+        const { defaultPipelineConfig } = await import('../pipeline/pipeline-config.js')
+
+        const { description, acceptanceCriteria, sourceBranch, worktreePath } = req.body as {
+          description?: string
+          acceptanceCriteria?: string[]
+          sourceBranch?: string
+          worktreePath?: string
+        }
+
+        if (!description || typeof description !== 'string' || description.trim().length === 0) {
+          res.status(400).json({ error: 'description is required' })
+          return
+        }
+
+        const config = defaultPipelineConfig()
+        const run = await createPipelineRun({
+          config,
+          description: description.trim(),
+          acceptanceCriteria: Array.isArray(acceptanceCriteria) ? acceptanceCriteria.filter(Boolean) : [],
+          sourceBranch: sourceBranch || 'main',
+          worktreePath: worktreePath || process.cwd(),
+        })
+
+        console.log(`[API] Pipeline ${run.id} created, starting architect stage async`)
+        res.status(202).json(run)
+
+        // Kick off architect stage asynchronously (non-blocking)
+        executeArchitectStage(run).catch((err: Error) => {
+          console.error(`[API] Pipeline ${run.id} architect stage failed:`, err.message)
+        })
+      } catch (err) {
+        console.error('[API] Pipeline create error:', err)
+        if (!res.headersSent) {
+          res.status(500).json({ error: (err as Error).message })
+        }
+      }
+    })
+
     // API: Get a single pipeline run
     this.app.get('/api/pipelines/:id', async (req, res) => {
       try {
@@ -2024,6 +2066,33 @@ export class WebDashboardServer {
         res.json(run)
       } catch (err) {
         console.error('[API] Pipeline get error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Get pipeline stage logs
+    this.app.get('/api/pipelines/:id/logs', async (req, res) => {
+      try {
+        const { getPipelineDir } = await import('../pipeline/pipeline-store.js')
+        const { readdir, readFile } = await import('fs/promises')
+        const pipelineDir = getPipelineDir(req.params.id)
+        const logsDir = join(pipelineDir, 'logs')
+
+        try {
+          const files = await readdir(logsDir)
+          const logs: Record<string, string> = {}
+          for (const file of files) {
+            if (file.endsWith('.log')) {
+              const content = await readFile(join(logsDir, file), 'utf-8')
+              logs[file.replace('.log', '')] = content
+            }
+          }
+          res.json({ logs })
+        } catch {
+          res.json({ logs: {} })
+        }
+      } catch (err) {
+        console.error('[API] Pipeline logs error:', err)
         res.status(500).json({ error: (err as Error).message })
       }
     })
@@ -2094,6 +2163,92 @@ export class WebDashboardServer {
         })
       } catch (err) {
         console.error('[API] Pipeline feedback error:', err)
+        if (!res.headersSent) {
+          res.status(400).json({ error: (err as Error).message })
+        }
+      }
+    })
+
+    // API: Get pipeline blueprint
+    this.app.get('/api/pipelines/:id/blueprint', async (req, res) => {
+      try {
+        const { loadPipelineRun, getPipelineDir } = await import('../pipeline/index.js')
+        const { readFile } = await import('fs/promises')
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+        const blueprintFile = join(getPipelineDir(run.id), 'blueprint.json')
+        try {
+          const content = await readFile(blueprintFile, 'utf-8')
+          res.json(JSON.parse(content))
+        } catch {
+          res.status(404).json({ error: 'No blueprint available yet' })
+        }
+      } catch (err) {
+        console.error('[API] Blueprint fetch error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Delete a pipeline run
+    this.app.delete('/api/pipelines/:id', async (req, res) => {
+      try {
+        const { deletePipelineRun } = await import('../pipeline/index.js')
+        const deleted = await deletePipelineRun(req.params.id)
+        if (!deleted) {
+          res.status(404).json({ error: 'Pipeline not found or already deleted' })
+          return
+        }
+        console.log(`[API] Pipeline ${req.params.id} deleted`)
+        res.json({ success: true })
+      } catch (err) {
+        console.error('[API] Pipeline delete error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Recover (retry) a failed pipeline
+    this.app.post('/api/pipelines/:id/recover', async (req, res) => {
+      try {
+        const { loadPipelineRun, executeArchitectStage, executeDevStage, executeGateStage, executeFixLoopStage, executeShipStage } = await import('../pipeline/index.js')
+        const { recoverPipeline } = await import('../pipeline/checkpoint.js')
+
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+
+        const recovered = await recoverPipeline(run)
+        console.log(`[API] Pipeline ${run.id} recovered to state: ${recovered.state}`)
+        res.status(202).json(recovered)
+
+        // Kick off the recovered stage asynchronously
+        const stage = recovered.state
+        const rerun = async () => {
+          if (stage === 'created') {
+            await executeArchitectStage(recovered)
+          } else if (stage === 'checkpoint:arch') {
+            // Just wait for human action — no auto-run needed
+          } else if (stage === 'dev') {
+            await executeDevStage(recovered)
+          } else if (stage === 'gate') {
+            await executeGateStage(recovered)
+          } else if (stage === 'fix-loop') {
+            await executeFixLoopStage(recovered)
+          } else if (stage === 'checkpoint:ship') {
+            // Just wait for human action
+          } else if (stage === 'ship') {
+            await executeShipStage(recovered)
+          }
+        }
+        rerun().catch((err) => {
+          console.error(`[API] Pipeline ${run.id} recovery re-run failed:`, (err as Error).message)
+        })
+      } catch (err) {
+        console.error('[API] Pipeline recover error:', err)
         if (!res.headersSent) {
           res.status(400).json({ error: (err as Error).message })
         }
@@ -2291,6 +2446,24 @@ export class WebDashboardServer {
    */
   private setupPipelineEvents(): void {
     import('../pipeline/events.js').then(({ pipelineEvents }) => {
+      pipelineEvents.onLog((event) => {
+        const message = JSON.stringify({
+          type: 'pipeline:log',
+          data: {
+            id: event.pipelineId,
+            stage: event.stage,
+            stream: event.stream,
+            text: event.data,
+          },
+        })
+
+        for (const client of this.wss.clients) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(message)
+          }
+        }
+      })
+
       pipelineEvents.onStateChange((event) => {
         const message = JSON.stringify({
           type: 'pipeline:state-change',

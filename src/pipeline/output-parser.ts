@@ -46,9 +46,28 @@ export function parseStructuredOutput<T>(
   if (validator(direct)) return direct
 
   // Strategy 2: Claude's -p output-format json wraps in a result object
+  // The result field may be direct JSON, or prose + code block with JSON
   if (direct && typeof direct === 'object' && 'result' in direct) {
-    const inner = tryParseJson((direct as Record<string, unknown>).result as string)
-    if (validator(inner)) return inner
+    const resultStr = (direct as Record<string, unknown>).result as string
+    if (typeof resultStr === 'string') {
+      // 2a: Try direct parse of result string
+      const inner = tryParseJson(resultStr)
+      if (validator(inner)) return inner
+
+      // 2b: Extract from code block inside result string
+      const codeMatch = resultStr.match(/```(?:json)?\s*\n([\s\S]*?)\n```/)
+      if (codeMatch) {
+        const parsed = tryParseJson(codeMatch[1])
+        if (validator(parsed)) return parsed
+      }
+
+      // 2c: Find first { ... } block inside result string
+      const braceMatch = resultStr.match(/\{[\s\S]*\}/)
+      if (braceMatch) {
+        const parsed = tryParseJson(braceMatch[0])
+        if (validator(parsed)) return parsed
+      }
+    }
   }
 
   // Strategy 3: extract from code block

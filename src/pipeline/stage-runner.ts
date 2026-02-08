@@ -16,6 +16,7 @@ import type { PipelineConfig } from './types.js'
 import { resolveModel, resolveBudget } from './pipeline-config.js'
 import { getPipelineDir } from './pipeline-store.js'
 import { takeSnapshot, computeDelta, recordStageUsage } from './usage-tracker.js'
+import { pipelineEvents } from './events.js'
 
 // ============================================================================
 // Types
@@ -109,8 +110,17 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
     prompt,
   })
 
-  // Spawn the process
-  const result = await spawnClaude(args, cwd)
+  // Spawn the process with live log streaming
+  const onData = (stream: 'stdout' | 'stderr', chunk: string) => {
+    pipelineEvents.emitLog({
+      pipelineId,
+      stage: stageKey,
+      stream,
+      data: chunk,
+      timestamp: new Date().toISOString(),
+    })
+  }
+  const result = await spawnClaude(args, cwd, onData)
 
   // Write log file
   const logContent = [
@@ -164,14 +174,13 @@ function buildCliArgs(args: CliArgs): string[] {
     '--dangerously-skip-permissions',
     '--max-budget-usd', String(args.budget),
     '-p', args.prompt,
+    // Always use stream-json for live progress streaming
+    '--output-format', 'stream-json',
+    '--verbose',
   ]
 
   if (args.allowedTools) {
     cliArgs.push('--allowedTools', args.allowedTools)
-  }
-
-  if (args.outputFormat) {
-    cliArgs.push('--output-format', args.outputFormat)
   }
 
   return cliArgs
@@ -180,9 +189,53 @@ function buildCliArgs(args: CliArgs): string[] {
 /**
  * Spawn `claude` CLI as a child process and capture its output.
  */
+/**
+ * Parse a stream-json line into a readable log message.
+ * Returns null for events that don't need logging.
+ */
+function formatStreamEvent(line: string): string | null {
+  try {
+    const evt = JSON.parse(line)
+    if (evt.type === 'system' && evt.subtype === 'init') {
+      return `[init] model=${evt.model} tools=${(evt.tools || []).length}`
+    }
+    if (evt.type === 'assistant' && evt.message?.content) {
+      const parts: string[] = []
+      for (const block of evt.message.content) {
+        if (block.type === 'text' && block.text) {
+          // Truncate long text
+          const text = block.text.length > 200 ? block.text.slice(0, 200) + '...' : block.text
+          parts.push(text)
+        }
+        if (block.type === 'tool_use') {
+          const input = block.input || {}
+          let summary = block.name
+          if (block.name === 'Read' && input.file_path) summary += ` ${input.file_path}`
+          else if (block.name === 'Grep' && input.pattern) summary += ` "${input.pattern}"`
+          else if (block.name === 'Glob' && input.pattern) summary += ` ${input.pattern}`
+          else if (block.name === 'Edit' && input.file_path) summary += ` ${input.file_path}`
+          else if (block.name === 'Write' && input.file_path) summary += ` ${input.file_path}`
+          else if (block.name === 'Bash' && input.command) summary += ` ${input.command.slice(0, 80)}`
+          parts.push(`[tool] ${summary}`)
+        }
+      }
+      return parts.length > 0 ? parts.join('\n') : null
+    }
+    if (evt.type === 'result') {
+      const cost = evt.total_cost_usd ? `$${evt.total_cost_usd.toFixed(3)}` : ''
+      const turns = evt.num_turns || 0
+      return `[done] ${turns} turns, ${cost}, ${evt.duration_ms ? (evt.duration_ms / 1000).toFixed(1) + 's' : ''}`
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 function spawnClaude(
   args: string[],
   cwd: string,
+  onData?: (stream: 'stdout' | 'stderr', chunk: string) => void,
 ): Promise<{ exitCode: number; stdout: string; stderr: string; success: boolean }> {
   return new Promise((resolve, reject) => {
     const proc = spawn('claude', args, {
@@ -197,9 +250,27 @@ function spawnClaude(
 
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
+    let lineBuf = ''
+    let resultLine = '' // Store the last 'result' line for final output
 
     proc.stdout.on('data', (chunk: Buffer) => {
       stdoutChunks.push(chunk)
+      // Parse streaming JSON lines for progress reporting
+      if (onData) {
+        lineBuf += chunk.toString('utf-8')
+        const lines = lineBuf.split('\n')
+        lineBuf = lines.pop() || '' // Keep incomplete last line in buffer
+        for (const line of lines) {
+          if (!line.trim()) continue
+          // Check if this is a result event (save it)
+          try {
+            const parsed = JSON.parse(line)
+            if (parsed.type === 'result') resultLine = line
+          } catch { /* not json */ }
+          const msg = formatStreamEvent(line)
+          if (msg) onData('stderr', msg + '\n') // Use 'stderr' channel for log display
+        }
+      }
     })
 
     proc.stderr.on('data', (chunk: Buffer) => {
@@ -211,9 +282,29 @@ function spawnClaude(
     })
 
     proc.on('close', (code) => {
+      // Process any remaining buffered line
+      if (lineBuf.trim() && onData) {
+        try {
+          const parsed = JSON.parse(lineBuf)
+          if (parsed.type === 'result') resultLine = lineBuf
+        } catch { /* not json */ }
+        const msg = formatStreamEvent(lineBuf)
+        if (msg) onData('stderr', msg + '\n')
+      }
+
       const exitCode = code ?? 1
-      const stdout = Buffer.concat(stdoutChunks).toString('utf-8')
       const stderr = Buffer.concat(stderrChunks).toString('utf-8')
+
+      // For stream-json, the "stdout" we return should be the result event
+      // (which contains the actual output in its .result field), so downstream
+      // parsers work the same as with --output-format json
+      let stdout: string
+      if (resultLine) {
+        stdout = resultLine
+      } else {
+        stdout = Buffer.concat(stdoutChunks).toString('utf-8')
+      }
+
       resolve({
         exitCode,
         stdout,

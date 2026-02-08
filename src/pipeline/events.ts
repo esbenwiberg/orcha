@@ -23,6 +23,14 @@ export interface PipelineAgentStatusEvent {
   timestamp: string
 }
 
+export interface PipelineLogEvent {
+  pipelineId: string
+  stage: string
+  stream: 'stdout' | 'stderr'
+  data: string
+  timestamp: string
+}
+
 class PipelineEventEmitter extends EventEmitter {
   emitStateChange(event: PipelineStateChangeEvent): void {
     this.emit('state-change', event)
@@ -38,6 +46,14 @@ class PipelineEventEmitter extends EventEmitter {
 
   onAgentStatus(listener: (event: PipelineAgentStatusEvent) => void): this {
     return this.on('agent-status', listener)
+  }
+
+  emitLog(event: PipelineLogEvent): void {
+    this.emit('log', event)
+  }
+
+  onLog(listener: (event: PipelineLogEvent) => void): this {
+    return this.on('log', listener)
   }
 }
 

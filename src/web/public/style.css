@@ -2323,6 +2323,35 @@ body {
   letter-spacing: 0.5px;
 }
 
+.pipeline-add-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--accent-purple);
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.pipeline-add-btn:hover {
+  background: var(--accent-purple);
+  color: white;
+  border-color: var(--accent-purple);
+}
+
+.pipeline-empty {
+  padding: 8px 16px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
 .pipeline-item {
   display: flex;
   align-items: center;
@@ -2391,6 +2420,86 @@ body {
 
 .pipeline-detail-header {
   margin-bottom: 24px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.pipeline-detail-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.pipeline-action-btn {
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  transition: background 0.15s, color 0.15s;
+}
+
+.pipeline-action-btn.retry {
+  color: var(--accent-purple);
+  border-color: var(--accent-purple);
+}
+
+.pipeline-action-btn.retry:hover {
+  background: var(--accent-purple);
+  color: white;
+}
+
+.pipeline-action-btn.delete:hover {
+  background: var(--status-error);
+  color: white;
+  border-color: var(--status-error);
+}
+
+.pipeline-blueprint {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.pipeline-blueprint h3 {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  margin: 0 0 8px;
+}
+
+.pipeline-blueprint code {
+  background: #1a1a2e;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.78rem;
+}
+
+.pipeline-blueprint ol, .pipeline-blueprint ul {
+  padding-left: 20px;
+  margin: 4px 0;
+}
+
+.pipeline-live-log {
+  background: #0a0a0a;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin: 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  min-height: 60px;
+  overflow-y: auto;
 }
 
 .pipeline-detail-title {
