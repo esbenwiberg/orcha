@@ -30,6 +30,8 @@ import { runDevStage } from './stages/dev.js'
 import type { DevOptions } from './stages/dev.js'
 import { runGateStage } from './stages/gate.js'
 import type { GateOptions } from './stages/gate.js'
+import { runFixLoopStage } from './stages/fix-loop.js'
+import type { FixLoopOptions } from './stages/fix-loop.js'
 
 // ============================================================================
 // Transition Table
@@ -383,6 +385,39 @@ export async function executeGateStage(
   // The pipeline should already be in 'gate' state (set by dev stage).
   // Run the gate stage (handles checkpoint:ship / fix-loop transition internally)
   run = await runGateStage(run, opts)
+
+  return run
+}
+
+// ============================================================================
+// Fix Loop Orchestration
+// ============================================================================
+
+/**
+ * Execute a fix-loop iteration: fix the code, then re-run gate.
+ *
+ * Expects the pipeline to be in 'fix-loop' state.
+ * The fix stage handles:
+ * - Checking if max retries exceeded → escalated
+ * - Running the fix agent
+ * - Auto-committing
+ * - Transitioning to 'gate' for re-evaluation
+ *
+ * After fix completes (if it transitions to 'gate'), this method
+ * automatically re-runs the gate stage.
+ */
+export async function executeFixLoopStage(
+  run: PipelineRun,
+  fixOpts?: FixLoopOptions,
+  gateOpts?: GateOptions,
+): Promise<PipelineRun> {
+  // Run the fix loop (handles gate/escalated transition internally)
+  run = await runFixLoopStage(run, fixOpts)
+
+  // If fix loop transitioned to gate, run gate automatically
+  if (run.state === 'gate') {
+    run = await executeGateStage(run, gateOpts)
+  }
 
   return run
 }

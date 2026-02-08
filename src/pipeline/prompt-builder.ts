@@ -314,6 +314,19 @@ export interface DiffContext {
   diff: string
 }
 
+export interface FixLoopContext {
+  /** The blueprint JSON content. */
+  blueprintJson: string
+  /** The git diff of current changes. */
+  diff: string
+  /** Gate failure details (aggregated). */
+  failureReport: string
+  /** Which fix attempt this is (1-based). */
+  attempt: number
+  /** Max fix attempts allowed. */
+  maxAttempts: number
+}
+
 /**
  * Build the prompt parts for the AC validator gate agent.
  *
@@ -363,6 +376,66 @@ export function buildAcValidatorPrompt(
     '# Instructions',
     'Evaluate whether the code changes above satisfy each acceptance criterion.',
     'Output your verdict as the JSON structure described in your instructions.',
+  ].join('\n')
+
+  return { systemPrompt, userPrompt }
+}
+
+// ============================================================================
+// Fix Loop Prompt
+// ============================================================================
+
+/**
+ * Build the prompt parts for the fix-loop stage.
+ *
+ * The fix agent receives the blueprint, the current diff, and a detailed
+ * failure report from the gate stage. It must fix the issues without
+ * re-implementing from scratch.
+ */
+export function buildFixLoopPrompt(
+  workItem: WorkItemContext,
+  codebase: CodebaseContext,
+  ctx: FixLoopContext,
+): PromptParts {
+  const systemPrompt = [
+    'You are a fix agent in the Orcha pipeline.',
+    'The dev agent\'s implementation failed the quality gate. Your job is to fix the issues.',
+    '',
+    'Guidelines:',
+    '- Read the failure report carefully — it tells you exactly what went wrong.',
+    '- Fix ONLY the issues identified. Do not refactor or re-implement unrelated code.',
+    '- The existing code changes are already committed. Make targeted fixes on top.',
+    '- Follow the blueprint and existing code conventions.',
+    '- Do NOT run tests — the gate will re-run automatically after your fixes.',
+    '- Do NOT commit your changes — the pipeline handles commits automatically.',
+    '',
+    `This is fix attempt ${ctx.attempt} of ${ctx.maxAttempts}.`,
+    '',
+    '## Blueprint',
+    ctx.blueprintJson,
+  ].join('\n')
+
+  const acSection = workItem.acceptanceCriteria.length > 0
+    ? ['', '## Acceptance Criteria', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
+    : []
+
+  const userPrompt = [
+    '# Gate Failure Report',
+    ctx.failureReport,
+    '',
+    '# Current Code Changes (git diff)',
+    '```diff',
+    ctx.diff,
+    '```',
+    ...acSection,
+    '',
+    '# Task Description',
+    workItem.description,
+    '',
+    '# Instructions',
+    'Fix the issues described in the gate failure report above.',
+    'Make targeted changes to resolve each failure.',
+    `Source branch: ${codebase.sourceBranch}`,
   ].join('\n')
 
   return { systemPrompt, userPrompt }

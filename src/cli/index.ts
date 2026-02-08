@@ -49,9 +49,20 @@ import {
   parsePipelineConfig,
   createPipelineRun,
   executeArchitectStage,
+  executeDevStage,
+  executeGateStage,
+  executeFixLoopStage,
   getPipelineDir,
 } from '../pipeline/index.js'
 import { parseAcceptanceCriteria } from '../pipeline/prompt-builder.js'
+import {
+  approveCheckpoint,
+  rejectCheckpoint,
+  feedbackArchitectCheckpoint,
+  pausePipeline,
+  resumePipeline,
+  loadPipelineOrThrow,
+} from '../pipeline/checkpoint.js'
 
 import { rm } from 'fs/promises'
 import { existsSync } from 'fs'
@@ -1879,5 +1890,163 @@ pipelineCmd
       )
     }
   })
+
+// orcha pipeline approve <id>
+pipelineCmd
+  .command('approve <id>')
+  .description('Approve the current checkpoint (architect or ship)')
+  .option('--continue', 'Continue executing the pipeline after approval')
+  .action(async (id: string, options: { continue?: boolean }) => {
+    try {
+      let run = await loadPipelineOrThrow(id)
+
+      console.log(`Approving checkpoint for pipeline ${run.id} (state: ${run.state})...`)
+      run = await approveCheckpoint(run)
+      console.log(`  New state: ${run.state}`)
+
+      if (options.continue) {
+        // Auto-continue: run the next stage(s)
+        run = await continuePipeline(run)
+      } else if (run.state === 'dev') {
+        console.log(`\nTo continue the pipeline, run:`)
+        console.log(`  orcha pipeline approve ${run.id} --continue`)
+        console.log(`  (or manually: the pipeline is now in 'dev' state)`)
+      } else if (run.state === 'ship') {
+        console.log(`\nPipeline approved for shipping.`)
+        console.log(`Ship stage is not yet implemented (M7).`)
+      }
+    } catch (err) {
+      console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// orcha pipeline reject <id>
+pipelineCmd
+  .command('reject <id>')
+  .description('Reject the current checkpoint and cancel the pipeline')
+  .action(async (id: string) => {
+    try {
+      let run = await loadPipelineOrThrow(id)
+
+      console.log(`Rejecting checkpoint for pipeline ${run.id} (state: ${run.state})...`)
+      run = await rejectCheckpoint(run)
+      console.log(`  Pipeline cancelled.`)
+    } catch (err) {
+      console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// orcha pipeline feedback <id> <text>
+pipelineCmd
+  .command('feedback <id> <text>')
+  .description('Provide feedback on the architect blueprint and re-run architect')
+  .action(async (id: string, text: string) => {
+    try {
+      let run = await loadPipelineOrThrow(id)
+
+      console.log(`Sending feedback for pipeline ${run.id}...`)
+      console.log(`  Feedback: ${text}`)
+      console.log(`  Re-running architect stage with feedback...`)
+
+      run = await feedbackArchitectCheckpoint(run, text)
+
+      if (run.state === 'error') {
+        console.error(`\nArchitect re-run failed: ${run.error}`)
+        process.exit(1)
+      }
+
+      console.log(`\nArchitect re-run completed.`)
+      console.log(`  State: ${run.state}`)
+      if (run.blueprintPath) {
+        console.log(`  Updated blueprint: ${run.blueprintPath}`)
+      }
+      console.log(`\nReview the updated blueprint and proceed with: orcha pipeline approve ${run.id}`)
+    } catch (err) {
+      console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// orcha pipeline resume <id>
+pipelineCmd
+  .command('resume <id>')
+  .description('Resume a paused pipeline')
+  .option('--continue', 'Continue executing the resumed stage')
+  .action(async (id: string, options: { continue?: boolean }) => {
+    try {
+      let run = await loadPipelineOrThrow(id)
+
+      console.log(`Resuming pipeline ${run.id} (paused at: ${run.pausedStage})...`)
+      run = await resumePipeline(run)
+      console.log(`  Resumed to state: ${run.state}`)
+
+      if (options.continue) {
+        run = await continuePipeline(run)
+      } else {
+        console.log(`\nPipeline resumed. Use --continue to auto-execute the current stage.`)
+      }
+    } catch (err) {
+      console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+/**
+ * Continue executing a pipeline from its current state.
+ * Drives through dev → gate → fix-loop cycles automatically,
+ * pausing at checkpoints.
+ */
+async function continuePipeline(run: import('../pipeline/index.js').PipelineRun): Promise<import('../pipeline/index.js').PipelineRun> {
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (run.state === 'dev') {
+      console.log(`\nExecuting dev stage...`)
+      run = await executeDevStage(run)
+      if (run.state === 'error') {
+        console.error(`Dev stage failed: ${run.error}`)
+        return run
+      }
+      console.log(`  Dev stage complete. State: ${run.state}`)
+    }
+
+    if (run.state === 'gate') {
+      console.log(`\nExecuting gate stage...`)
+      run = await executeGateStage(run)
+      if (run.state === 'error') {
+        console.error(`Gate stage failed: ${run.error}`)
+        return run
+      }
+      console.log(`  Gate stage complete. State: ${run.state}`)
+    }
+
+    if (run.state === 'fix-loop') {
+      console.log(`\nGate failed. Executing fix loop (attempt ${run.fixLoopCount + 1})...`)
+      run = await executeFixLoopStage(run)
+      if (run.state === 'error') {
+        console.error(`Fix loop failed: ${run.error}`)
+        return run
+      }
+      if (run.state === 'escalated') {
+        console.log(`\nMax fix attempts reached. Pipeline escalated for human intervention.`)
+        return run
+      }
+      console.log(`  Fix loop complete. State: ${run.state}`)
+      // Loop continues: if state is 'gate' from fix, re-run gate
+      continue
+    }
+
+    if (run.state === 'checkpoint:ship') {
+      console.log(`\nGate passed! Pipeline is at checkpoint:ship.`)
+      console.log(`Review the changes and approve with: orcha pipeline approve ${run.id}`)
+      return run
+    }
+
+    // Any other terminal or checkpoint state: stop
+    console.log(`\nPipeline at state: ${run.state}`)
+    return run
+  }
+}
 
 program.parse()

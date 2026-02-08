@@ -57,6 +57,7 @@ export {
   executeArchitectStage,
   executeDevStage,
   executeGateStage,
+  executeFixLoopStage,
 } from './pipeline-engine.js'
 
 export type { CreatePipelineRunOptions } from './pipeline-engine.js'
@@ -71,9 +72,10 @@ export {
   buildArchitectPrompt,
   buildDevPrompt,
   buildAcValidatorPrompt,
+  buildFixLoopPrompt,
   buildStagePrompt,
 } from './prompt-builder.js'
-export type { WorkItemContext, CodebaseContext, BlueprintContext, DiffContext, PromptParts } from './prompt-builder.js'
+export type { WorkItemContext, CodebaseContext, BlueprintContext, DiffContext, FixLoopContext, PromptParts } from './prompt-builder.js'
 
 // Stages — Architect
 export { runArchitectStage, BLUEPRINT_SCHEMA } from './stages/architect.js'
@@ -86,6 +88,24 @@ export type { DevOptions, DevResult } from './stages/dev.js'
 // Stages — Gate
 export { runGateStage } from './stages/gate.js'
 export type { GateOptions, GateStageResult } from './stages/gate.js'
+
+// Stages — Fix Loop
+export { runFixLoopStage } from './stages/fix-loop.js'
+export type { FixLoopOptions } from './stages/fix-loop.js'
+
+// Checkpoint
+export {
+  approveCheckpoint,
+  rejectCheckpoint,
+  approveArchitectCheckpoint,
+  rejectArchitectCheckpoint,
+  feedbackArchitectCheckpoint,
+  approveShipCheckpoint,
+  rejectShipCheckpoint,
+  pausePipeline,
+  resumePipeline,
+  loadPipelineOrThrow,
+} from './checkpoint.js'
 
 // Gate Agents
 export { runTestRunner } from './gate-agents/test-runner.js'
