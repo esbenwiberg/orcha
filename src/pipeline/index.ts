@@ -54,6 +54,7 @@ export {
   setError,
   transitionToError,
   getAvailableTransitions,
+  getRecoveryTarget,
   createPipelineRun,
   executeArchitectStage,
   executeDevStage,
@@ -67,6 +68,12 @@ export type { CreatePipelineRunOptions } from './pipeline-engine.js'
 // Stage Runner
 export { runStage } from './stage-runner.js'
 export type { StageRunnerOptions, StageRunnerResult } from './stage-runner.js'
+
+// Git Utilities
+export { getDiff, getChangedLintableFiles } from './git-utils.js'
+
+// Output Parser
+export { tryParseJson, parseStructuredOutput } from './output-parser.js'
 
 // Prompt Builder
 export {
@@ -113,6 +120,7 @@ export {
   rejectShipCheckpoint,
   pausePipeline,
   resumePipeline,
+  recoverPipeline,
   loadPipelineOrThrow,
 } from './checkpoint.js'
 
@@ -135,6 +143,10 @@ export {
   getRelevantHints,
 } from './learning-store.js'
 export type { PipelineOutcomeRecord, LearningHint } from './learning-store.js'
+
+// Events
+export { pipelineEvents } from './events.js'
+export type { PipelineStateChangeEvent, PipelineAgentStatusEvent } from './events.js'
 
 // Gate Agents
 export { runTestRunner } from './gate-agents/test-runner.js'

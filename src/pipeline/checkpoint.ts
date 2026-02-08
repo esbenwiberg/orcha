@@ -9,8 +9,9 @@
  */
 
 import type { PipelineRun } from './types.js'
-import { transition, executeArchitectStage } from './pipeline-engine.js'
-import { loadPipelineRun } from './pipeline-store.js'
+import { transition, executeArchitectStage, getRecoveryTarget, isValidTransition } from './pipeline-engine.js'
+import { loadPipelineRun, savePipelineRun } from './pipeline-store.js'
+import { pipelineEvents } from './events.js'
 
 // ============================================================================
 // Checkpoint: Architect
@@ -75,9 +76,10 @@ export async function feedbackArchitectCheckpoint(
   // Execute architect (it handles checkpoint:arch transition internally)
   run = await executeArchitectStage(augmentedRun)
 
-  // Restore original description (feedback was one-shot context)
+  // Restore original description (feedback was one-shot context) and persist
   if (run.state === 'checkpoint:arch') {
     run = { ...run, description: originalDescription }
+    await savePipelineRun(run)
   }
 
   return run
@@ -144,6 +146,53 @@ export async function resumePipeline(run: PipelineRun): Promise<PipelineRun> {
     throw new Error('Cannot resume: no pausedStage recorded')
   }
   return await transition(run, run.pausedStage)
+}
+
+// ============================================================================
+// Recovery
+// ============================================================================
+
+/**
+ * Recover a pipeline stuck in 'error' state.
+ *
+ * Determines the recovery target (the last active stage from stageHistory),
+ * validates the transition, clears the error, and transitions to that stage.
+ * The stage will be re-run from scratch when the caller continues execution.
+ */
+export async function recoverPipeline(run: PipelineRun): Promise<PipelineRun> {
+  if (run.state !== 'error') {
+    throw new Error(`Cannot recover: pipeline is in '${run.state}', expected 'error'`)
+  }
+
+  const target = getRecoveryTarget(run)
+  if (!target) {
+    throw new Error('Cannot recover: unable to determine recovery target from stage history')
+  }
+
+  if (!isValidTransition('error', target, undefined, target)) {
+    throw new Error(`Cannot recover: transition error → ${target} is not valid`)
+  }
+
+  // Clear error and transition to recovery target
+  const now = new Date().toISOString()
+  const recovered: PipelineRun = {
+    ...run,
+    state: target,
+    currentStage: target,
+    error: undefined,
+    updatedAt: now,
+  }
+  await savePipelineRun(recovered)
+
+  // Emit state-change event for real-time consumers (e.g. web dashboard)
+  pipelineEvents.emitStateChange({
+    pipelineId: recovered.id,
+    from: 'error',
+    to: target,
+    updatedAt: now,
+  })
+
+  return recovered
 }
 
 // ============================================================================

@@ -8,12 +8,13 @@
  * a structured pass/fail verdict.
  */
 
-import { execSync } from 'child_process'
 import type { PipelineRun, GateResult } from '../types.js'
 import { runStage } from '../stage-runner.js'
 import { resolveModel, resolveBudget } from '../pipeline-config.js'
 import { buildAcValidatorPrompt } from '../prompt-builder.js'
 import type { WorkItemContext } from '../prompt-builder.js'
+import { getDiff } from '../git-utils.js'
+import { parseStructuredOutput } from '../output-parser.js'
 
 // ============================================================================
 // AC Validator
@@ -109,37 +110,6 @@ export async function runAcValidator(
 }
 
 // ============================================================================
-// Diff Retrieval
-// ============================================================================
-
-function getDiff(worktreePath: string, sourceBranch: string): string | null {
-  const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
-
-  try {
-    const diff = execSync(`git diff origin/${sourceBranch}...HEAD`, execOpts).trim()
-    if (diff) return diff
-  } catch {
-    // origin/sourceBranch may not exist
-  }
-
-  try {
-    const diff = execSync(`git diff ${sourceBranch}...HEAD`, execOpts).trim()
-    if (diff) return diff
-  } catch {
-    // sourceBranch may not exist locally
-  }
-
-  try {
-    const diff = execSync('git diff HEAD~1', execOpts).trim()
-    if (diff) return diff
-  } catch {
-    // No previous commit
-  }
-
-  return null
-}
-
-// ============================================================================
 // Output Parsing
 // ============================================================================
 
@@ -153,14 +123,19 @@ interface AcVerdictOutput {
   }>
 }
 
+function isAcVerdict(obj: unknown): obj is AcVerdictOutput {
+  if (typeof obj !== 'object' || obj === null) return false
+  const v = obj as Record<string, unknown>
+  return typeof v.pass === 'boolean' && typeof v.summary === 'string'
+}
+
 /**
  * Parse the AC validator's output to extract a structured verdict.
  */
 function parseAcVerdict(stdout: string, timestamp: string): GateResult {
-  const parsed = tryParseAcOutput(stdout)
+  const parsed = parseStructuredOutput(stdout, isAcVerdict)
 
   if (!parsed) {
-    // Could not parse structured output — treat as a warning but pass
     return {
       verdict: 'pass',
       checkName: 'ac-validator',
@@ -181,48 +156,4 @@ function parseAcVerdict(stdout: string, timestamp: string): GateResult {
     },
     timestamp,
   }
-}
-
-function tryParseAcOutput(stdout: string): AcVerdictOutput | null {
-  const trimmed = stdout.trim()
-
-  // Strategy 1: direct JSON parse
-  const direct = tryJson(trimmed)
-  if (isAcVerdict(direct)) return direct
-
-  // Strategy 2: Claude -p result wrapper
-  if (direct && typeof direct === 'object' && 'result' in direct) {
-    const inner = tryJson((direct as Record<string, unknown>).result as string)
-    if (isAcVerdict(inner)) return inner
-  }
-
-  // Strategy 3: extract from code block
-  const codeBlockMatch = trimmed.match(/```(?:json)?\s*\n([\s\S]*?)\n```/)
-  if (codeBlockMatch) {
-    const parsed = tryJson(codeBlockMatch[1])
-    if (isAcVerdict(parsed)) return parsed
-  }
-
-  // Strategy 4: find first { ... } block
-  const braceMatch = trimmed.match(/\{[\s\S]*\}/)
-  if (braceMatch) {
-    const parsed = tryJson(braceMatch[0])
-    if (isAcVerdict(parsed)) return parsed
-  }
-
-  return null
-}
-
-function tryJson(str: string): unknown | null {
-  try {
-    return JSON.parse(str)
-  } catch {
-    return null
-  }
-}
-
-function isAcVerdict(obj: unknown): obj is AcVerdictOutput {
-  if (typeof obj !== 'object' || obj === null) return false
-  const v = obj as Record<string, unknown>
-  return typeof v.pass === 'boolean' && typeof v.summary === 'string'
 }

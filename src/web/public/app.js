@@ -3800,6 +3800,57 @@ function handleResize() {
 }
 
 /**
+ * Connect a dedicated WebSocket for real-time pipeline state-change events.
+ * Falls back gracefully to 3-second polling if the connection fails.
+ */
+function connectPipelineEvents() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}?mode=pipeline-events`;
+  let ws;
+
+  try {
+    ws = new WebSocket(wsUrl);
+  } catch {
+    return; // WS not available — polling handles updates
+  }
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'pipeline:state-change' && msg.data) {
+        // Update cached pipeline state inline if possible
+        const existing = state.pipelines.find(p => p.id === msg.data.id);
+        if (existing) {
+          existing.state = msg.data.state;
+          existing.updatedAt = msg.data.updatedAt;
+        }
+        // Re-render pipeline sidebar and detail immediately
+        updatePipelineSidebar(state.pipelines);
+        if (state.selectedPipeline) {
+          // Fetch full data for the detail view
+          fetchPipelines().then(pipelines => {
+            state.pipelines = pipelines;
+            updatePipelineSidebar(pipelines);
+            renderPipelineDetail(state.selectedPipeline);
+          });
+        }
+      }
+    } catch {
+      // Ignore non-JSON or unexpected messages
+    }
+  };
+
+  ws.onclose = () => {
+    // Reconnect after 5 seconds
+    setTimeout(connectPipelineEvents, 5000);
+  };
+
+  ws.onerror = () => {
+    // onclose will fire after this — reconnect handled there
+  };
+}
+
+/**
  * Initialize the app
  */
 async function init() {
@@ -3808,6 +3859,9 @@ async function init() {
 
   // Poll for status updates every 3 seconds
   state.refreshInterval = setInterval(render, 3000);
+
+  // Connect WebSocket for real-time pipeline events (falls back to polling)
+  connectPipelineEvents();
 
   // Handle window resize
   window.addEventListener('resize', handleResize);

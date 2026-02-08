@@ -21,6 +21,7 @@ import { runStage } from '../stage-runner.js'
 import { buildArchitectPrompt } from '../prompt-builder.js'
 import type { WorkItemContext, CodebaseContext } from '../prompt-builder.js'
 import { getRelevantHints } from '../learning-store.js'
+import { parseStructuredOutput } from '../output-parser.js'
 
 // ============================================================================
 // Blueprint JSON Schema
@@ -136,7 +137,7 @@ export async function runArchitectStage(
       prompt: userPrompt,
       systemPrompt,
       allowedTools: 'Read,Grep,Glob',
-      jsonSchema: JSON.stringify(BLUEPRINT_SCHEMA),
+      outputFormat: 'json',
       modelOverride: opts?.modelOverride,
       budgetOverride: opts?.budgetOverride,
     })
@@ -195,51 +196,8 @@ export async function runArchitectStage(
 // Output Parsing
 // ============================================================================
 
-/**
- * Parse the architect's stdout to extract a BlueprintOutput.
- *
- * The output should be JSON (from -p with --output-format json).
- * We try multiple strategies:
- * 1. Direct JSON parse of the full output
- * 2. Extract JSON from a code block
- * 3. Find the first { ... } block
- */
 function parseArchitectOutput(stdout: string): BlueprintOutput | null {
-  const trimmed = stdout.trim()
-
-  // Strategy 1: direct JSON parse
-  const direct = tryParseJson(trimmed)
-  if (direct && isValidBlueprint(direct)) return direct
-
-  // Strategy 2: Claude's -p output-format json wraps in a result object
-  if (direct && typeof direct === 'object' && 'result' in direct) {
-    const inner = tryParseJson((direct as Record<string, unknown>).result as string)
-    if (inner && isValidBlueprint(inner)) return inner
-  }
-
-  // Strategy 3: extract from code block
-  const codeBlockMatch = trimmed.match(/```(?:json)?\s*\n([\s\S]*?)\n```/)
-  if (codeBlockMatch) {
-    const parsed = tryParseJson(codeBlockMatch[1])
-    if (parsed && isValidBlueprint(parsed)) return parsed
-  }
-
-  // Strategy 4: find first { ... } block (greedy)
-  const braceMatch = trimmed.match(/\{[\s\S]*\}/)
-  if (braceMatch) {
-    const parsed = tryParseJson(braceMatch[0])
-    if (parsed && isValidBlueprint(parsed)) return parsed
-  }
-
-  return null
-}
-
-function tryParseJson(str: string): unknown | null {
-  try {
-    return JSON.parse(str)
-  } catch {
-    return null
-  }
+  return parseStructuredOutput(stdout, isValidBlueprint)
 }
 
 function isValidBlueprint(obj: unknown): obj is BlueprintOutput {

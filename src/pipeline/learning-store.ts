@@ -8,7 +8,7 @@
  * and provides relevant hints to the architect for future pipeline runs.
  */
 
-import { readFile, writeFile, rename, mkdir } from 'fs/promises'
+import { readFile, writeFile, rename, mkdir, unlink, stat } from 'fs/promises'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { getPipelinesRoot } from './pipeline-store.js'
@@ -74,22 +74,83 @@ export async function loadLearnings(): Promise<PipelineOutcomeRecord[]> {
   }
 }
 
+/** Stale lock threshold in milliseconds (30 seconds). */
+const LOCK_STALE_MS = 30_000
+/** Maximum attempts to acquire the lock. */
+const LOCK_MAX_RETRIES = 20
+/** Base delay between lock retries in milliseconds. */
+const LOCK_RETRY_DELAY_MS = 150
+
+function lockFilePath(): string {
+  return `${learningFilePath()}.lock`
+}
+
+/**
+ * Acquire an exclusive lockfile. Uses `wx` flag which fails atomically if
+ * the file already exists. Retries with jittered backoff. Stale locks
+ * (older than LOCK_STALE_MS) are force-removed.
+ *
+ * Returns a release function that must be called when done.
+ */
+async function acquireLock(): Promise<() => Promise<void>> {
+  const lockPath = lockFilePath()
+
+  for (let attempt = 0; attempt < LOCK_MAX_RETRIES; attempt++) {
+    try {
+      await writeFile(lockPath, `${process.pid}:${Date.now()}`, { flag: 'wx' })
+      return async () => {
+        try {
+          await unlink(lockPath)
+        } catch {
+          // Lock already removed — not a problem
+        }
+      }
+    } catch (err: unknown) {
+      if (!isNodeError(err) || err.code !== 'EEXIST') throw err
+
+      // Lock exists — check if it's stale
+      try {
+        const info = await stat(lockPath)
+        if (Date.now() - info.mtimeMs > LOCK_STALE_MS) {
+          await unlink(lockPath)
+          continue // Retry immediately after removing stale lock
+        }
+      } catch {
+        // Lock disappeared between our check — retry immediately
+        continue
+      }
+
+      // Wait with jitter before retrying
+      const jitter = Math.random() * LOCK_RETRY_DELAY_MS
+      await new Promise((r) => setTimeout(r, LOCK_RETRY_DELAY_MS + jitter))
+    }
+  }
+
+  throw new Error(`Failed to acquire learning store lock after ${LOCK_MAX_RETRIES} attempts`)
+}
+
 /**
  * Append a pipeline outcome record to the learning store.
- * Uses atomic write (write to temp, then rename) to prevent corruption.
+ * Uses file-level locking to prevent lost updates from concurrent pipelines,
+ * and atomic write (write to temp, then rename) to prevent corruption.
  */
 export async function appendLearning(record: PipelineOutcomeRecord): Promise<void> {
   const filePath = learningFilePath()
   const dir = getPipelinesRoot()
   await mkdir(dir, { recursive: true })
 
-  const existing = await loadLearnings()
-  existing.push(record)
+  const releaseLock = await acquireLock()
+  try {
+    const existing = await loadLearnings()
+    existing.push(record)
 
-  const data = JSON.stringify(existing, null, 2)
-  const tmpFile = `${filePath}.tmp.${randomBytes(4).toString('hex')}`
-  await writeFile(tmpFile, data, 'utf-8')
-  await rename(tmpFile, filePath)
+    const data = JSON.stringify(existing, null, 2)
+    const tmpFile = `${filePath}.tmp.${randomBytes(4).toString('hex')}`
+    await writeFile(tmpFile, data, 'utf-8')
+    await rename(tmpFile, filePath)
+  } finally {
+    await releaseLock()
+  }
 }
 
 // ============================================================================

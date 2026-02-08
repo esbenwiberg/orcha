@@ -16,6 +16,7 @@ import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { execSync } from 'child_process'
 import type { GateResult } from '../types.js'
+import { getChangedLintableFiles } from '../git-utils.js'
 
 // ============================================================================
 // Lint Runner
@@ -31,7 +32,7 @@ export async function runLintRunner(
   const timestamp = new Date().toISOString()
 
   // Get changed files (only lintable extensions)
-  const changedFiles = getChangedFiles(worktreePath, sourceBranch)
+  const changedFiles = getChangedLintableFiles(worktreePath, sourceBranch)
 
   if (changedFiles.length === 0) {
     return {
@@ -105,53 +106,6 @@ export async function runLintRunner(
       timestamp,
     }
   }
-}
-
-// ============================================================================
-// Changed Files Detection
-// ============================================================================
-
-const LINTABLE_EXTENSIONS = /\.(ts|js|tsx|jsx)$/
-
-/**
- * Get the list of changed files (relative paths) that are lintable.
- */
-function getChangedFiles(worktreePath: string, sourceBranch: string): string[] {
-  const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
-
-  try {
-    // Try diffing against origin/sourceBranch first (more reliable)
-    const output = execSync(
-      `git diff --name-only origin/${sourceBranch}... -- '*.ts' '*.js' '*.tsx' '*.jsx'`,
-      execOpts,
-    ).trim()
-    if (output) return output.split('\n').filter(Boolean)
-  } catch {
-    // origin/sourceBranch may not exist
-  }
-
-  try {
-    // Fallback: diff against sourceBranch directly
-    const output = execSync(
-      `git diff --name-only ${sourceBranch}... -- '*.ts' '*.js' '*.tsx' '*.jsx'`,
-      execOpts,
-    ).trim()
-    if (output) return output.split('\n').filter(Boolean)
-  } catch {
-    // sourceBranch may not exist locally
-  }
-
-  try {
-    // Last resort: all tracked files matching lintable extensions
-    const output = execSync('git diff --name-only HEAD', execOpts).trim()
-    if (output) {
-      return output.split('\n').filter((f) => LINTABLE_EXTENSIONS.test(f))
-    }
-  } catch {
-    // Ignore
-  }
-
-  return []
 }
 
 // ============================================================================

@@ -36,8 +36,8 @@ export interface StageRunnerOptions {
   systemPrompt: string
   /** Allowed tools (e.g. 'Read,Grep,Glob' for architect). If omitted, no restriction. */
   allowedTools?: string
-  /** JSON schema string for structured output via --json-schema. */
-  jsonSchema?: string
+  /** Output format (e.g. 'json' for --output-format json). */
+  outputFormat?: string
   /** Override model (takes precedence over config resolution). */
   modelOverride?: string
   /** Override budget (takes precedence over config resolution). */
@@ -81,7 +81,7 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
     prompt,
     systemPrompt,
     allowedTools,
-    jsonSchema,
+    outputFormat,
     modelOverride,
     budgetOverride,
   } = options
@@ -105,7 +105,7 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
     budget,
     systemPrompt,
     allowedTools,
-    jsonSchema,
+    outputFormat,
     prompt,
   })
 
@@ -153,7 +153,7 @@ interface CliArgs {
   budget: number
   systemPrompt: string
   allowedTools?: string
-  jsonSchema?: string
+  outputFormat?: string
   prompt: string
 }
 
@@ -170,8 +170,8 @@ function buildCliArgs(args: CliArgs): string[] {
     cliArgs.push('--allowedTools', args.allowedTools)
   }
 
-  if (args.jsonSchema) {
-    cliArgs.push('--output-format', 'json')
+  if (args.outputFormat) {
+    cliArgs.push('--output-format', args.outputFormat)
   }
 
   return cliArgs

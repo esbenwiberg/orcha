@@ -1,156 +1,248 @@
-# Blueprint: Session Creation Info Display
+# Blueprint: Pipeline Fixes & Missing Features
 
 ## Goal
 
-When a new session is created, display useful git/worktree context information directly in the terminal session so the user immediately knows the state of their branch — whether a worktree was reused, whether the branch exists on origin, and whether local is in sync with remote.
+Fix bugs found during code review (config override merge, feedback persistence, json-schema passthrough, code duplication) and implement features promised in the original `docs/pipeline.md` blueprint that were skipped (WebSocket pipeline events, MCP pipeline status tool, `orcha pipeline recover` command).
 
 ## Non-Goals
 
-- No new UI dialogs or modals — info goes into the terminal as styled echo output
-- No changes to the "New Session" dialog form itself
-- No changes to worktree creation logic
-- No persistent storage of this info
+- Rewriting the pipeline architecture (it's sound)
+- Adding new pipeline features beyond what the blueprint specifies
+- Adding tests (will be a separate effort)
+- Changing the state machine or transition table
 
 ## Acceptance Criteria
 
-- [ ] On session create, the terminal shows whether a **new worktree was created** or an **existing worktree was reused**
-- [ ] Shows whether the **branch exists on origin** (remote tracking)
-- [ ] If branch exists on origin, shows whether **local is up-to-date, ahead, behind, or diverged**
-- [ ] Shows the **worktree path** for reference
-- [ ] Shows the **base branch** the new branch was created from (when creating a new branch)
-- [ ] Info is displayed as a compact block of colored echo lines at the top of the terminal, before the AI command runs
-- [ ] Frontend toast still shows for worktree reuse (existing behavior preserved)
-- [ ] No display when `useWorktree=false` (no worktree mode)
+- [ ] `orcha pipeline run --model-architect sonnet` correctly overrides architect model while preserving all other model/budget defaults
+- [ ] `feedbackArchitectCheckpoint()` persists the restored original description to disk
+- [ ] Architect stage passes `--output-format json` to Claude CLI (json-schema param removed since Claude CLI doesn't support `--json-schema` as a standalone flag — structured output is handled via `--output-format json` + prompt instructions)
+- [ ] `getDiff()` is a single shared function, not duplicated 4 times
+- [ ] JSON output parsing (`tryJson` + 4-strategy pattern) is a single shared utility
+- [ ] WebSocket emits pipeline state change events when transitions occur
+- [ ] Frontend subscribes to WebSocket pipeline events for instant updates (falls back to polling)
+- [ ] `orcha_pipeline_status` MCP tool exists and agents can report pipeline-level status
+- [ ] `orcha pipeline recover <id>` command resets stuck `error` state pipelines
+- [ ] `appendLearning()` uses file-level locking to prevent lost updates from concurrent pipelines
+- [ ] `npm run build` succeeds with no type errors
 
 ## Architecture
 
-### Approach: Echo lines in tmux pane
+### Bug Fixes (no architectural change)
 
-The simplest and most useful approach — echo styled info directly into the terminal pane before the AI command starts. This is where the user is looking, requires no new UI components, and the info naturally scrolls away once work begins.
+**Config merge fix** — CLI deep-merges user overrides onto `defaultPipelineConfig()` before calling `parsePipelineConfig()`.
 
-### Data Flow
+**Feedback persistence** — `feedbackArchitectCheckpoint()` calls `savePipelineRun()` after restoring the original description.
 
-```
-POST /api/sessions
-  → WorktreeManager gathers branch/worktree info
-  → Server builds info lines
-  → TmuxRenderer.runInPane() echoes info block
-  → AI command runs after info is displayed
-```
+**json-schema cleanup** — Remove the unused `jsonSchema` parameter from `StageRunnerOptions` and `buildCliArgs`. The architect already instructs Claude to output JSON via `--output-format json` + prompt instructions. The `BLUEPRINT_SCHEMA` constant stays for the `isValidBlueprint()` validator.
 
-### Info Block Format (example output)
+### Code Deduplication
 
 ```
-─── Session #3 ──────────────────────────
-  Branch:    orcha/session-3-20260206
-  Worktree:  ~/.orcha/worktrees/orcha/session-1-abc1 (reused)
-  Origin:    branch exists, local is 2 commits behind
-─────────────────────────────────────────
+src/pipeline/git-utils.ts          — NEW: getDiff(), getChangedFiles() shared helpers
+src/pipeline/output-parser.ts      — NEW: parseStructuredOutput<T>() generic parser
 ```
 
-Or for a fresh branch:
+Both are pure utility modules with no pipeline-engine dependencies.
+
+### WebSocket Pipeline Events
 
 ```
-─── Session #1 ──────────────────────────
-  Branch:    orcha/feature-xyz (new, from origin/main)
-  Worktree:  ~/.orcha/worktrees/orcha/session-1-abc1
-  Origin:    branch not on remote
-─────────────────────────────────────────
+Pipeline Engine (transition())
+  └─→ Emits 'pipeline:state-change' event (via Node EventEmitter)
+        └─→ WebDashboardServer listens, broadcasts to all WS clients
+              └─→ Frontend receives, updates UI instantly
 ```
 
-## Key Files
+The `transition()` function in `pipeline-engine.ts` already persists state. We add an event emission after save. The web server subscribes to this event and broadcasts a JSON message to all connected WebSocket clients.
 
-| File | Change |
-|------|--------|
-| `src/web/server.ts` | Gather git info, build info lines, echo to pane |
-| `src/core/worktree-manager.ts` | Add `getBranchSyncStatus()` helper |
-| `src/web/public/app.js` | Enhance response handling (pass more info for toast) |
-| `dist/web/public/app.js` | Copy of above |
+### MCP Pipeline Status Tool
+
+```
+src/mcp/server.ts
+  └─→ New tool: orcha_pipeline_status
+        - Accepts: pipelineId, stage, status, details
+        - Writes to: ~/.orcha/pipelines/{id}/agent-status.json
+        - Used by: pipeline agents to report progress from within their sessions
+```
+
+### Pipeline Recovery
+
+```
+src/cli/index.ts
+  └─→ orcha pipeline recover <id>
+        - Loads pipeline in 'error' state
+        - Transitions to the last non-error stage from stageHistory
+        - User can then --continue from there
+```
+
+Requires adding `error → <previous-stage>` as a valid transition (similar to how `paused` resumes).
+
+## Folder/File Layout
+
+### New Files
+
+```
+src/pipeline/git-utils.ts         — Shared git diff/changed-files helpers
+src/pipeline/output-parser.ts     — Generic structured output parser
+src/pipeline/events.ts            — Pipeline EventEmitter singleton
+```
+
+### Modified Files
+
+```
+src/pipeline/pipeline-engine.ts    — Emit events on transition
+src/pipeline/checkpoint.ts         — Persist after feedback description restore
+src/pipeline/stage-runner.ts       — Remove unused jsonSchema param
+src/pipeline/learning-store.ts     — Add file locking to appendLearning
+src/pipeline/gate-agents/*.ts      — Replace local getDiff/tryJson with shared utils
+src/pipeline/stages/architect.ts   — Remove jsonSchema from runStage call
+src/cli/index.ts                   — Fix config merge, add recover command
+src/web/server.ts                  — Subscribe to pipeline events, broadcast via WS
+src/web/public/app.js              — Listen for WS pipeline events
+src/mcp/server.ts                  — Add orcha_pipeline_status tool
+```
 
 ## Milestones
 
-### Milestone 1: Add branch sync status helper to WorktreeManager
+---
 
-**Intent:** Add a method that checks whether a branch exists on origin and reports sync status (ahead/behind/diverged/up-to-date).
+### M1: Bug Fixes (config merge, feedback persistence, json-schema cleanup)
 
-**Files touched:**
-- `src/core/worktree-manager.ts` — add `getBranchSyncStatus(branch: string, worktreePath?: string)` method
+**Intent**: Fix the three confirmed bugs that affect correctness.
 
-**Method returns:**
-```typescript
-interface BranchSyncInfo {
-  existsOnOrigin: boolean
-  ahead: number        // commits ahead of origin
-  behind: number       // commits behind origin
-  baseBranch?: string  // e.g. "origin/main" (only for new branches)
-}
-```
+**Key files modified**:
+- `src/cli/index.ts` — Deep-merge model/budget overrides onto `defaultPipelineConfig()` before `parsePipelineConfig()`
+- `src/pipeline/checkpoint.ts` — Add `await savePipelineRun(run)` after restoring original description at line 80
+- `src/pipeline/stage-runner.ts` — Remove `jsonSchema` from `StageRunnerOptions`, `CliArgs`, and `buildCliArgs()`
+- `src/pipeline/stages/architect.ts` — Remove `jsonSchema` parameter from `runStage()` call
 
-**Implementation:**
-- Use `git rev-parse --verify origin/{branch}` to check if remote branch exists
-- If exists, use `git rev-list --left-right --count origin/{branch}...{branch}` to get ahead/behind
-- If working in a worktree, use `git -C {worktreePath}` to run commands in the right context
-
-**Verification:**
+**Verification**:
 ```bash
-npx tsc --noEmit
+npm run build
+# Manual: run `orcha pipeline run --model-architect sonnet` and inspect state.json
+#   → config.models should have all defaults + architect overridden
+# Manual: run feedback on a checkpoint:arch pipeline
+#   → After feedback, state.json description should be the ORIGINAL, not augmented
 ```
-
-### Milestone 2: Build and echo info block in server.ts
-
-**Intent:** After session creation, gather info and echo a formatted block into the tmux pane before the AI command runs.
-
-**Files touched:**
-- `src/web/server.ts` — in `POST /api/sessions` handler, between pane creation and AI command execution
-
-**Logic:**
-1. After worktree is created/reused (line ~446), gather info:
-   - `reusedWorktree` (already available)
-   - Call `worktreeManager.getBranchSyncStatus(branch, workDir)`
-2. Build info lines array
-3. Echo each line into the pane using `sessionTmux.runInPane()`
-4. Then run the AI command (existing code)
-
-**Also add to response:**
-- `branchInfo.existsOnOrigin`, `branchInfo.ahead`, `branchInfo.behind` in the JSON response so the frontend could use it if needed
-
-**Verification:**
-```bash
-npx tsc --noEmit
-# Manual: create a session and observe info block in terminal
-```
-
-### Milestone 3: Frontend toast enhancement (optional)
-
-**Intent:** Show richer toast when session is created — e.g. "Session created on orcha/feature-xyz (2 behind origin)".
-
-**Files touched:**
-- `src/web/public/app.js` — update `createSession()` response handling
-- `dist/web/public/app.js` — copy
-
-**Verification:**
-```bash
-cp src/web/public/app.js dist/web/public/app.js
-# Manual: create session, check toast message
-```
-
-## Risks & Unknowns
-
-| Risk | Mitigation |
-|------|-----------|
-| `git rev-list --left-right` may fail if branch is brand new (no common ancestor) | Wrap in try/catch, return `{ existsOnOrigin: false, ahead: 0, behind: 0 }` |
-| Echoing multiple lines via tmux `send-keys` may have timing issues | Use a single `echo -e` with `\n` for the whole block, or chain with `&&` |
-| `git -C` in worktree path — need to ensure the worktree is fully initialized before querying | Query happens after `createSession()` returns, so worktree should be ready |
-| Fetch already happens in `WorktreeManager.create()` | No need to fetch again; sync status will be based on already-fetched refs |
-
-## Summary
-
-This is a ~2 milestone task (M3 is optional polish). The core change is:
-1. A small helper method on WorktreeManager
-2. ~30 lines in server.ts to build and echo the info block
-
-The echo approach is the right call — it's where the user is already looking, it requires no new UI, and it naturally scrolls away.
 
 ---
 
-Next: /probe 'Milestone 1 - add getBranchSyncStatus to WorktreeManager'
+### M2: Code Deduplication (getDiff, output parser)
+
+**Intent**: Extract duplicated utilities into shared modules.
+
+**Key files created**:
+- `src/pipeline/git-utils.ts` — `getDiff(worktreePath, sourceBranch): string | null` and `getChangedLintableFiles(worktreePath, sourceBranch): string[]` (extracted from gate agents and fix-loop)
+- `src/pipeline/output-parser.ts` — `parseStructuredOutput<T>(stdout: string, validator: (obj: unknown) => obj is T): T | null` implementing the 4-strategy pattern (direct, result wrapper, code block, brace match)
+
+**Key files modified**:
+- `src/pipeline/gate-agents/ac-validator.ts` — Replace local `getDiff`, `tryJson`, parsing with shared utils
+- `src/pipeline/gate-agents/adversary.ts` — Same
+- `src/pipeline/gate-agents/code-review.ts` — Same
+- `src/pipeline/gate-agents/security-review.ts` — Same
+- `src/pipeline/gate-agents/lint-runner.ts` — Replace local `getChangedFiles` with shared util
+- `src/pipeline/stages/architect.ts` — Replace local `tryParseJson`/parsing with shared util
+- `src/pipeline/stages/fix-loop.ts` — Replace local `getDiff` with shared util
+- `src/pipeline/index.ts` — Export new modules
+
+**Verification**:
+```bash
+npm run build
+grep -r "function getDiff" src/pipeline/  # Should only appear in git-utils.ts
+grep -r "function tryJson\|function tryParseJson" src/pipeline/  # Should only appear in output-parser.ts
+```
+
+---
+
+### M3: Learning Store File Locking
+
+**Intent**: Prevent lost updates when concurrent pipelines finish simultaneously.
+
+**Key files modified**:
+- `src/pipeline/learning-store.ts` — Use a simple lockfile approach: `writeFile(lockPath, '', { flag: 'wx' })` (fails atomically if lock exists) with retry loop and stale-lock expiry (30s). No new dependencies.
+
+**Verification**:
+```bash
+npm run build
+# Manual: verify learning.json writes don't lose entries under concurrent pipeline completion
+```
+
+---
+
+### M4: Pipeline Events & WebSocket Broadcasting
+
+**Intent**: Real-time pipeline state updates in the web dashboard via WebSocket.
+
+**Key files created**:
+- `src/pipeline/events.ts` — Singleton `EventEmitter` for pipeline events:
+  ```
+  pipelineEvents.emit('state-change', { pipelineId, from, to, run })
+  ```
+
+**Key files modified**:
+- `src/pipeline/pipeline-engine.ts` — Import `pipelineEvents` and emit `state-change` after `savePipelineRun()` in `transition()`
+- `src/web/server.ts` — In WebSocket setup, subscribe to `pipelineEvents.on('state-change')` and broadcast `{ type: 'pipeline:state-change', data: { id, state, updatedAt } }` to all connected clients
+- `src/web/public/app.js` — In the existing WS connection handler, listen for `pipeline:state-change` messages and update `state.pipelines` + re-render immediately (keep 3s poll as fallback)
+
+**Verification**:
+```bash
+npm run build && cp src/web/public/{app.js,style.css,index.html} dist/web/public/
+# Manual: open web dashboard, run a pipeline, verify instant state updates in sidebar
+```
+
+---
+
+### M5: MCP Pipeline Status Tool
+
+**Intent**: Allow pipeline agents to report progress from within their Claude sessions.
+
+**Key files modified**:
+- `src/mcp/server.ts` — Register `orcha_pipeline_status` tool with parameters:
+  - `pipelineId` (string, required)
+  - `stage` (string, required) — current stage name
+  - `status` (enum: working|completed|error, required)
+  - `details` (string, optional) — human-readable status message
+
+  The tool writes to `~/.orcha/pipelines/{pipelineId}/agent-status.json` (atomic write).
+  Emits a `pipeline:agent-status` event so the web dashboard can show agent activity.
+
+**Verification**:
+```bash
+npm run build
+# Manual: run a pipeline, check if agent-status.json is written during stage execution
+```
+
+---
+
+### M6: Pipeline Recovery Command
+
+**Intent**: Allow users to recover pipelines stuck in `error` state.
+
+**Key files modified**:
+- `src/pipeline/pipeline-engine.ts` — Extend `isValidTransition` to allow `error → <active-state>` when a `recoveryTarget` is provided. Add helper `getRecoveryTarget(run)` that inspects `stageHistory` to determine the right state.
+- `src/pipeline/checkpoint.ts` — Add `recoverPipeline(run)` that validates error state, determines recovery target, transitions, clears `error` field.
+- `src/cli/index.ts` — Add `orcha pipeline recover <id>` command with `--continue` option.
+
+**Verification**:
+```bash
+npm run build
+# Manual: create a pipeline that errors, run `orcha pipeline recover <id>`, verify state
+# Manual: `orcha pipeline recover <id> --continue` should resume execution
+```
+
+---
+
+## Risks & Unknowns
+
+| Risk | Impact | Quick Probe |
+|------|--------|------------|
+| WebSocket broadcast may include full PipelineRun (large payload) | Performance | M4: Send minimal payload `{ id, state, updatedAt }`, client refetches full data if selected |
+| MCP tool may not be available if user hasn't configured MCP | Agent can't report status | M5: Best-effort — agent status is informational only, pipeline still works without it |
+| File locking in learning store may deadlock if process crashes while holding lock | Learning store unusable | M3: Use lock expiry (stale locks older than 30s are force-removed) |
+| Recovery from `error` may resume a stage with stale worktree state | Incorrect behavior | M6: Recovery re-runs the stage from scratch, not resume mid-stage. Document this. |
+| `--output-format json` without schema constraint means Claude isn't schema-constrained | Architect may produce invalid JSON | Already handled: `parseArchitectOutput` has 4 fallback strategies + `isValidBlueprint` validation. Low risk. |
+| Double gate execution concern was investigated and confirmed NOT a bug | None | The engine's `executeFixLoopStage` consumes the gate transition internally, CLI loop never sees `gate` state after fix-loop |
+
+---
+
+Next: `/probe 'M1: Bug Fixes (config merge, feedback persistence, json-schema cleanup)'`

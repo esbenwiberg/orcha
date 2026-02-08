@@ -25,6 +25,7 @@ import type { PipelineRun, PipelineState, PipelineConfig, StageResult } from './
 import { ACTIVE_STATES, TERMINAL_STATES } from './types.js'
 import { savePipelineRun, generatePipelineId } from './pipeline-store.js'
 import { recordPipelineOutcome } from './learning-store.js'
+import { pipelineEvents } from './events.js'
 import { runArchitectStage } from './stages/architect.js'
 import type { ArchitectOptions } from './stages/architect.js'
 import { runDevStage } from './stages/dev.js'
@@ -83,6 +84,7 @@ export function isValidTransition(
   from: PipelineState,
   to: PipelineState,
   pausedStage?: PipelineState,
+  recoveryTarget?: PipelineState,
 ): boolean {
   // Cannot leave terminal states.
   if (TERMINAL_STATES.has(from)) {
@@ -107,8 +109,11 @@ export function isValidTransition(
     return false
   }
 
-  // error -> nowhere (error is terminal-like unless we add recovery later)
+  // error -> recovery target (must be an active state)
   if (from === 'error') {
+    if (recoveryTarget && to === recoveryTarget && ACTIVE_STATES.has(to)) {
+      return true
+    }
     return false
   }
 
@@ -124,8 +129,9 @@ export function assertValidTransition(
   from: PipelineState,
   to: PipelineState,
   pausedStage?: PipelineState,
+  recoveryTarget?: PipelineState,
 ): void {
-  if (!isValidTransition(from, to, pausedStage)) {
+  if (!isValidTransition(from, to, pausedStage, recoveryTarget)) {
     throw new InvalidTransitionError(from, to)
   }
 }
@@ -187,6 +193,14 @@ export async function transition(
   }
 
   await savePipelineRun(updated)
+
+  // Emit state-change event for real-time consumers (e.g. web dashboard)
+  pipelineEvents.emitStateChange({
+    pipelineId: updated.id,
+    from: run.state,
+    to,
+    updatedAt: updated.updatedAt,
+  })
 
   // Record pipeline outcome to learning store when reaching a terminal state
   if (TERMINAL_STATES.has(to)) {
@@ -265,6 +279,48 @@ export async function transitionToError(
   }
   await savePipelineRun(updated)
   return updated
+}
+
+/**
+ * Map from a failed stage to the correct re-entry point for recovery.
+ *
+ * Stages like architect and dev have orchestration wrappers (executeArchitectStage,
+ * executeDevStage) that perform an initial transition, so recovery must target the
+ * preceding state. Stages like gate, fix-loop, and ship run directly in their state,
+ * so recovery targets the same state.
+ */
+const RECOVERY_RE_ENTRY: ReadonlyMap<PipelineState, PipelineState> = new Map([
+  ['architect', 'created'],            // executeArchitectStage: created → architect
+  ['checkpoint:arch', 'checkpoint:arch'], // human step, just wait
+  ['dev', 'checkpoint:arch'],           // executeDevStage: checkpoint:arch → dev
+  ['gate', 'gate'],                     // executeGateStage runs directly in gate
+  ['fix-loop', 'fix-loop'],             // executeFixLoopStage runs directly in fix-loop
+  ['checkpoint:ship', 'checkpoint:ship'], // human step, just wait
+  ['ship', 'ship'],                     // executeShipStage runs directly in ship
+])
+
+/**
+ * Determine the recovery target for a pipeline in 'error' state.
+ *
+ * Inspects stageHistory to find the last stage that was running when the
+ * error occurred. Returns the correct re-entry state so the stage can be
+ * re-executed from scratch by continuePipeline().
+ */
+export function getRecoveryTarget(run: PipelineRun): PipelineState | null {
+  if (run.state !== 'error') {
+    return null
+  }
+
+  // Look at stageHistory in reverse to find the last recorded stage
+  for (let i = run.stageHistory.length - 1; i >= 0; i--) {
+    const entry = run.stageHistory[i]
+    if (ACTIVE_STATES.has(entry.stage)) {
+      return RECOVERY_RE_ENTRY.get(entry.stage) ?? entry.stage
+    }
+  }
+
+  // Fallback: if no history, start from scratch
+  return 'created'
 }
 
 /**

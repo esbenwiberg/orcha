@@ -8,12 +8,13 @@
  * a structured pass/fail verdict.
  */
 
-import { execSync } from 'child_process'
 import type { PipelineRun, GateResult } from '../types.js'
 import { runStage } from '../stage-runner.js'
 import { resolveModel, resolveBudget } from '../pipeline-config.js'
 import { buildCodeReviewPrompt } from '../prompt-builder.js'
 import type { WorkItemContext, DiffContext } from '../prompt-builder.js'
+import { getDiff } from '../git-utils.js'
+import { parseStructuredOutput } from '../output-parser.js'
 
 // ============================================================================
 // Types
@@ -108,36 +109,17 @@ export async function runCodeReview(
 }
 
 // ============================================================================
-// Diff Retrieval
-// ============================================================================
-
-function getDiff(worktreePath: string, sourceBranch: string): string | null {
-  const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
-
-  try {
-    const diff = execSync(`git diff origin/${sourceBranch}...HEAD`, execOpts).trim()
-    if (diff) return diff
-  } catch { /* origin/sourceBranch may not exist */ }
-
-  try {
-    const diff = execSync(`git diff ${sourceBranch}...HEAD`, execOpts).trim()
-    if (diff) return diff
-  } catch { /* sourceBranch may not exist locally */ }
-
-  try {
-    const diff = execSync('git diff HEAD~1', execOpts).trim()
-    if (diff) return diff
-  } catch { /* No previous commit */ }
-
-  return null
-}
-
-// ============================================================================
 // Output Parsing
 // ============================================================================
 
+function isCodeReviewVerdict(obj: unknown): obj is CodeReviewVerdictOutput {
+  if (typeof obj !== 'object' || obj === null) return false
+  const v = obj as Record<string, unknown>
+  return typeof v.pass === 'boolean' && typeof v.summary === 'string'
+}
+
 function parseCodeReviewVerdict(stdout: string, timestamp: string): GateResult {
-  const parsed = tryParseCodeReviewOutput(stdout)
+  const parsed = parseStructuredOutput(stdout, isCodeReviewVerdict)
 
   if (!parsed) {
     return {
@@ -164,44 +146,4 @@ function parseCodeReviewVerdict(stdout: string, timestamp: string): GateResult {
     },
     timestamp,
   }
-}
-
-function tryParseCodeReviewOutput(stdout: string): CodeReviewVerdictOutput | null {
-  const trimmed = stdout.trim()
-
-  const direct = tryJson(trimmed)
-  if (isCodeReviewVerdict(direct)) return direct
-
-  if (direct && typeof direct === 'object' && 'result' in direct) {
-    const inner = tryJson((direct as Record<string, unknown>).result as string)
-    if (isCodeReviewVerdict(inner)) return inner
-  }
-
-  const codeBlockMatch = trimmed.match(/```(?:json)?\s*\n([\s\S]*?)\n```/)
-  if (codeBlockMatch) {
-    const parsed = tryJson(codeBlockMatch[1])
-    if (isCodeReviewVerdict(parsed)) return parsed
-  }
-
-  const braceMatch = trimmed.match(/\{[\s\S]*\}/)
-  if (braceMatch) {
-    const parsed = tryJson(braceMatch[0])
-    if (isCodeReviewVerdict(parsed)) return parsed
-  }
-
-  return null
-}
-
-function tryJson(str: string): unknown | null {
-  try {
-    return JSON.parse(str)
-  } catch {
-    return null
-  }
-}
-
-function isCodeReviewVerdict(obj: unknown): obj is CodeReviewVerdictOutput {
-  if (typeof obj !== 'object' || obj === null) return false
-  const v = obj as Record<string, unknown>
-  return typeof v.pass === 'boolean' && typeof v.summary === 'string'
 }

@@ -8,9 +8,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { writeFile, mkdir } from 'fs/promises'
+import { writeFile, mkdir, rename } from 'fs/promises'
 import { join } from 'path'
+import { homedir } from 'os'
+import { randomBytes } from 'crypto'
 import type { SessionState, StatusFileContent } from '../core/types.js'
+import { pipelineEvents } from '../pipeline/events.js'
 
 // Map MCP states to internal SessionState
 const STATE_MAP: Record<string, SessionState> = {
@@ -96,6 +99,66 @@ export function createMcpServer(statusDir = DEFAULT_STATUS_DIR): McpServer {
           {
             type: 'text',
             text: `Status updated: ${state} - ${args.message}`,
+          },
+        ],
+      }
+    }
+  )
+
+  // Register the orcha_pipeline_status tool
+  server.registerTool(
+    'orcha_pipeline_status',
+    {
+      description:
+        'Report pipeline stage progress from within an agent session. ' +
+        'Use this to let the orchestrator and dashboard know what you are doing.',
+      inputSchema: {
+        pipelineId: z.string().describe('The pipeline run ID (e.g. pl-20260208...)'),
+        stage: z.string().describe('Current stage name (e.g. architect, dev, gate)'),
+        status: z
+          .enum(['working', 'completed', 'error'])
+          .describe('Current status of the agent within the stage'),
+        details: z
+          .string()
+          .optional()
+          .describe('Human-readable status message describing what you are doing'),
+      },
+    },
+    async (args) => {
+      const pipelinesDir = join(homedir(), '.orcha', 'pipelines')
+      const dir = join(pipelinesDir, args.pipelineId)
+
+      // Ensure pipeline directory exists
+      await mkdir(dir, { recursive: true })
+
+      const statusContent = {
+        pipelineId: args.pipelineId,
+        stage: args.stage,
+        status: args.status,
+        details: args.details,
+        timestamp: new Date().toISOString(),
+      }
+
+      // Atomic write: temp file + rename
+      const tmpFile = join(dir, `agent-status.json.tmp.${randomBytes(4).toString('hex')}`)
+      const targetFile = join(dir, 'agent-status.json')
+      await writeFile(tmpFile, JSON.stringify(statusContent, null, 2))
+      await rename(tmpFile, targetFile)
+
+      // Emit event for real-time dashboard updates
+      pipelineEvents.emitAgentStatus({
+        pipelineId: args.pipelineId,
+        stage: args.stage,
+        status: args.status,
+        details: args.details,
+        timestamp: statusContent.timestamp,
+      })
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Pipeline status updated: ${args.stage} → ${args.status}${args.details ? ` (${args.details})` : ''}`,
           },
         ],
       }

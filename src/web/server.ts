@@ -83,6 +83,7 @@ export class WebDashboardServer {
     this.setupRoutes()
     this.setupWebSocket()
     this.setupUpgradeHandler()
+    this.setupPipelineEvents()
   }
 
   /**
@@ -2121,6 +2122,13 @@ export class WebDashboardServer {
       const url = new URL(req.url || '', `http://localhost:${this.port}`)
       const mode = url.searchParams.get('mode')
 
+      // Pipeline events mode — lightweight connection for real-time updates
+      if (mode === 'pipeline-events') {
+        // Nothing to set up — this connection receives broadcasts from setupPipelineEvents()
+        ws.on('error', () => {})
+        return
+      }
+
       // File manager mode (yazi)
       if (mode === 'yazi') {
         const instanceId = url.searchParams.get('instanceId')
@@ -2263,6 +2271,35 @@ export class WebDashboardServer {
       ws.on('error', (err) => {
         console.error(`[WS] Error for ${sessionKey}:`, err.message)
       })
+    })
+  }
+
+  /**
+   * Subscribe to pipeline state-change events and broadcast to all connected
+   * WebSocket clients so the frontend can update instantly.
+   */
+  private setupPipelineEvents(): void {
+    import('../pipeline/events.js').then(({ pipelineEvents }) => {
+      pipelineEvents.onStateChange((event) => {
+        const message = JSON.stringify({
+          type: 'pipeline:state-change',
+          data: {
+            id: event.pipelineId,
+            state: event.to,
+            from: event.from,
+            updatedAt: event.updatedAt,
+          },
+        })
+
+        for (const client of this.wss.clients) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(message)
+          }
+        }
+      })
+    }).catch((err) => {
+      // Pipeline module may not be available in all setups — non-fatal
+      console.warn('[WS] Could not subscribe to pipeline events:', (err as Error).message)
     })
   }
 

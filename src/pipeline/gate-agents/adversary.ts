@@ -20,6 +20,8 @@ import { runStage } from '../stage-runner.js'
 import { resolveModel, resolveBudget } from '../pipeline-config.js'
 import { buildAdversaryPrompt } from '../prompt-builder.js'
 import type { WorkItemContext, DiffContext } from '../prompt-builder.js'
+import { getDiff } from '../git-utils.js'
+import { parseStructuredOutput } from '../output-parser.js'
 
 // ============================================================================
 // Types
@@ -190,31 +192,6 @@ export async function runAdversary(
 }
 
 // ============================================================================
-// Diff Retrieval
-// ============================================================================
-
-function getDiff(worktreePath: string, sourceBranch: string): string | null {
-  const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
-
-  try {
-    const diff = execSync(`git diff origin/${sourceBranch}...HEAD`, execOpts).trim()
-    if (diff) return diff
-  } catch { /* origin/sourceBranch may not exist */ }
-
-  try {
-    const diff = execSync(`git diff ${sourceBranch}...HEAD`, execOpts).trim()
-    if (diff) return diff
-  } catch { /* sourceBranch may not exist locally */ }
-
-  try {
-    const diff = execSync('git diff HEAD~1', execOpts).trim()
-    if (diff) return diff
-  } catch { /* No previous commit */ }
-
-  return null
-}
-
-// ============================================================================
 // Test Pattern Discovery
 // ============================================================================
 
@@ -328,46 +305,12 @@ async function executeTests(
 // Output Parsing
 // ============================================================================
 
-function parseAdversaryOutput(stdout: string): AdversaryOutput | null {
-  const trimmed = stdout.trim()
-
-  // Strategy 1: direct JSON parse
-  const direct = tryJson(trimmed)
-  if (isAdversaryOutput(direct)) return direct
-
-  // Strategy 2: Claude -p result wrapper
-  if (direct && typeof direct === 'object' && 'result' in direct) {
-    const inner = tryJson((direct as Record<string, unknown>).result as string)
-    if (isAdversaryOutput(inner)) return inner
-  }
-
-  // Strategy 3: extract from code block
-  const codeBlockMatch = trimmed.match(/```(?:json)?\s*\n([\s\S]*?)\n```/)
-  if (codeBlockMatch) {
-    const parsed = tryJson(codeBlockMatch[1])
-    if (isAdversaryOutput(parsed)) return parsed
-  }
-
-  // Strategy 4: find first { ... } block
-  const braceMatch = trimmed.match(/\{[\s\S]*\}/)
-  if (braceMatch) {
-    const parsed = tryJson(braceMatch[0])
-    if (isAdversaryOutput(parsed)) return parsed
-  }
-
-  return null
-}
-
-function tryJson(str: string): unknown | null {
-  try {
-    return JSON.parse(str)
-  } catch {
-    return null
-  }
-}
-
 function isAdversaryOutput(obj: unknown): obj is AdversaryOutput {
   if (typeof obj !== 'object' || obj === null) return false
   const v = obj as Record<string, unknown>
   return Array.isArray(v.tests) && typeof v.reasoning === 'string'
+}
+
+function parseAdversaryOutput(stdout: string): AdversaryOutput | null {
+  return parseStructuredOutput(stdout, isAdversaryOutput)
 }

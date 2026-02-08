@@ -21,6 +21,7 @@ import { runStage } from '../stage-runner.js'
 import { resolveModel, resolveBudget } from '../pipeline-config.js'
 import { buildFixLoopPrompt } from '../prompt-builder.js'
 import type { WorkItemContext, CodebaseContext } from '../prompt-builder.js'
+import { getDiff } from '../git-utils.js'
 
 // ============================================================================
 // Types
@@ -68,7 +69,7 @@ export async function runFixLoopStage(
     const blueprintJson = await readFile(blueprintPath, 'utf-8')
 
     // Get the current diff
-    const diff = getDiff(run.worktreePath, run.sourceBranch)
+    const diff = getDiff(run.worktreePath, run.sourceBranch) ?? '(unable to generate diff)'
 
     // Build failure report from gate results
     const failureReport = buildFailureReport(run.gateResults)
@@ -194,22 +195,6 @@ function buildFailureReport(gateResults: GateResult[]): string {
     '',
     ...sections,
   ].join('\n\n')
-}
-
-/**
- * Get the current diff against the source branch.
- */
-function getDiff(worktreePath: string, sourceBranch: string): string {
-  const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
-  try {
-    return execSync(`git diff ${sourceBranch}...HEAD`, execOpts).trim()
-  } catch {
-    try {
-      return execSync('git diff HEAD', execOpts).trim()
-    } catch {
-      return '(unable to generate diff)'
-    }
-  }
 }
 
 /**

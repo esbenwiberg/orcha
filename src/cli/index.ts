@@ -62,6 +62,7 @@ import {
   feedbackArchitectCheckpoint,
   pausePipeline,
   resumePipeline,
+  recoverPipeline,
   loadPipelineOrThrow,
 } from '../pipeline/checkpoint.js'
 
@@ -1763,9 +1764,21 @@ pipelineCmd
 
     let config
     try {
-      config = Object.keys(configOverrides).length > 0
-        ? parsePipelineConfig(configOverrides)
-        : defaultPipelineConfig()
+      const defaults = defaultPipelineConfig()
+      if (Object.keys(configOverrides).length > 0) {
+        // Deep-merge overrides onto defaults so unspecified fields keep their defaults
+        const merged = {
+          ...defaults,
+          models: { ...defaults.models, ...((configOverrides.models as object) || {}) },
+          budgets: { ...defaults.budgets, ...((configOverrides.budgets as object) || {}) },
+          ...(configOverrides.competingAgents !== undefined
+            ? { competingAgents: configOverrides.competingAgents }
+            : {}),
+        }
+        config = parsePipelineConfig(merged)
+      } else {
+        config = defaults
+      }
     } catch (err) {
       console.error('Error parsing pipeline config:', (err as Error).message)
       process.exit(1)
@@ -2022,6 +2035,40 @@ pipelineCmd
     }
   })
 
+// orcha pipeline recover <id>
+pipelineCmd
+  .command('recover <id>')
+  .description('Recover a pipeline stuck in error state')
+  .option('--continue', 'Continue executing the recovered stage')
+  .action(async (id: string, options: { continue?: boolean }) => {
+    try {
+      let run = await loadPipelineOrThrow(id)
+
+      if (run.state !== 'error') {
+        console.error(`Pipeline ${run.id} is in '${run.state}' state, not 'error'. Nothing to recover.`)
+        process.exit(1)
+      }
+
+      console.log(`Recovering pipeline ${run.id} from error state...`)
+      if (run.error) {
+        console.log(`  Previous error: ${run.error}`)
+      }
+
+      run = await recoverPipeline(run)
+      console.log(`  Recovered to state: ${run.state}`)
+
+      if (options.continue) {
+        run = await continuePipeline(run)
+      } else {
+        console.log(`\nPipeline recovered to '${run.state}'. Re-run with --continue to auto-execute:`)
+        console.log(`  orcha pipeline recover ${run.id} --continue`)
+      }
+    } catch (err) {
+      console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
 /**
  * Continue executing a pipeline from its current state.
  * Drives through dev → gate → fix-loop cycles automatically,
@@ -2030,6 +2077,27 @@ pipelineCmd
 async function continuePipeline(run: import('../pipeline/index.js').PipelineRun): Promise<import('../pipeline/index.js').PipelineRun> {
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    if (run.state === 'created') {
+      console.log(`\nExecuting architect stage...`)
+      run = await executeArchitectStage(run)
+      if (run.state === 'error') {
+        console.error(`Architect stage failed: ${run.error}`)
+        return run
+      }
+      console.log(`  Architect stage complete. State: ${run.state}`)
+      if (run.state === 'checkpoint:arch') {
+        console.log(`\nPipeline is at checkpoint:arch.`)
+        console.log(`Review the blueprint and approve with: orcha pipeline approve ${run.id}`)
+        return run
+      }
+    }
+
+    if (run.state === 'checkpoint:arch') {
+      console.log(`\nPipeline is at checkpoint:arch.`)
+      console.log(`Review the blueprint and approve with: orcha pipeline approve ${run.id}`)
+      return run
+    }
+
     if (run.state === 'dev') {
       console.log(`\nExecuting dev stage...`)
       run = await executeDevStage(run)
