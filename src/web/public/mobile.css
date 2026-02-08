@@ -144,6 +144,62 @@ html, body {
 .card-state.done { background: rgba(46, 204, 113, 0.2); color: var(--state-done); }
 .card-state.error { background: rgba(231, 76, 60, 0.2); color: var(--state-error); }
 
+/* Special key toolbar */
+#key-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#key-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+.key-btn {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  min-width: 36px;
+  text-align: center;
+}
+
+.key-btn:active {
+  background: var(--accent-purple);
+  border-color: var(--accent-purple);
+  color: #fff;
+}
+
+.key-btn.modifier {
+  color: var(--text-secondary);
+}
+
+.key-btn.modifier.active {
+  background: var(--accent-purple);
+  border-color: var(--accent-purple);
+  color: #fff;
+}
+
+.key-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border-color);
+  flex-shrink: 0;
+}
+
 /* Terminal container */
 #terminal-container {
   flex: 1;
@@ -515,6 +571,41 @@ html, body {
   font-size: 12px;
 }
 .plan-markdown strong { color: #fff; }
+.plan-markdown ol { margin: 6px 0; padding-left: 20px; }
+.plan-markdown pre {
+  background: var(--bg-tertiary);
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.plan-markdown pre code {
+  background: none;
+  padding: 0;
+  font-size: 12px;
+}
+.plan-markdown blockquote {
+  border-left: 3px solid var(--accent-purple);
+  margin: 8px 0;
+  padding: 4px 12px;
+  color: var(--text-secondary);
+}
+.plan-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.plan-markdown th, .plan-markdown td {
+  border: 1px solid var(--border-color);
+  padding: 6px 8px;
+  text-align: left;
+}
+.plan-markdown th { background: var(--bg-tertiary); font-weight: 600; }
+.plan-markdown a { color: var(--accent-purple); text-decoration: none; }
+.plan-markdown a:hover { text-decoration: underline; }
+.plan-markdown hr { border: none; border-top: 1px solid var(--border-color); margin: 12px 0; }
+.plan-markdown img { max-width: 100%; height: auto; }
 
 /* Safe area for notched phones */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
