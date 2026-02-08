@@ -198,6 +198,10 @@ export interface PipelineRun {
   /** How many fix-loop iterations have been run so far. */
   fixLoopCount: number
 
+  // --- Usage ---
+  /** Aggregated token/cost usage snapshot. */
+  usageSnapshot?: UsageSnapshot
+
   // --- Error ---
   /** Error message if state === 'error'. */
   error?: string

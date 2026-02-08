@@ -58,6 +58,7 @@ export {
   executeDevStage,
   executeGateStage,
   executeFixLoopStage,
+  executeShipStage,
 } from './pipeline-engine.js'
 
 export type { CreatePipelineRunOptions } from './pipeline-engine.js'
@@ -93,6 +94,10 @@ export type { GateOptions, GateStageResult } from './stages/gate.js'
 export { runFixLoopStage } from './stages/fix-loop.js'
 export type { FixLoopOptions } from './stages/fix-loop.js'
 
+// Stages — Ship
+export { runShipStage } from './stages/ship.js'
+export type { ShipOptions, ShipResult } from './stages/ship.js'
+
 // Checkpoint
 export {
   approveCheckpoint,
@@ -106,6 +111,17 @@ export {
   resumePipeline,
   loadPipelineOrThrow,
 } from './checkpoint.js'
+
+// Usage Tracker
+export {
+  takeSnapshot,
+  computeDelta,
+  loadUsage,
+  saveUsage,
+  recordStageUsage,
+  updateRunUsageSnapshot,
+} from './usage-tracker.js'
+export type { TokenSnapshot, StageUsage, PipelineUsage } from './usage-tracker.js'
 
 // Gate Agents
 export { runTestRunner } from './gate-agents/test-runner.js'

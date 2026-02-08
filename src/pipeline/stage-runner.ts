@@ -15,6 +15,7 @@ import { join } from 'path'
 import type { PipelineConfig } from './types.js'
 import { resolveModel, resolveBudget } from './pipeline-config.js'
 import { getPipelineDir } from './pipeline-store.js'
+import { takeSnapshot, computeDelta, recordStageUsage } from './usage-tracker.js'
 
 // ============================================================================
 // Types
@@ -85,6 +86,10 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
     budgetOverride,
   } = options
 
+  // Take usage snapshot before stage execution
+  const usageBefore = await takeSnapshot()
+  const stageStartTime = Date.now()
+
   // Resolve model and budget
   const model = modelOverride ?? resolveModel(config, stageKey)
   const budget = budgetOverride ?? resolveBudget(config, stageKey)
@@ -124,6 +129,12 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
   ].join('\n')
 
   await writeFile(logPath, logContent, 'utf-8')
+
+  // Take usage snapshot after stage execution and record delta
+  const usageAfter = await takeSnapshot()
+  const durationMs = Date.now() - stageStartTime
+  const usageDelta = computeDelta(usageBefore, usageAfter, stageKey, durationMs)
+  await recordStageUsage(pipelineId, usageDelta)
 
   return {
     ...result,

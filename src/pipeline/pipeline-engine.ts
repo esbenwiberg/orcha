@@ -32,6 +32,8 @@ import { runGateStage } from './stages/gate.js'
 import type { GateOptions } from './stages/gate.js'
 import { runFixLoopStage } from './stages/fix-loop.js'
 import type { FixLoopOptions } from './stages/fix-loop.js'
+import { runShipStage } from './stages/ship.js'
+import type { ShipOptions } from './stages/ship.js'
 
 // ============================================================================
 // Transition Table
@@ -418,6 +420,28 @@ export async function executeFixLoopStage(
   if (run.state === 'gate') {
     run = await executeGateStage(run, gateOpts)
   }
+
+  return run
+}
+
+// ============================================================================
+// Ship Stage Orchestration
+// ============================================================================
+
+/**
+ * Execute the ship stage: push branch and create PR.
+ *
+ * Expects the pipeline to be in 'ship' state (after checkpoint:ship approval).
+ * Returns the updated PipelineRun (which will be in 'completed' on success,
+ * or 'error' on failure).
+ */
+export async function executeShipStage(
+  run: PipelineRun,
+  opts?: ShipOptions,
+): Promise<PipelineRun> {
+  // The pipeline should already be in 'ship' state (set by checkpoint approval).
+  // Run the ship stage (handles completed transition internally)
+  run = await runShipStage(run, opts)
 
   return run
 }

@@ -52,6 +52,7 @@ import {
   executeDevStage,
   executeGateStage,
   executeFixLoopStage,
+  executeShipStage,
   getPipelineDir,
 } from '../pipeline/index.js'
 import { parseAcceptanceCriteria } from '../pipeline/prompt-builder.js'
@@ -1912,8 +1913,23 @@ pipelineCmd
         console.log(`  orcha pipeline approve ${run.id} --continue`)
         console.log(`  (or manually: the pipeline is now in 'dev' state)`)
       } else if (run.state === 'ship') {
-        console.log(`\nPipeline approved for shipping.`)
-        console.log(`Ship stage is not yet implemented (M7).`)
+        console.log(`\nExecuting ship stage...`)
+        run = await executeShipStage(run)
+        if (run.state === 'completed') {
+          console.log(`  Pipeline completed successfully!`)
+          // Show PR info if available
+          const { readFile } = await import('fs/promises')
+          const { join } = await import('path')
+          try {
+            const prJson = await readFile(join(getPipelineDir(run.id), 'ship', 'pr.json'), 'utf-8')
+            const pr = JSON.parse(prJson)
+            if (pr.url) {
+              console.log(`  PR: ${pr.url}`)
+            }
+          } catch { /* no PR info available */ }
+        } else if (run.state === 'error') {
+          console.error(`  Ship stage failed: ${run.error}`)
+        }
       }
     } catch (err) {
       console.error('Error:', (err as Error).message)
@@ -2041,6 +2057,20 @@ async function continuePipeline(run: import('../pipeline/index.js').PipelineRun)
       console.log(`\nGate passed! Pipeline is at checkpoint:ship.`)
       console.log(`Review the changes and approve with: orcha pipeline approve ${run.id}`)
       return run
+    }
+
+    if (run.state === 'ship') {
+      console.log(`\nExecuting ship stage...`)
+      run = await executeShipStage(run)
+      if (run.state === 'error') {
+        console.error(`Ship stage failed: ${run.error}`)
+        return run
+      }
+      console.log(`  Ship stage complete. State: ${run.state}`)
+      if (run.state === 'completed') {
+        console.log(`\nPipeline completed successfully!`)
+        return run
+      }
     }
 
     // Any other terminal or checkpoint state: stop
