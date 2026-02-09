@@ -14,8 +14,9 @@
  *   gate           -> fix-loop | checkpoint:ship
  *   fix-loop       -> gate | escalated
  *   escalated      -> fix-loop             (via user retry with more loops)
- *   checkpoint:ship -> ship | cancelled
+ *   checkpoint:ship -> ship | cancelled | dev  (approve / reject / feedback)
  *   ship           -> completed
+ *   completed      -> dev                     (post-ship review points)
  *
  *   Any ACTIVE state -> paused             (via orcha stop)
  *   paused          -> (previous active)   (via resume)
@@ -55,8 +56,9 @@ const TRANSITION_TABLE: ReadonlyMap<PipelineState, ReadonlySet<PipelineState>> =
   ['gate', new Set<PipelineState>(['fix-loop', 'checkpoint:ship'])],
   ['fix-loop', new Set<PipelineState>(['gate', 'escalated'])],
   ['escalated', new Set<PipelineState>(['fix-loop'])],
-  ['checkpoint:ship', new Set<PipelineState>(['ship', 'cancelled'])],
+  ['checkpoint:ship', new Set<PipelineState>(['ship', 'cancelled', 'dev'])],
   ['ship', new Set<PipelineState>(['completed'])],
+  ['completed', new Set<PipelineState>(['dev'])],
 ])
 
 // ============================================================================

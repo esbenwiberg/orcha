@@ -118,6 +118,8 @@ export {
   feedbackArchitectCheckpoint,
   approveShipCheckpoint,
   rejectShipCheckpoint,
+  feedbackShipCheckpoint,
+  submitReviewPoints,
   pausePipeline,
   resumePipeline,
   recoverPipeline,

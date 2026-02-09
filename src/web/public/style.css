@@ -2865,6 +2865,36 @@ body {
   color: var(--text-muted);
 }
 
+/* Review Points section (completed pipelines) */
+.review-points-section {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background: var(--bg-secondary);
+}
+
+.review-points-desc {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin: 0 0 10px 0;
+}
+
+.review-points-textarea {
+  min-height: 100px;
+  margin-bottom: 10px;
+}
+
+.review-points-submit {
+  display: inline-block;
+}
+
+.review-points-rounds {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-top: 8px;
+}
+
 /* ========================================================================
    Pipeline Two-Column Layout
    ======================================================================== */

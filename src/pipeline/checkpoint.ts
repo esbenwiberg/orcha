@@ -9,7 +9,7 @@
  */
 
 import type { PipelineRun } from './types.js'
-import { ACTIVE_STATES } from './types.js'
+import { ACTIVE_STATES, SOFT_TERMINAL_STATES } from './types.js'
 import { transition, executeArchitectStage, getRecoveryTarget, isValidTransition, transitionToError } from './pipeline-engine.js'
 import { loadPipelineRun, savePipelineRun } from './pipeline-store.js'
 import { pipelineEvents } from './events.js'
@@ -147,6 +147,78 @@ export async function rejectShipCheckpoint(
     title: 'Ship checkpoint rejected',
   }).catch(() => { /* best-effort */ })
   return await transition(run, 'cancelled')
+}
+
+/**
+ * Provide feedback on the ship checkpoint and re-run dev → gate → checkpoint:ship.
+ *
+ * Expects pipeline in 'checkpoint:ship' state.
+ * Transitions checkpoint:ship → dev with reviewer feedback injected as context.
+ * Resets fixLoopCount and increments reviewRounds.
+ */
+export async function feedbackShipCheckpoint(
+  run: PipelineRun,
+  feedback: string,
+): Promise<PipelineRun> {
+  if (run.state !== 'checkpoint:ship') {
+    throw new Error(`Cannot give ship feedback: pipeline is in '${run.state}', expected 'checkpoint:ship'`)
+  }
+
+  await appendProgress(run.id, {
+    type: 'checkpoint',
+    stage: 'checkpoint:ship',
+    title: 'Ship review feedback — re-running dev',
+    detail: feedback,
+  }).catch(() => { /* best-effort */ })
+
+  // Reset fix loop count and increment review rounds
+  const updated: PipelineRun = {
+    ...run,
+    fixLoopCount: 0,
+    reviewRounds: (run.reviewRounds ?? 0) + 1,
+    userInstructions: feedback,
+    updatedAt: new Date().toISOString(),
+  }
+  await savePipelineRun(updated)
+
+  // Transition checkpoint:ship → dev
+  return await transition(updated, 'dev')
+}
+
+/**
+ * Submit post-ship review points to re-open a completed pipeline.
+ *
+ * Expects pipeline in 'completed' state.
+ * Transitions completed → dev with review comments injected as context.
+ * Resets fixLoopCount and increments reviewRounds.
+ */
+export async function submitReviewPoints(
+  run: PipelineRun,
+  reviewPoints: string,
+): Promise<PipelineRun> {
+  if (run.state !== 'completed') {
+    throw new Error(`Cannot submit review points: pipeline is in '${run.state}', expected 'completed'`)
+  }
+
+  await appendProgress(run.id, {
+    type: 'checkpoint',
+    stage: 'completed',
+    title: 'PR review points received — re-running dev',
+    detail: reviewPoints,
+  }).catch(() => { /* best-effort */ })
+
+  // Reset fix loop count and increment review rounds
+  const updated: PipelineRun = {
+    ...run,
+    fixLoopCount: 0,
+    reviewRounds: (run.reviewRounds ?? 0) + 1,
+    userInstructions: reviewPoints,
+    updatedAt: new Date().toISOString(),
+  }
+  await savePipelineRun(updated)
+
+  // Transition completed → dev
+  return await transition(updated, 'dev')
 }
 
 // ============================================================================

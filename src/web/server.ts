@@ -2195,6 +2195,110 @@ export class WebDashboardServer {
       }
     })
 
+    // API: Ship checkpoint feedback (request changes)
+    this.app.post('/api/pipelines/:id/ship-feedback', async (req, res) => {
+      try {
+        const { loadPipelineRun, executeDevStage, executeGateStage, executeFixLoopStage, executeShipStage } = await import('../pipeline/index.js')
+        const { feedbackShipCheckpoint } = await import('../pipeline/checkpoint.js')
+        const { feedback } = req.body as { feedback: string }
+        if (!feedback) {
+          res.status(400).json({ error: 'feedback is required' })
+          return
+        }
+        if (typeof feedback !== 'string' || feedback.length > 5000) {
+          res.status(400).json({ error: 'feedback must be a string of at most 5000 characters' })
+          return
+        }
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+        const updated = await feedbackShipCheckpoint(run, feedback.trim())
+        console.log(`[API] Pipeline ${run.id} ship feedback accepted (${run.state} -> ${updated.state})`)
+        res.status(202).json(updated)
+
+        // Auto-continue: kick off dev → gate → checkpoint:ship asynchronously
+        const continueRun = async (r: typeof updated) => {
+          let current = r
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            if (current.state === 'dev') {
+              current = await executeDevStage(current)
+            } else if (current.state === 'gate') {
+              current = await executeGateStage(current)
+            } else if (current.state === 'fix-loop') {
+              current = await executeFixLoopStage(current)
+            } else if (current.state === 'ship') {
+              current = await executeShipStage(current)
+            } else {
+              break // checkpoint, terminal, or error — stop
+            }
+          }
+        }
+        continueRun(updated).catch((err) => {
+          console.error(`[API] Pipeline ${run.id} ship-feedback auto-continue failed:`, (err as Error).message)
+        })
+      } catch (err) {
+        console.error('[API] Pipeline ship-feedback error:', err)
+        if (!res.headersSent) {
+          res.status(400).json({ error: (err as Error).message })
+        }
+      }
+    })
+
+    // API: Post-ship review points (reopen completed pipeline)
+    this.app.post('/api/pipelines/:id/review-points', async (req, res) => {
+      try {
+        const { loadPipelineRun, executeDevStage, executeGateStage, executeFixLoopStage, executeShipStage } = await import('../pipeline/index.js')
+        const { submitReviewPoints } = await import('../pipeline/checkpoint.js')
+        const { reviewPoints } = req.body as { reviewPoints: string }
+        if (!reviewPoints) {
+          res.status(400).json({ error: 'reviewPoints is required' })
+          return
+        }
+        if (typeof reviewPoints !== 'string' || reviewPoints.length > 10000) {
+          res.status(400).json({ error: 'reviewPoints must be a string of at most 10000 characters' })
+          return
+        }
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+        const updated = await submitReviewPoints(run, reviewPoints.trim())
+        console.log(`[API] Pipeline ${run.id} review points accepted (${run.state} -> ${updated.state})`)
+        res.status(202).json(updated)
+
+        // Auto-continue: kick off dev → gate → checkpoint:ship asynchronously
+        const continueRun = async (r: typeof updated) => {
+          let current = r
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            if (current.state === 'dev') {
+              current = await executeDevStage(current)
+            } else if (current.state === 'gate') {
+              current = await executeGateStage(current)
+            } else if (current.state === 'fix-loop') {
+              current = await executeFixLoopStage(current)
+            } else if (current.state === 'ship') {
+              current = await executeShipStage(current)
+            } else {
+              break // checkpoint, terminal, or error — stop
+            }
+          }
+        }
+        continueRun(updated).catch((err) => {
+          console.error(`[API] Pipeline ${run.id} review-points auto-continue failed:`, (err as Error).message)
+        })
+      } catch (err) {
+        console.error('[API] Pipeline review-points error:', err)
+        if (!res.headersSent) {
+          res.status(400).json({ error: (err as Error).message })
+        }
+      }
+    })
+
     // API: Get pipeline blueprint
     this.app.get('/api/pipelines/:id/blueprint', async (req, res) => {
       try {

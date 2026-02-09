@@ -39,12 +39,12 @@ export const ACTIVE_STATES: ReadonlySet<PipelineState> = new Set<PipelineState>(
 
 /** Terminal states -- pipeline cannot leave these. */
 export const TERMINAL_STATES: ReadonlySet<PipelineState> = new Set<PipelineState>([
-  'completed',
   'cancelled',
 ])
 
-/** Escalated is a "soft-terminal" state: the pipeline stops but the user can retry. */
+/** Soft-terminal states: pipeline stops but can be reopened (e.g. review feedback). */
 export const SOFT_TERMINAL_STATES: ReadonlySet<PipelineState> = new Set<PipelineState>([
+  'completed',
   'escalated',
 ])
 
@@ -240,6 +240,10 @@ export interface PipelineRun {
   // --- Usage ---
   /** Aggregated token/cost usage snapshot. */
   usageSnapshot?: UsageSnapshot
+
+  // --- Review rounds ---
+  /** Number of times the pipeline has been sent back for review feedback or review points. */
+  reviewRounds?: number
 
   // --- Error ---
   /** Error message if state === 'error'. */

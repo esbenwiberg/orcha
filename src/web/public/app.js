@@ -4441,6 +4441,9 @@ function renderPipelineDetail(pipelineId) {
   // Checkpoint controls (above the two-column layout)
   html += renderCheckpointControls(pipeline);
 
+  // Review points section (shown for completed pipelines)
+  html += renderReviewPointsSection(pipeline);
+
   // Gate failure details (shown when gate has failed)
   html += renderGateFailureDetails(pipeline);
 
@@ -4536,6 +4539,27 @@ function renderPipelineDetail(pipelineId) {
 
   // Fetch and render the activity timeline asynchronously
   fetchAndRenderTimeline(pipeline.id);
+}
+
+/**
+ * Render "Address Review Points" section for completed pipelines.
+ * Allows the reviewer to paste PR review comments and re-run the pipeline.
+ */
+function renderReviewPointsSection(pipeline) {
+  if (pipeline.state !== 'completed') {
+    return '';
+  }
+
+  var html = '<div class="pipeline-section review-points-section">';
+  html += '<div class="pipeline-section-title">Address Review Points</div>';
+  html += '<p class="review-points-desc">Paste PR review comments below to re-run the dev &rarr; gate &rarr; ship cycle.</p>';
+  html += '<textarea id="review-points-text" class="feedback-textarea review-points-textarea" placeholder="Paste PR review comments here..."></textarea>';
+  html += '<button class="checkpoint-btn feedback review-points-submit" onclick="pipelineReviewPoints(\'' + pipeline.id + '\')">Submit Review Points</button>';
+  if (pipeline.reviewRounds) {
+    html += '<div class="review-points-rounds">Review rounds: ' + pipeline.reviewRounds + '</div>';
+  }
+  html += '</div>';
+  return html;
 }
 
 /**
@@ -5061,6 +5085,79 @@ async function pipelineFeedback(pipelineId) {
 }
 
 /**
+ * Send ship review feedback (request changes) — re-runs dev → gate → checkpoint:ship
+ */
+async function pipelineShipFeedback(pipelineId) {
+  const textarea = document.getElementById('ship-feedback-text');
+  if (!textarea) return;
+
+  // Toggle textarea visibility
+  if (textarea.style.display === 'none') {
+    textarea.style.display = '';
+    textarea.focus();
+    return;
+  }
+
+  const feedback = textarea.value.trim();
+  if (!feedback) {
+    showToast('Please describe what changes are needed', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/ship-feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedback }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Ship feedback failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Feedback sent, re-running dev stage', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Ship feedback failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Submit PR review points for a completed pipeline — re-opens and re-runs dev → gate → ship
+ */
+async function pipelineReviewPoints(pipelineId) {
+  const textarea = document.getElementById('review-points-text');
+  if (!textarea) return;
+
+  const reviewPoints = textarea.value.trim();
+  if (!reviewPoints) {
+    showToast('Please paste review comments first', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/review-points', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewPoints }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Review points failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Review points submitted, re-running pipeline', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Review points failed: ' + err.message, 'error');
+  }
+}
+
+/**
  * Stop a running pipeline
  */
 async function pipelineStop(pipelineId) {
@@ -5506,7 +5603,9 @@ function renderShipReviewPanel(pipeline, diffData, gateData, blueprint) {
   html += '<div class="ship-review-actions">';
   html += '<button class="checkpoint-btn approve" onclick="pipelineApprove(\'' + pipeline.id + '\')">Approve & Ship</button>';
   html += '<button class="checkpoint-btn reject" onclick="pipelineReject(\'' + pipeline.id + '\')">Reject</button>';
+  html += '<button class="checkpoint-btn feedback" onclick="pipelineShipFeedback(\'' + pipeline.id + '\')">Request Changes</button>';
   html += '</div>';
+  html += '<textarea id="ship-feedback-text" class="feedback-textarea" placeholder="Describe what changes are needed..." style="display:none;"></textarea>';
 
   // Summary card
   html += renderShipSummaryCard(pipeline, diffData, blueprint);
@@ -5527,6 +5626,7 @@ function renderShipReviewPanel(pipeline, diffData, gateData, blueprint) {
   html += '<div class="ship-review-actions ship-review-actions-bottom">';
   html += '<button class="checkpoint-btn approve" onclick="pipelineApprove(\'' + pipeline.id + '\')">Approve & Ship</button>';
   html += '<button class="checkpoint-btn reject" onclick="pipelineReject(\'' + pipeline.id + '\')">Reject</button>';
+  html += '<button class="checkpoint-btn feedback" onclick="pipelineShipFeedback(\'' + pipeline.id + '\')">Request Changes</button>';
   html += '</div>';
 
   html += '</div>'; // end pipeline-section
