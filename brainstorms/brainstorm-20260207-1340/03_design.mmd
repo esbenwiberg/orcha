@@ -1,0 +1,84 @@
+graph TB
+    subgraph Mobile["Mobile Device (Phone Browser / PWA)"]
+        direction TB
+        PWA["PWA Shell<br/>mobile.html + manifest.json"]
+        SW["Service Worker<br/>sw.js - offline caching"]
+        MobileJS["mobile.js<br/>Session cards, swipe nav,<br/>state diff, notifications"]
+        NotifAPI["Browser Notifications API<br/>Local state-change alerts"]
+        XtermOpt["xterm.js (optional)<br/>Full terminal mode<br/>on-demand only"]
+
+        PWA --> SW
+        PWA --> MobileJS
+        MobileJS --> NotifAPI
+        MobileJS -.->|"opt-in"| XtermOpt
+    end
+
+    subgraph Network["Network Layer"]
+        SSHTunnel["SSH Tunnel<br/>localhost:3847 on mobile<br/>(via Termius / JuiceSSH)"]
+    end
+
+    subgraph Server["Orcha Server (Azure VM)"]
+        direction TB
+        Express["Express Server<br/>:3847 localhost-only"]
+
+        subgraph StaticFiles["Static Files (src/web/public/)"]
+            DesktopFiles["index.html / app.js / style.css<br/>(existing desktop dashboard)"]
+            MobileFiles["mobile.html / mobile.js / mobile.css<br/>manifest.json / sw.js<br/>(new mobile PWA)"]
+        end
+
+        subgraph ExistingAPI["Existing REST API (unchanged)"]
+            StatusAPI["GET /api/status<br/>Sessions + summary"]
+            SessionsAPI["GET /api/sessions<br/>Session list"]
+            InstancesAPI["GET /api/instances<br/>Instance list"]
+            HealthAPI["GET /api/health<br/>VM CPU/memory"]
+            CreateAPI["POST /api/sessions<br/>Create new session"]
+            UsageAPI["GET /api/usage<br/>Claude usage stats"]
+        end
+
+        subgraph NewAPI["New API Endpoint"]
+            CaptureAPI["GET /api/sessions/:iid/:sid/capture<br/>tmux capture-pane output<br/>(last 50 lines, plain text)"]
+        end
+
+        subgraph ExistingWS["Existing WebSocket (unchanged)"]
+            WSPTY["WS PTY Connection<br/>Full terminal I/O"]
+        end
+
+        Express --> StaticFiles
+        Express --> ExistingAPI
+        Express --> NewAPI
+        Express --> ExistingWS
+    end
+
+    subgraph Backend["Backend (tmux + sessions)"]
+        TmuxSessions["tmux sessions<br/>(one per orcha session)"]
+        StatusFiles["Status files<br/>(JSON on disk)"]
+        StatusMonitor["StatusMonitor<br/>(file watcher)"]
+
+        TmuxSessions --> StatusFiles
+        StatusFiles --> StatusMonitor
+    end
+
+    %% Mobile data flow
+    MobileJS -->|"poll every 10s"| StatusAPI
+    MobileJS -->|"poll every 5s<br/>(active session)"| CaptureAPI
+    MobileJS -->|"session creation"| CreateAPI
+    MobileJS -->|"one-time fetch"| InstancesAPI
+    XtermOpt -.->|"WebSocket"| WSPTY
+
+    %% Server to backend
+    StatusAPI --> StatusMonitor
+    CaptureAPI -->|"tmux capture-pane -p"| TmuxSessions
+    WSPTY -->|"tmux attach"| TmuxSessions
+
+    %% Network
+    Mobile <-->|"localhost:3847"| SSHTunnel
+    SSHTunnel <-->|"port forward"| Server
+
+    %% Styling
+    classDef new fill:#2d5a1e,stroke:#4a9,stroke-width:2px,color:#fff
+    classDef existing fill:#1a3a5c,stroke:#369,stroke-width:1px,color:#fff
+    classDef mobile fill:#5a2d6e,stroke:#96c,stroke-width:2px,color:#fff
+
+    class MobileFiles,CaptureAPI,NewAPI new
+    class DesktopFiles,StatusAPI,SessionsAPI,InstancesAPI,HealthAPI,CreateAPI,UsageAPI,ExistingAPI,ExistingWS,WSPTY existing
+    class PWA,SW,MobileJS,NotifAPI,XtermOpt mobile

@@ -1,0 +1,84 @@
+graph TB
+    subgraph Internet["Public Internet"]
+        direction TB
+        BLOCKED["Port 3847 BLOCKED<br/>(Azure NSG)"]
+    end
+
+    subgraph Tailnet["Tailscale Private Network (100.x.y.z)"]
+        direction LR
+
+        subgraph Phone["Mobile Device"]
+            TS_PHONE["Tailscale Client<br/>100.64.0.2"]
+            BROWSER["Mobile Browser<br/>(Safari / Chrome)"]
+        end
+
+        subgraph AzureVM["Azure VM"]
+            TS_VM["Tailscale Client<br/>100.64.0.1"]
+            TS_SERVE["tailscale serve<br/>HTTPS :443 -> localhost:3847"]
+            ORCHA["Orcha Server<br/>localhost:3847"]
+
+            subgraph OrchaApp["Orcha Application"]
+                EXPRESS["Express HTTP<br/>/api/sessions<br/>/api/status<br/>/api/health"]
+                WSS["WebSocket Server<br/>Terminal I/O"]
+                STATIC["Static Files<br/>index.html, app.js, style.css"]
+            end
+
+            subgraph Backend["Backend Services"]
+                TMUX["tmux Sessions"]
+                PTY["node-pty<br/>PTY Processes"]
+                STATUS["Status Monitor<br/>File Watcher"]
+            end
+        end
+
+        subgraph Laptop["Laptop (existing workflow)"]
+            SSH["SSH Tunnel<br/>localhost:3847 -> VM:3847"]
+            DESKTOP_BROWSER["Desktop Browser"]
+        end
+    end
+
+    %% Connections
+    BROWSER -->|"HTTPS + WSS<br/>via Tailscale tunnel"| TS_PHONE
+    TS_PHONE <-->|"WireGuard Encrypted<br/>UDP 41641"| TS_VM
+    TS_VM --> TS_SERVE
+    TS_SERVE -->|"Proxy to localhost"| ORCHA
+    ORCHA --> EXPRESS
+    ORCHA --> WSS
+    ORCHA --> STATIC
+    WSS <--> PTY
+    PTY <--> TMUX
+    EXPRESS --> STATUS
+
+    SSH -->|"Unchanged<br/>existing workflow"| ORCHA
+    DESKTOP_BROWSER --> SSH
+
+    BLOCKED -.->|"DENIED"| ORCHA
+
+    %% Mobile View Flow
+    subgraph MobileView["Mobile View (app.js)"]
+        direction TB
+        DETECT["Detect viewport < 768px<br/>or ?view=mobile"]
+        LIST["Session List<br/>(full-screen cards)"]
+        SINGLE["Single Session View<br/>(fullscreen terminal)"]
+        CREATE["Create Session<br/>(mobile form)"]
+
+        DETECT --> LIST
+        LIST -->|"Tap session"| SINGLE
+        SINGLE -->|"Back button"| LIST
+        LIST -->|"+ New"| CREATE
+        CREATE -->|"Created"| SINGLE
+    end
+
+    BROWSER --> DETECT
+
+    %% Styling
+    classDef vpn fill:#1a472a,stroke:#2ecc71,color:#fff
+    classDef blocked fill:#5a1a1a,stroke:#e74c3c,color:#fff
+    classDef app fill:#1a1a3a,stroke:#9b59b6,color:#fff
+    classDef mobile fill:#1a2a3a,stroke:#3498db,color:#fff
+    classDef existing fill:#2a2a1a,stroke:#f1c40f,color:#fff
+
+    class TS_PHONE,TS_VM,TS_SERVE vpn
+    class BLOCKED blocked
+    class EXPRESS,WSS,STATIC,ORCHA app
+    class DETECT,LIST,SINGLE,CREATE,BROWSER mobile
+    class SSH,DESKTOP_BROWSER existing

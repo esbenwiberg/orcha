@@ -336,6 +336,10 @@ const RECOVERY_RE_ENTRY: ReadonlyMap<PipelineState, PipelineState> = new Map([
  * Inspects stageHistory to find the last stage that was running when the
  * error occurred. Returns the correct re-entry state so the stage can be
  * re-executed from scratch by continuePipeline().
+ *
+ * For dev stage errors with milestone tracking:
+ * - If currentMilestoneIndex is set, recovery will resume from that milestone
+ * - The dev stage will check currentMilestoneIndex and skip completed milestones
  */
 export function getRecoveryTarget(run: PipelineRun): PipelineState | null {
   if (run.state !== 'error') {
@@ -352,6 +356,57 @@ export function getRecoveryTarget(run: PipelineRun): PipelineState | null {
 
   // Fallback: if no history, start from scratch
   return 'created'
+}
+
+/**
+ * Get the current milestone index for a pipeline.
+ * Returns undefined if the pipeline doesn't have milestone tracking enabled.
+ */
+export function getCurrentMilestoneIndex(run: PipelineRun): number | undefined {
+  return run.currentMilestoneIndex
+}
+
+/**
+ * Set the current milestone index for recovery purposes.
+ * This allows resuming from a specific milestone after an error.
+ *
+ * @param run - The pipeline run to update
+ * @param milestoneIndex - The milestone index to resume from (0-based)
+ */
+export async function setCurrentMilestoneIndex(
+  run: PipelineRun,
+  milestoneIndex: number,
+): Promise<PipelineRun> {
+  const updated: PipelineRun = {
+    ...run,
+    currentMilestoneIndex: milestoneIndex,
+    updatedAt: new Date().toISOString(),
+  }
+  await savePipelineRun(updated)
+  return updated
+}
+
+/**
+ * Get detailed recovery info for a pipeline in error state.
+ * Includes milestone information if applicable.
+ */
+export function getRecoveryInfo(run: PipelineRun): {
+  target: PipelineState | null
+  milestoneIndex?: number
+  milestoneDescription?: string
+} {
+  const target = getRecoveryTarget(run)
+
+  // If recovering dev stage with milestone tracking, include milestone info
+  if (target === 'checkpoint:arch' && run.currentMilestoneIndex !== undefined) {
+    return {
+      target,
+      milestoneIndex: run.currentMilestoneIndex,
+      milestoneDescription: `Will resume from milestone ${run.currentMilestoneIndex + 1}`,
+    }
+  }
+
+  return { target }
 }
 
 /**

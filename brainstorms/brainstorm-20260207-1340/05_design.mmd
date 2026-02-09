@@ -1,0 +1,79 @@
+graph TB
+    subgraph Phone["Mobile Phone"]
+        TApp["Telegram App"]
+    end
+
+    subgraph TelegramCloud["Telegram Cloud (api.telegram.org)"]
+        BotAPI["Bot API<br/>getUpdates / sendMessage"]
+    end
+
+    subgraph AzureVM["Azure VM (no ports exposed)"]
+        subgraph OrchaBot["Telegram Bot Process<br/>(src/telegram/bot.ts)"]
+            LP["Long Polling Loop<br/>Outbound HTTPS only"]
+            CmdHandler["Command Handlers<br/>/status /sessions /create<br/>/close /logs /health"]
+            StatePoller["State Change Poller<br/>Every 10-15s"]
+            StateCache["Cached Session States<br/>Map&lt;sessionId, state&gt;"]
+            Notifier["Notification Sender<br/>done / error / waiting"]
+            AuthCheck["Chat ID Whitelist<br/>~/.orcha/telegram.json"]
+        end
+
+        subgraph OrchaWeb["Orcha Web Server<br/>(localhost:3847)"]
+            REST["REST API<br/>/api/status<br/>/api/sessions<br/>/api/health"]
+            WS["WebSocket Server<br/>Terminal I/O"]
+        end
+
+        subgraph OrchaCore["Orcha Core"]
+            SM["Session Manager"]
+            StatusMon["Status Monitor<br/>File Watcher"]
+            StatusFiles["Status Files<br/>~/.orcha/*/status/*.json"]
+            Tmux["tmux Sessions<br/>capture-pane for /logs"]
+        end
+
+        Config["~/.orcha/telegram.json<br/>botToken, allowedChatIds,<br/>pollInterval, notifyStates"]
+    end
+
+    %% Mobile to Telegram Cloud
+    TApp -- "Send commands<br/>Receive notifications" --> BotAPI
+
+    %% Bot to Telegram Cloud (outbound only)
+    LP -- "HTTPS outbound<br/>getUpdates" --> BotAPI
+    Notifier -- "HTTPS outbound<br/>sendMessage" --> BotAPI
+
+    %% Bot internal flow
+    LP --> AuthCheck
+    AuthCheck -- "Allowed" --> CmdHandler
+    AuthCheck -. "Denied: ignore" .-> LP
+
+    CmdHandler -- "HTTP GET/POST<br/>localhost:3847" --> REST
+    StatePoller -- "GET /api/status<br/>every 10-15s" --> REST
+    StatePoller --> StateCache
+    StateCache -- "State changed?" --> Notifier
+
+    %% /logs special path
+    CmdHandler -- "tmux capture-pane<br/>(for /logs command)" --> Tmux
+
+    %% Config
+    Config -.-> AuthCheck
+    Config -.-> LP
+    Config -.-> StatePoller
+
+    %% Orcha internals
+    REST --> SM
+    SM --> StatusMon
+    StatusMon --> StatusFiles
+    SM --> Tmux
+
+    %% Styling
+    classDef phone fill:#4FC3F7,stroke:#0288D1,color:#000
+    classDef telegram fill:#26A5E4,stroke:#1976D2,color:#fff
+    classDef bot fill:#81C784,stroke:#388E3C,color:#000
+    classDef orcha fill:#FFB74D,stroke:#F57C00,color:#000
+    classDef core fill:#CE93D8,stroke:#7B1FA2,color:#000
+    classDef config fill:#FFF59D,stroke:#FBC02D,color:#000
+
+    class TApp phone
+    class BotAPI telegram
+    class LP,CmdHandler,StatePoller,StateCache,Notifier,AuthCheck bot
+    class REST,WS orcha
+    class SM,StatusMon,StatusFiles,Tmux core
+    class Config config

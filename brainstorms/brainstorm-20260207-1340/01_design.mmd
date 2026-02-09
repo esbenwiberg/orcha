@@ -1,0 +1,56 @@
+graph TB
+    subgraph Phone["Mobile Phone"]
+        SSHApp["SSH App<br/>(Termius / Blink Shell)"]
+        Browser["Mobile Browser<br/>localhost:3847/mobile"]
+    end
+
+    subgraph SSHTunnel["SSH Tunnel (Encrypted)"]
+        direction LR
+        LocalPort["localhost:3847<br/>(phone)"]
+        RemotePort["localhost:3847<br/>(Azure VM)"]
+        LocalPort -->|"Port Forward"| RemotePort
+    end
+
+    subgraph AzureVM["Azure VM"]
+        subgraph OrchaServer["Orcha Express Server :3847"]
+            StaticFiles["Static File Serving"]
+            MobileHTML["mobile.html<br/>(new, ~400 LOC)"]
+            DesktopHTML["index.html + app.js<br/>(existing desktop UI)"]
+            API["REST API<br/>/api/sessions<br/>/api/instances<br/>/api/status<br/>POST /api/sessions"]
+            WSServer["WebSocket Server<br/>(terminal I/O)"]
+        end
+        TmuxSessions["tmux Sessions<br/>(AI agent processes)"]
+    end
+
+    SSHApp -->|"ssh -L 3847:localhost:3847"| SSHTunnel
+    Browser -->|"HTTP GET /mobile"| LocalPort
+
+    StaticFiles --> MobileHTML
+    StaticFiles --> DesktopHTML
+
+    MobileHTML -->|"fetch()"| API
+    MobileHTML -->|"new WebSocket()"| WSServer
+    DesktopHTML -->|"fetch()"| API
+    DesktopHTML -->|"new WebSocket()"| WSServer
+
+    API -->|"list/create sessions"| TmuxSessions
+    WSServer -->|"pty attach"| TmuxSessions
+
+    subgraph MobileUI["Mobile UI Flow"]
+        direction LR
+        SessionList["Session List<br/>(scrollable cards)"]
+        SessionDetail["Session Detail<br/>(fullscreen xterm.js)"]
+        CreateSession["Create Session<br/>(branch input form)"]
+        SessionList -->|"tap session"| SessionDetail
+        SessionDetail -->|"back button"| SessionList
+        SessionList -->|"tap +"| CreateSession
+        CreateSession -->|"submit"| SessionList
+    end
+
+    style Phone fill:#1a1a2e,stroke:#9b59b6,color:#e0e0e0
+    style SSHTunnel fill:#0d2137,stroke:#3498db,color:#e0e0e0
+    style AzureVM fill:#1a1a1a,stroke:#333,color:#e0e0e0
+    style OrchaServer fill:#252525,stroke:#9b59b6,color:#e0e0e0
+    style MobileUI fill:#1a2e1a,stroke:#2ecc71,color:#e0e0e0
+    style MobileHTML fill:#3d1f56,stroke:#9b59b6,color:#e0e0e0
+    style DesktopHTML fill:#252525,stroke:#555,color:#888

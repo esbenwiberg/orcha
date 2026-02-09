@@ -1,0 +1,141 @@
+graph TB
+    subgraph Internet["Internet"]
+        direction TB
+        Phone["Mobile Phone<br/>(any browser)"]
+        Laptop["Laptop<br/>(SSH client + browser)"]
+    end
+
+    subgraph AzureAD["Microsoft Entra ID (Azure AD)"]
+        direction TB
+        LoginPage["login.microsoftonline.com<br/>OIDC Authorization Endpoint"]
+        TokenEndpoint["Token Endpoint<br/>Issues ID token + access token"]
+        EnterpriseApp["Enterprise Application<br/>Assignment required = Yes<br/>Only assigned user can auth"]
+
+        LoginPage --> TokenEndpoint
+        TokenEndpoint --> EnterpriseApp
+    end
+
+    subgraph AzureVM["Azure VM"]
+        direction TB
+
+        subgraph NSG["NSG Rules"]
+            Port443["Inbound TCP 443<br/>(HTTPS + WSS)"]
+            Port80["Inbound TCP 80<br/>(Let's Encrypt challenge)"]
+            Port22["Inbound TCP 22<br/>(SSH - existing)"]
+        end
+
+        subgraph CaddyLayer["Caddy Reverse Proxy"]
+            CaddyTLS["Caddy :443<br/>Automatic TLS<br/>(Let's Encrypt)"]
+            CaddyHTTP["Caddy :80<br/>HTTP-01 challenge<br/>+ redirect to HTTPS"]
+            LetsEncrypt["Let's Encrypt<br/>Auto-renewal"]
+
+            CaddyHTTP --> CaddyTLS
+            LetsEncrypt -.->|"auto-renew"| CaddyTLS
+        end
+
+        subgraph ExpressServer["Express Server (localhost:3847)"]
+            direction TB
+
+            subgraph AuthLayer["OIDC Auth Layer"]
+                OIDCMiddleware["express-openid-connect<br/>auth() middleware"]
+                SessionCookie["Encrypted Cookie<br/>(appSession)<br/>httpOnly, secure, sameSite"]
+                RequiresAuth["requiresAuth()<br/>on /api/* and /mobile*"]
+                WSAuth["WebSocket Upgrade<br/>Cookie validation<br/>(noServer mode)"]
+
+                OIDCMiddleware --> SessionCookie
+                OIDCMiddleware --> RequiresAuth
+                SessionCookie --> WSAuth
+            end
+
+            subgraph StaticFiles["Static Files"]
+                DesktopUI["index.html + app.js + style.css<br/>(existing desktop dashboard)"]
+                MobileUI["mobile.html + mobile.js + mobile.css<br/>(new mobile PWA)"]
+                PWAFiles["manifest.json + sw.js<br/>(PWA support)"]
+            end
+
+            subgraph API["REST API"]
+                ExistingAPI["Existing Endpoints<br/>GET /api/sessions<br/>GET /api/status<br/>GET /api/health<br/>POST /api/sessions<br/>DELETE /api/sessions/:iid/:sid<br/>GET /api/instances<br/>POST /api/git/*"]
+                CaptureAPI["NEW: GET /api/sessions/:iid/:sid/capture<br/>tmux capture-pane -p -S -50<br/>(lightweight terminal snapshot)"]
+                AuthRoutes["Auth Routes<br/>/auth/login<br/>/auth/callback<br/>/auth/logout"]
+            end
+
+            subgraph WSServer["WebSocket Server"]
+                WSPTY["WS PTY Connections<br/>Full terminal I/O<br/>(tmux attach)"]
+            end
+
+            AuthLayer --> StaticFiles
+            AuthLayer --> API
+            AuthLayer --> WSServer
+        end
+
+        subgraph Backend["tmux + Sessions"]
+            TmuxSessions["tmux sessions<br/>(orcha-ui-*)"]
+            StatusFiles["Status JSON files<br/>(~/.orcha/status/)"]
+            StatusMonitor["StatusMonitor<br/>(file watcher)"]
+            NodePTY["node-pty<br/>(PTY spawn)"]
+
+            TmuxSessions --> StatusFiles
+            StatusFiles --> StatusMonitor
+            NodePTY --> TmuxSessions
+        end
+
+        CaddyTLS -->|"proxy to"| ExpressServer
+        WSPTY --> NodePTY
+        CaptureAPI -->|"tmux capture-pane"| TmuxSessions
+        ExistingAPI --> StatusMonitor
+    end
+
+    subgraph MobilePWA["Mobile PWA (on phone)"]
+        direction TB
+        PWAShell["PWA Shell<br/>(standalone mode, dark theme)"]
+        SessionCards["Session Card View<br/>One session at a time<br/>Swipe left/right to navigate"]
+        CapturePolling["Capture Polling<br/>Every 5s for active session<br/>Monospace scrollable output"]
+        StatusPolling["Status Polling<br/>Every 10s for all sessions<br/>State change diffing"]
+        Notifications["Browser Notifications<br/>working->waiting<br/>*->done, *->error"]
+        BottomNav["Bottom Navigation<br/>Colored dots per session<br/>Hamburger menu for list"]
+        CreateSheet["Create Session<br/>Bottom sheet form<br/>Instance + branch + mode"]
+        OptTerminal["Optional Full Terminal<br/>xterm.js on demand<br/>Larger font, touch scroll"]
+        ServiceWorker["Service Worker<br/>Offline shell caching<br/>Network-first for API"]
+
+        PWAShell --> SessionCards
+        PWAShell --> ServiceWorker
+        SessionCards --> CapturePolling
+        SessionCards --> BottomNav
+        StatusPolling --> Notifications
+        PWAShell --> CreateSheet
+        SessionCards -.->|"opt-in"| OptTerminal
+    end
+
+    %% Phone connections
+    Phone -->|"HTTPS :443"| Port443
+    Port443 --> CaddyTLS
+
+    %% OIDC flow
+    Phone -.->|"1. Visit site"| CaddyTLS
+    CaddyTLS -.->|"2. 302 redirect"| LoginPage
+    LoginPage -.->|"3. User authenticates"| TokenEndpoint
+    TokenEndpoint -.->|"4. auth code callback"| AuthRoutes
+    AuthRoutes -.->|"5. Set session cookie"| SessionCookie
+
+    %% Mobile data flow
+    CapturePolling -->|"GET /api/.../capture"| CaptureAPI
+    StatusPolling -->|"GET /api/status"| ExistingAPI
+    CreateSheet -->|"POST /api/sessions"| ExistingAPI
+    OptTerminal -.->|"WSS (upgrade)"| WSPTY
+
+    %% Laptop SSH tunnel (existing, unchanged)
+    Laptop -->|"SSH tunnel<br/>localhost:3847"| Port22
+    Port22 -.->|"direct to Express<br/>(no auth needed)"| ExpressServer
+
+    %% Styling
+    classDef newComponent fill:#2d5a1e,stroke:#4a9,stroke-width:2px,color:#fff
+    classDef existingComponent fill:#1a3a5c,stroke:#369,stroke-width:1px,color:#fff
+    classDef mobileComponent fill:#5a2d6e,stroke:#96c,stroke-width:2px,color:#fff
+    classDef authComponent fill:#8b4513,stroke:#d2691e,stroke-width:2px,color:#fff
+    classDef infraComponent fill:#4a4a4a,stroke:#888,stroke-width:1px,color:#fff
+
+    class MobileUI,PWAFiles,CaptureAPI newComponent
+    class DesktopUI,ExistingAPI,WSPTY,TmuxSessions,StatusFiles,StatusMonitor,NodePTY existingComponent
+    class PWAShell,SessionCards,CapturePolling,StatusPolling,Notifications,BottomNav,CreateSheet,OptTerminal,ServiceWorker mobileComponent
+    class OIDCMiddleware,SessionCookie,RequiresAuth,WSAuth,AuthRoutes,LoginPage,TokenEndpoint,EnterpriseApp authComponent
+    class CaddyTLS,CaddyHTTP,LetsEncrypt,Port443,Port80,Port22 infraComponent

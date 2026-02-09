@@ -14,7 +14,7 @@
 
 import { writeFile } from 'fs/promises'
 import { join } from 'path'
-import type { PipelineRun, StageResult } from '../types.js'
+import type { PipelineRun, StageResult, BlueprintOutput } from '../types.js'
 import { transition, recordStageResult, transitionToError } from '../pipeline-engine.js'
 import { getPipelineDir } from '../pipeline-store.js'
 import { runStage } from '../stage-runner.js'
@@ -30,6 +30,16 @@ import { parseStructuredOutput } from '../output-parser.js'
 /**
  * JSON schema for the architect's blueprint output.
  * Used with --output-format json to get structured responses.
+ *
+ * DESIGN DECISION: Milestones execute SEQUENTIALLY, not in parallel.
+ * Rationale:
+ * 1. Milestones typically have sequential dependencies (M2 builds on M1 changes)
+ * 2. Parallel execution would require complex merge conflict resolution
+ * 3. The competing agents feature already provides parallelism for the same work unit
+ *
+ * The 'steps' field is supported for backward compatibility, but 'milestones'
+ * is the preferred field name. Each milestone is executed with a FRESH Claude
+ * session to prevent context pollution and reduce costs.
  */
 export const BLUEPRINT_SCHEMA = {
   type: 'object' as const,
@@ -62,20 +72,14 @@ export const BLUEPRINT_SCHEMA = {
         },
         required: ['description', 'details'],
       },
-      description: 'Ordered implementation steps',
+      description: 'Ordered implementation steps (alias for milestones, for backward compatibility)',
     },
   },
   required: ['approach', 'filesToTouch', 'risks', 'testStrategy', 'steps'],
 }
 
-/** TypeScript type mirroring the schema. */
-export interface BlueprintOutput {
-  approach: string
-  filesToTouch: string[]
-  risks: string[]
-  testStrategy: string
-  steps: Array<{ description: string; details: string }>
-}
+// Re-export BlueprintOutput from types.ts for backward compatibility
+export type { BlueprintOutput } from '../types.js'
 
 // ============================================================================
 // Architect Stage Runner
@@ -203,11 +207,13 @@ function parseArchitectOutput(stdout: string): BlueprintOutput | null {
 function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
   if (typeof obj !== 'object' || obj === null) return false
   const bp = obj as Record<string, unknown>
+  // Support both 'milestones' (preferred) and 'steps' (backward compat)
+  const hasMilestones = Array.isArray(bp.milestones) || Array.isArray(bp.steps)
   return (
     typeof bp.approach === 'string' &&
     Array.isArray(bp.filesToTouch) &&
     Array.isArray(bp.risks) &&
     typeof bp.testStrategy === 'string' &&
-    Array.isArray(bp.steps)
+    hasMilestones
   )
 }

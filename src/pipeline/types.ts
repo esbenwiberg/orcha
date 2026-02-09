@@ -133,6 +133,34 @@ export interface StageResult {
 // Blueprint
 // ============================================================================
 
+/**
+ * A single milestone in the blueprint.
+ *
+ * Each milestone represents a discrete unit of work that can be implemented
+ * with a fresh Claude session (clean context). This addresses context pollution
+ * and cost concerns for large blueprints.
+ *
+ * DESIGN DECISION: Milestones execute SEQUENTIALLY, not in parallel.
+ * Rationale:
+ * 1. Milestones typically have sequential dependencies (M2 builds on M1 changes)
+ * 2. Parallel execution would require complex merge conflict resolution
+ * 3. The competing agents feature already provides parallelism for the same work unit
+ *    (use --competing N to run parallel agents on each milestone)
+ */
+export interface BlueprintMilestone {
+  /** Human-readable description of what this milestone accomplishes. */
+  description: string
+  /** Detailed implementation guidance for the dev agent. */
+  details: string
+  /** Optional: subset of files this milestone touches (for context hints). */
+  filesToTouch?: string[]
+  /**
+   * Optional: milestone indices this depends on (for future parallel support).
+   * Currently unused since all milestones execute sequentially.
+   */
+  dependsOn?: number[]
+}
+
 export interface Blueprint {
   /** Markdown content of the architectural plan. */
   content: string
@@ -140,6 +168,52 @@ export interface Blueprint {
   commitSha?: string
   createdAt: string // ISO 8601
   updatedAt: string // ISO 8601
+}
+
+/**
+ * Structured blueprint output from the architect stage.
+ *
+ * Contains the implementation plan as milestones (steps).
+ * The 'milestones' field is the canonical name, but 'steps' is supported
+ * for backward compatibility with existing blueprints.
+ */
+export interface BlueprintOutput {
+  /** High-level description of the implementation approach. */
+  approach: string
+  /** Array of file paths that need to be created or modified. */
+  filesToTouch: string[]
+  /** Array of potential risks or concerns. */
+  risks: string[]
+  /** How to test the changes. */
+  testStrategy: string
+  /**
+   * Ordered implementation milestones (preferred).
+   * Each milestone is implemented with a FRESH Claude session for context isolation.
+   */
+  milestones?: BlueprintMilestone[]
+  /**
+   * Ordered implementation steps (backward compatibility alias for milestones).
+   * @deprecated Use 'milestones' instead.
+   */
+  steps?: Array<{ description: string; details: string }>
+}
+
+/**
+ * Get milestones from a blueprint, supporting both 'milestones' and 'steps' fields.
+ * Returns the milestones array, converting from steps if necessary.
+ */
+export function getBlueprintMilestones(blueprint: BlueprintOutput): BlueprintMilestone[] {
+  if (blueprint.milestones && blueprint.milestones.length > 0) {
+    return blueprint.milestones
+  }
+  // Backward compatibility: convert steps to milestones
+  if (blueprint.steps && blueprint.steps.length > 0) {
+    return blueprint.steps.map((step) => ({
+      description: step.description,
+      details: step.details,
+    }))
+  }
+  return []
 }
 
 // ============================================================================
@@ -192,6 +266,31 @@ export interface CompetingResult {
 }
 
 // ============================================================================
+// Milestone Progress Tracking
+// ============================================================================
+
+/**
+ * Tracks the completion of a single milestone in the dev stage.
+ *
+ * This allows the pipeline to:
+ * 1. Resume from a specific milestone after failure
+ * 2. Track progress through large blueprints
+ * 3. Record per-milestone commits for auditing
+ */
+export interface MilestoneProgress {
+  /** Zero-based index of the milestone. */
+  index: number
+  /** ISO 8601 timestamp when this milestone started. */
+  startedAt: string
+  /** ISO 8601 timestamp when this milestone completed (undefined if still running). */
+  completedAt?: string
+  /** Commit SHA after the milestone was completed. */
+  commitSha?: string
+  /** Error message if this milestone failed. */
+  error?: string
+}
+
+// ============================================================================
 // Pipeline Run (the main aggregate)
 // ============================================================================
 
@@ -238,6 +337,20 @@ export interface PipelineRun {
   skipChecks?: string[]
   /** User-provided instructions injected into the fix-loop prompt. */
   userInstructions?: string
+
+  // --- Milestone tracking ---
+  /**
+   * Zero-based index of the current milestone being executed.
+   * Used to track progress through multi-milestone blueprints and enable
+   * recovery from a specific milestone after failure.
+   */
+  currentMilestoneIndex?: number
+  /**
+   * History of milestone executions.
+   * Each entry records when a milestone started, completed, and its commit SHA.
+   * This allows resuming from a failed milestone without re-running earlier ones.
+   */
+  milestoneHistory?: MilestoneProgress[]
 
   // --- Usage ---
   /** Aggregated token/cost usage snapshot. */

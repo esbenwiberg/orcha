@@ -267,6 +267,21 @@ export interface BlueprintContext {
   blueprintJson: string
 }
 
+export interface MilestoneContext {
+  /** The full blueprint JSON content as a string (for reference). */
+  blueprintJson: string
+  /** Zero-based index of the current milestone. */
+  milestoneIndex: number
+  /** Total number of milestones. */
+  totalMilestones: number
+  /** The current milestone's description. */
+  milestoneDescription: string
+  /** The current milestone's implementation details. */
+  milestoneDetails: string
+  /** Optional: files this milestone touches. */
+  milestoneFilesToTouch?: string[]
+}
+
 /**
  * Build the prompt parts for the dev stage.
  *
@@ -311,6 +326,85 @@ export function buildDevPrompt(
     '# Instructions',
     'Implement the changes described in the blueprint.',
     'Work through each step in order. Create or modify the listed files.',
+    `Source branch: ${codebase.sourceBranch}`,
+  ].filter((line) => line !== '').join('\n')
+
+  return { systemPrompt, userPrompt }
+}
+
+/**
+ * Build the prompt parts for a SINGLE MILESTONE in the dev stage.
+ *
+ * This is used when executing milestones sequentially with fresh Claude sessions.
+ * Each milestone gets its own context, with the full blueprint provided for
+ * reference but instructions focused on the current milestone only.
+ *
+ * Benefits of milestone-based execution:
+ * - Fresh context prevents pollution from previous milestone conversations
+ * - Lower per-session cost (smaller context window usage)
+ * - Easier debugging (can resume from a specific milestone)
+ * - Clear progress tracking
+ */
+export function buildMilestoneDevPrompt(
+  workItem: WorkItemContext,
+  codebase: CodebaseContext,
+  milestone: MilestoneContext,
+): PromptParts {
+  const milestoneNum = milestone.milestoneIndex + 1
+  const totalNum = milestone.totalMilestones
+
+  const filesToTouchSection = milestone.milestoneFilesToTouch && milestone.milestoneFilesToTouch.length > 0
+    ? [
+      '',
+      '## Files to Touch (this milestone)',
+      milestone.milestoneFilesToTouch.map((f) => `- ${f}`).join('\n'),
+    ]
+    : []
+
+  const systemPrompt = [
+    'You are a dev agent in the Orcha pipeline.',
+    `Your job is to implement the changes described in the blueprint below.`,
+    '',
+    `**You are implementing milestone ${milestoneNum} of ${totalNum}.**`,
+    'Previous milestones have already been completed and committed.',
+    'Focus ONLY on the current milestone — do not implement other milestones.',
+    '',
+    'Guidelines:',
+    '- Follow the milestone description and details precisely.',
+    `- This is milestone ${milestoneNum}: "${milestone.milestoneDescription}"`,
+    '- Create and modify only the files needed for THIS milestone.',
+    '- Follow the existing code conventions and patterns in the codebase.',
+    '- Write clean, well-structured code.',
+    '- Do NOT run tests — that is the gate stage\'s job.',
+    '- Do NOT commit your changes — the pipeline handles commits automatically.',
+    '- If the milestone is ambiguous, make reasonable decisions and note them.',
+    ...filesToTouchSection,
+    '',
+    '## Full Blueprint (for reference)',
+    milestone.blueprintJson,
+  ].join('\n')
+
+  const acSection = workItem.acceptanceCriteria.length > 0
+    ? ['', '## Acceptance Criteria (for full task)', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
+    : []
+
+  const userPrompt = [
+    '# Current Milestone',
+    `Milestone ${milestoneNum} of ${totalNum}: ${milestone.milestoneDescription}`,
+    '',
+    '## Details',
+    milestone.milestoneDetails,
+    '',
+    '# Task Context',
+    workItem.workItemId ? `Work Item: ${workItem.workItemId}` : '',
+    '',
+    '## Description',
+    workItem.description,
+    ...acSection,
+    '',
+    '# Instructions',
+    `Implement milestone ${milestoneNum}: "${milestone.milestoneDescription}"`,
+    'Work through the milestone details. Create or modify only the files needed for this milestone.',
     `Source branch: ${codebase.sourceBranch}`,
   ].filter((line) => line !== '').join('\n')
 

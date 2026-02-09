@@ -1,0 +1,73 @@
+graph TB
+    subgraph Mobile["Mobile Device (Phone)"]
+        Browser["Mobile Browser<br/>orcha.yourdomain.com"]
+        MobileView["Mobile View (/m)<br/>Single session at a time<br/>Session selector + Full-screen terminal"]
+        Browser --> MobileView
+    end
+
+    subgraph Laptop["Laptop (Optional)"]
+        LaptopBrowser["Desktop Browser<br/>orcha.yourdomain.com<br/>(or localhost:3847 via SSH)"]
+    end
+
+    subgraph CloudflareEdge["Cloudflare Edge Network"]
+        DNS["DNS CNAME<br/>orcha.yourdomain.com<br/>→ tunnel-id.cfargotunnel.com"]
+        TLS["TLS Termination<br/>Free HTTPS certificate"]
+        Access["Cloudflare Access<br/>Zero Trust Authentication<br/>• Email OTP<br/>• OAuth (optional)<br/>• 24h session duration"]
+        WAF["DDoS + WAF<br/>Bot protection"]
+
+        DNS --> TLS
+        TLS --> WAF
+        WAF --> Access
+    end
+
+    subgraph AzureVM["Azure VM (No inbound ports open)"]
+        subgraph Cloudflared["cloudflared daemon (systemd)"]
+            Tunnel["Cloudflare Tunnel<br/>Outbound QUIC/HTTP2<br/>to Cloudflare edge"]
+        end
+
+        subgraph OrchaServer["Orcha Server (localhost:3847)"]
+            Express["Express Server<br/>Static files + API"]
+            JWTMiddleware["JWT Validation Middleware<br/>(Cf-Access-Jwt-Assertion)<br/>Defense-in-depth"]
+            WSServer["WebSocket Server<br/>Terminal I/O"]
+            API["REST API<br/>/api/sessions<br/>/api/status<br/>/api/health"]
+
+            Express --> JWTMiddleware
+            JWTMiddleware --> API
+            JWTMiddleware --> WSServer
+        end
+
+        subgraph Backend["Backend Services"]
+            Tmux["tmux Sessions<br/>One per AI agent"]
+            PTY["node-pty<br/>Pseudo-terminal"]
+            StatusMonitor["Status Monitor<br/>File-based status tracking"]
+        end
+
+        Tunnel -->|"proxy http://localhost:3847"| Express
+        WSServer -->|"WebSocket<br/>+ heartbeat ping/30s<br/>+ auto-reconnect"| PTY
+        PTY --> Tmux
+        API --> StatusMonitor
+        StatusMonitor --> Tmux
+    end
+
+    Browser -->|"HTTPS + WSS"| DNS
+    LaptopBrowser -->|"HTTPS + WSS"| DNS
+    LaptopBrowser -.->|"SSH tunnel fallback<br/>localhost:3847"| Express
+    Access -->|"Authenticated request<br/>+ JWT header"| Tunnel
+
+    subgraph MobileUI["Mobile UI Flow"]
+        direction TB
+        SessionList["Session List View<br/>Full-screen, large touch targets<br/>Status indicators per session<br/>Grouped by instance"]
+        SessionList -->|"Tap session"| SingleTerminal["Single Terminal View<br/>Full-screen xterm.js<br/>Touch scroll enabled<br/>Read-only by default"]
+        SingleTerminal -->|"Back button"| SessionList
+        SessionList -->|"FAB +"| NewSession["Create Session<br/>Instance picker<br/>Branch name<br/>Mode selector"]
+        SingleTerminal -->|"Toggle"| InteractMode["Interactive Mode<br/>Soft keyboard<br/>Terminal input enabled"]
+    end
+
+    style CloudflareEdge fill:#f4a623,stroke:#333,color:#000
+    style Access fill:#e67e22,stroke:#333,color:#000
+    style Tunnel fill:#3498db,stroke:#333,color:#fff
+    style AzureVM fill:#1a1a2e,stroke:#333,color:#fff
+    style Mobile fill:#2d3436,stroke:#333,color:#fff
+    style MobileUI fill:#1e272e,stroke:#333,color:#fff
+    style JWTMiddleware fill:#9b59b6,stroke:#333,color:#fff
+    style WSServer fill:#2ecc71,stroke:#333,color:#fff
