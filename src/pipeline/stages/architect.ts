@@ -38,20 +38,23 @@ import { parseStructuredOutput } from '../output-parser.js'
  * 2. Parallel execution would require complex merge conflict resolution
  * 3. The competing agents feature already provides parallelism for the same work unit
  *
+ * Each milestone is executed with a FRESH Claude session to prevent context
+ * pollution and reduce costs. For large tasks, divide into focused milestones
+ * (single responsibility, implementable independently).
+ *
  * The 'steps' field is supported for backward compatibility, but 'milestones'
- * is the preferred field name. Each milestone is executed with a FRESH Claude
- * session to prevent context pollution and reduce costs.
+ * is the preferred field name.
  */
 export const BLUEPRINT_SCHEMA = {
   type: 'object' as const,
   properties: {
     headline: {
       type: 'string' as const,
-      description: 'Short title for the plan (e.g. "Add User Authentication")',
+      description: 'Short, clear title for the plan (e.g. "Add User Authentication")',
     },
     shortDescription: {
       type: 'string' as const,
-      description: '1-2 sentence summary of what this blueprint accomplishes',
+      description: '1-2 sentence summary including the milestone count (e.g. "Implements X with Y milestones")',
     },
     approach: {
       type: 'string' as const,
@@ -71,6 +74,23 @@ export const BLUEPRINT_SCHEMA = {
       type: 'string' as const,
       description: 'How to test the changes',
     },
+    milestones: {
+      type: 'array' as const,
+      items: {
+        type: 'object' as const,
+        properties: {
+          description: { type: 'string' as const },
+          details: { type: 'string' as const },
+          filesToTouch: {
+            type: 'array' as const,
+            items: { type: 'string' as const },
+            description: 'Optional: subset of files this milestone touches',
+          },
+        },
+        required: ['description', 'details'],
+      },
+      description: 'Ordered implementation milestones. Each milestone should be independently implementable with a focused scope (single responsibility). For large tasks, create discrete milestones that run with fresh context.',
+    },
     steps: {
       type: 'array' as const,
       items: {
@@ -81,10 +101,10 @@ export const BLUEPRINT_SCHEMA = {
         },
         required: ['description', 'details'],
       },
-      description: 'Ordered implementation steps (alias for milestones, for backward compatibility)',
+      description: '(Deprecated - use milestones instead) Backward compatibility alias for milestones',
     },
   },
-  required: ['headline', 'shortDescription', 'approach', 'filesToTouch', 'risks', 'testStrategy', 'steps'],
+  required: ['headline', 'shortDescription', 'approach', 'filesToTouch', 'risks', 'testStrategy'],
 }
 
 // Re-export BlueprintOutput from types.ts for backward compatibility
@@ -218,6 +238,7 @@ function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
   if (typeof obj !== 'object' || obj === null) return false
   const bp = obj as Record<string, unknown>
   // Support both 'milestones' (preferred) and 'steps' (backward compat)
+  // At least one must be present
   const hasMilestones = Array.isArray(bp.milestones) || Array.isArray(bp.steps)
   return (
     typeof bp.headline === 'string' &&
