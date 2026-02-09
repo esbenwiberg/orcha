@@ -28,11 +28,12 @@ import { getChangedLintableFiles } from '../git-utils.js'
 export async function runLintRunner(
   worktreePath: string,
   sourceBranch: string,
+  baseCommit?: string,
 ): Promise<GateResult> {
   const timestamp = new Date().toISOString()
 
   // Get changed files (only lintable extensions)
-  const changedFiles = getChangedLintableFiles(worktreePath, sourceBranch)
+  const changedFiles = getChangedLintableFiles(worktreePath, sourceBranch, baseCommit)
 
   if (changedFiles.length === 0) {
     return {

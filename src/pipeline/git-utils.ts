@@ -20,21 +20,52 @@ function assertSafeBranch(branch: string): void {
 }
 
 // ============================================================================
+// HEAD SHA Retrieval
+// ============================================================================
+
+/**
+ * Get the current HEAD commit SHA.
+ * Used to snapshot the base commit at pipeline creation time.
+ */
+export function getHeadSha(worktreePath: string): string | undefined {
+  try {
+    return execSync('git rev-parse HEAD', {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      timeout: 5000,
+    }).trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+// ============================================================================
 // Diff Retrieval
 // ============================================================================
 
 /**
- * Get the diff between the current HEAD and the source branch.
- * Tries multiple fallback strategies:
- * 1. origin/sourceBranch...HEAD (most reliable)
- * 2. sourceBranch...HEAD (local fallback)
- * 3. HEAD~1 (last resort)
+ * Get the diff between the current HEAD and the base commit or source branch.
+ *
+ * Strategy order:
+ * 1. baseCommit..HEAD (exact — uses the snapshot from pipeline creation)
+ * 2. origin/sourceBranch...HEAD (three-dot merge-base)
+ * 3. sourceBranch...HEAD (local fallback)
+ * 4. HEAD~1 (last resort)
  *
  * Returns null if no diff can be obtained.
  */
-export function getDiff(worktreePath: string, sourceBranch: string): string | null {
-  assertSafeBranch(sourceBranch)
+export function getDiff(worktreePath: string, sourceBranch: string, baseCommit?: string): string | null {
   const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
+
+  // Best strategy: diff from the exact base commit captured at pipeline start
+  if (baseCommit) {
+    try {
+      const diff = execSync(`git diff ${baseCommit}..HEAD`, execOpts).trim()
+      if (diff) return diff
+    } catch { /* baseCommit may have been garbage-collected or rebased away */ }
+  }
+
+  assertSafeBranch(sourceBranch)
 
   try {
     const diff = execSync(`git diff origin/${sourceBranch}...HEAD`, execOpts).trim()
@@ -64,9 +95,21 @@ const LINTABLE_EXTENSIONS = /\.(ts|js|tsx|jsx)$/
  * Get the list of changed files (relative paths) that are lintable.
  * Uses git diff --name-only with extension filters.
  */
-export function getChangedLintableFiles(worktreePath: string, sourceBranch: string): string[] {
-  assertSafeBranch(sourceBranch)
+export function getChangedLintableFiles(worktreePath: string, sourceBranch: string, baseCommit?: string): string[] {
   const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
+
+  // Best strategy: diff from exact base commit
+  if (baseCommit) {
+    try {
+      const output = execSync(
+        `git diff --name-only ${baseCommit}..HEAD -- '*.ts' '*.js' '*.tsx' '*.jsx'`,
+        execOpts,
+      ).trim()
+      if (output) return output.split('\n').filter(Boolean)
+    } catch { /* baseCommit may be unavailable */ }
+  }
+
+  assertSafeBranch(sourceBranch)
 
   try {
     const output = execSync(

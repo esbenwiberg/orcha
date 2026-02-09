@@ -77,7 +77,7 @@ export async function runFixLoopStage(
     const blueprintJson = await readFile(blueprintPath, 'utf-8')
 
     // Get the current diff
-    const diff = getDiff(run.worktreePath, run.sourceBranch) ?? '(unable to generate diff)'
+    const diff = getDiff(run.worktreePath, run.sourceBranch, run.baseCommit) ?? '(unable to generate diff)'
 
     // Build failure report from gate results
     const failureReport = buildFailureReport(run.gateResults)

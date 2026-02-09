@@ -26,6 +26,7 @@
 import type { PipelineRun, PipelineState, PipelineConfig, StageResult } from './types.js'
 import { ACTIVE_STATES, TERMINAL_STATES, SOFT_TERMINAL_STATES } from './types.js'
 import { savePipelineRun, generatePipelineId } from './pipeline-store.js'
+import { getHeadSha } from './git-utils.js'
 import { recordPipelineOutcome } from './learning-store.js'
 import { pipelineEvents } from './events.js'
 import { appendProgress } from './progress.js'
@@ -455,6 +456,7 @@ export async function createPipelineRun(
   opts: CreatePipelineRunOptions,
 ): Promise<PipelineRun> {
   const now = new Date().toISOString()
+  const baseCommit = getHeadSha(opts.worktreePath)
   const run: PipelineRun = {
     id: generatePipelineId(),
     state: 'created',
@@ -464,6 +466,7 @@ export async function createPipelineRun(
     description: opts.description,
     acceptanceCriteria: opts.acceptanceCriteria,
     sourceBranch: opts.sourceBranch,
+    baseCommit,
     worktreePath: opts.worktreePath,
     stageHistory: [],
     currentStage: null,

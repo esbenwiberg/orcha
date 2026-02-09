@@ -315,6 +315,8 @@ export interface PipelineRun {
   // --- Git / worktree context ---
   /** Branch the pipeline is working on. */
   sourceBranch: string
+  /** Commit SHA at pipeline creation — used as the base for cumulative diffs. */
+  baseCommit?: string
   /** Absolute path to the git worktree. */
   worktreePath: string
   /** Path to the saved blueprint file within the worktree. */

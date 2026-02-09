@@ -106,7 +106,7 @@ async function runSingleGateStage(
 
     const [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
       skip.has('test') ? makeSkippedResult('test') : runTestRunner(run.worktreePath),
-      skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(run.worktreePath, run.sourceBranch),
+      skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(run.worktreePath, run.sourceBranch, run.baseCommit),
       skip.has('ac-validator') ? makeSkippedResult('ac-validator') : runAcValidator(run, agentOpts),
       skip.has('adversary') ? makeSkippedResult('adversary') : runAdversary(run, agentOpts),
       skip.has('security') ? makeSkippedResult('security') : runSecurityReview(run, agentOpts),
@@ -390,7 +390,7 @@ async function evaluateCompetitor(
 
   const [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
     skip.has('test') ? makeSkippedResult('test') : runTestRunner(competitor.worktreePath),
-    skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(competitor.worktreePath, run.sourceBranch),
+    skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(competitor.worktreePath, run.sourceBranch, run.baseCommit),
     skip.has('ac-validator') ? makeSkippedResult('ac-validator') : runAcValidator(competitorRun, agentOpts),
     skip.has('adversary') ? makeSkippedResult('adversary') : runAdversary(competitorRun, agentOpts),
     skip.has('security') ? makeSkippedResult('security') : runSecurityReview(competitorRun, agentOpts),
