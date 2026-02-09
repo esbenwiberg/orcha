@@ -106,7 +106,7 @@ export const BLUEPRINT_SCHEMA = {
   },
   // Note: milestones/steps not in required array because JSON schema can't express "one of".
   // The isValidBlueprint type guard enforces that at least one is present.
-  required: ['headline', 'shortDescription', 'approach', 'filesToTouch', 'risks', 'testStrategy', 'milestones'],
+  required: ['headline', 'shortDescription', 'approach', 'filesToTouch', 'risks', 'testStrategy'],
 }
 
 // Re-export BlueprintOutput from types.ts for backward compatibility
