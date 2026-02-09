@@ -38,7 +38,7 @@
 
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
-import { execSync, spawnSync } from 'child_process'
+import { spawnSync } from 'child_process'
 import type { PipelineRun, StageResult, CompetingResult, MilestoneProgress, BlueprintOutput } from '../types.js'
 import { getBlueprintMilestones } from '../types.js'
 import { transition, recordStageResult, transitionToError } from '../pipeline-engine.js'
@@ -285,7 +285,7 @@ async function runSingleDevStage(
     }
 
     // All milestones completed - capture final diff
-    const finalDiff = await getFinalDiff(run.worktreePath, run.sourceBranch)
+    const finalDiff = getDiff(run.worktreePath, run.sourceBranch)
 
     // Save dev results to pipeline directory
     const devResultsDir = join(getPipelineDir(run.id), 'dev-results')
@@ -417,58 +417,38 @@ async function runSingleMilestoneDevStage(
 }
 
 // ============================================================================
-// Helper: Get Final Diff
+// Helper: Get Diff
 // ============================================================================
 
 /**
- * Get the cumulative diff from source branch to current HEAD.
- * This captures ALL changes from all milestones, not just the last commit.
+ * Get the diff from sourceBranch to HEAD using merge-base (three-dot) semantics.
  *
  * SECURITY: Uses spawnSync with array arguments to avoid command injection.
- * The sourceBranch parameter originates from user input and must not be
- * interpolated into shell commands.
+ * We explicitly compute the merge-base first, then diff against the resulting
+ * SHA — this avoids passing user-controlled branch names in range syntax
+ * (e.g. "branch...HEAD") where they could be misinterpreted as git flags.
  */
-async function getFinalDiff(worktreePath: string, sourceBranch: string): Promise<string> {
+function getDiff(worktreePath: string, sourceBranch: string): string {
   const spawnOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
 
-  // SECURITY: Use spawnSync with array args to avoid shell interpolation
-  // This prevents command injection via malicious branch names like "main; rm -rf /"
-
-  // Try to diff against the source branch directly
-  let result = spawnSync('git', ['diff', `${sourceBranch}...HEAD`], spawnOpts)
-  if (result.status === 0) {
-    return (result.stdout || '').trim()
-  }
-
-  // Try with origin/ prefix
-  result = spawnSync('git', ['diff', `origin/${sourceBranch}...HEAD`], spawnOpts)
-  if (result.status === 0) {
-    return (result.stdout || '').trim()
-  }
-
-  // Try to find the merge-base with main as fallback
-  let mergeBaseResult = spawnSync('git', ['merge-base', 'HEAD', 'origin/main'], spawnOpts)
-  if (mergeBaseResult.status !== 0) {
-    // Try master
-    mergeBaseResult = spawnSync('git', ['merge-base', 'HEAD', 'origin/master'], spawnOpts)
-  }
-  if (mergeBaseResult.status !== 0) {
-    // Fall back to initial commit
-    mergeBaseResult = spawnSync('git', ['rev-list', '--max-parents=0', 'HEAD'], spawnOpts)
-  }
-
-  if (mergeBaseResult.status === 0 && mergeBaseResult.stdout) {
-    const mergeBase = mergeBaseResult.stdout.trim()
-    result = spawnSync('git', ['diff', `${mergeBase}...HEAD`], spawnOpts)
-    if (result.status === 0) {
-      return (result.stdout || '').trim()
+  // Compute the merge-base SHA first, then diff against it.
+  // This is equivalent to `git diff sourceBranch...HEAD` but safer because
+  // the merge-base SHA is a hex string that can't be misinterpreted as a flag.
+  const candidates = [sourceBranch, `origin/${sourceBranch}`, 'origin/main', 'origin/master']
+  for (const ref of candidates) {
+    const mbResult = spawnSync('git', ['merge-base', ref, 'HEAD'], spawnOpts)
+    if (mbResult.status === 0 && mbResult.stdout) {
+      const mergeBase = mbResult.stdout.trim()
+      const diffResult = spawnSync('git', ['diff', mergeBase, 'HEAD'], spawnOpts)
+      if (diffResult.status === 0) {
+        return (diffResult.stdout || '').trim()
+      }
     }
   }
 
-  // Last resort: get diff of all changes in the working tree
-  // This won't capture committed milestone changes, but is better than nothing
-  result = spawnSync('git', ['diff', 'HEAD'], spawnOpts)
-  return (result.stdout || '').trim()
+  // Fall back to diff against previous commit
+  const fallback = spawnSync('git', ['diff', 'HEAD~1'], spawnOpts)
+  return (fallback.stdout || '').trim()
 }
 
 // ============================================================================
@@ -540,9 +520,12 @@ async function runCompetingDevStage(
 
     // If only one milestone, run all agents on it (original competing behavior)
     if (milestones.length <= 1) {
-      return await runCompetingAgentsOnMilestone(
+      run = await runCompetingAgentsOnMilestone(
         run, count, blueprintJson, workItem, codebase, opts, startedAt, null
       )
+      if (run.state === 'error') return run
+      run = await transition(run, 'gate')
+      return run
     }
 
     // DESIGN DECISION: Multi-milestone competing mode
@@ -624,11 +607,17 @@ async function runCompetingDevStage(
     }
     await savePipelineRun(run)
 
-    // Transition to gate - gate will:
-    // 1. Evaluate competing results for milestone 1
-    // 2. Select a winner
-    // 3. Merge winner's changes into main worktree
-    // 4. If more milestones remain, transition back to dev (non-competing) for remaining milestones
+    // Record dev stage result
+    const completedAt = new Date().toISOString()
+    const stageResult: StageResult = {
+      stage: 'dev',
+      startedAt,
+      completedAt,
+      output: `${run.competingResults?.length ?? 0} competing agents completed milestone 1/${milestones.length}; ${milestones.length - 1} milestones pending`,
+    }
+    run = await recordStageResult(run, stageResult)
+
+    // Transition to gate
     run = await transition(run, 'gate')
 
     return run
@@ -684,9 +673,10 @@ async function runCompetingAgentsOnMilestone(
         (err) => {
           // Record failed agent but don't abort the whole stage
           console.error(`Competing agent ${i} (${milestoneLabel}) failed:`, (err as Error).message)
+          const suffix = milestoneContext ? `-m${milestoneContext.milestoneIndex}` : ''
           competingResults.push({
             agentIndex: i,
-            branch: `pipeline/${run.id}-dev-${i}`,
+            branch: `pipeline/${run.id}-dev-${i}${suffix}`,
             worktreePath: '',
             diff: '',
             commitSha: '',
@@ -808,8 +798,6 @@ async function runCompetingAgent(
   // Create worktree for this agent from the pipeline worktree's current state
   const worktreePath = `${run.worktreePath}-dev-${agentIndex}${milestoneSuffix}`
 
-  const execOpts = { cwd: run.worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
-
   // SECURITY: Use spawnSync with array args to avoid command injection via
   // malicious run.id values that could craft dangerous branchName or worktreePath.
   // Create a new branch from the current pipeline branch and add worktree
@@ -922,38 +910,30 @@ async function runCompetingAgent(
  * @param commitSuffix - Optional suffix for the commit message (e.g., "milestone 1: Add feature X")
  */
 async function autoCommit(worktreePath: string, sourceBranch: string, commitSuffix?: string): Promise<DevResult> {
-  const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
+  const spawnOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
 
   // Get the current branch name
-  const branch = execSync('git rev-parse --abbrev-ref HEAD', execOpts).trim()
+  const branchResult = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], spawnOpts)
+  const branch = (branchResult.stdout || '').trim()
 
   // Stage all changes
-  execSync('git add -A', execOpts)
+  spawnSync('git', ['add', '-A'], spawnOpts)
 
   // Check if there's anything to commit
-  const status = execSync('git status --porcelain', execOpts).trim()
+  const statusResult = spawnSync('git', ['status', '--porcelain'], spawnOpts)
+  const status = (statusResult.stdout || '').trim()
   let commitSha: string
 
   if (status) {
     // Build commit message safely
-    // Defense-in-depth: sanitize the message AND use spawnSync to avoid shell
     const baseMsg = 'pipeline: dev agent implementation'
     const commitMsg = commitSuffix
       ? `${baseMsg} (${sanitizeForGitMessage(commitSuffix)})`
       : baseMsg
 
-    // SECURITY: Use spawnSync with array args to completely avoid shell interpolation.
-    // This is the most secure way to pass user-controlled data to git.
-    // No shell is involved, so no metacharacters can be interpreted.
-    const commitResult = spawnSync('git', ['commit', '-m', commitMsg], {
-      cwd: worktreePath,
-      encoding: 'utf-8',
-      timeout: 30000,
-    })
+    const commitResult = spawnSync('git', ['commit', '-m', commitMsg], spawnOpts)
 
     if (commitResult.status !== 0 && commitResult.status !== null) {
-      // Non-zero exit could be "nothing to commit" which git add -A already handled
-      // Only throw if it's a real error (not empty commit)
       const stderr = commitResult.stderr || ''
       if (!stderr.includes('nothing to commit')) {
         throw new Error(`git commit failed: ${stderr}`)
@@ -961,45 +941,10 @@ async function autoCommit(worktreePath: string, sourceBranch: string, commitSuff
     }
   }
 
-  // Get commit SHA using spawnSync for consistency (though this is safe since HEAD is not user input)
-  const shaResult = spawnSync('git', ['rev-parse', 'HEAD'], {
-    cwd: worktreePath,
-    encoding: 'utf-8',
-    timeout: 30000,
-  })
+  const shaResult = spawnSync('git', ['rev-parse', 'HEAD'], spawnOpts)
   commitSha = (shaResult.stdout || '').trim()
 
-  // SECURITY: Use spawnSync with array args to avoid command injection via sourceBranch.
-  // The sourceBranch originates from user input and must not be interpolated into shell commands.
-  let diff: string
-
-  // Try to diff against the source branch directly
-  let diffResult = spawnSync('git', ['diff', `${sourceBranch}...HEAD`], {
-    cwd: worktreePath,
-    encoding: 'utf-8',
-    timeout: 30000,
-  })
-  if (diffResult.status === 0) {
-    diff = (diffResult.stdout || '').trim()
-  } else {
-    // Try with origin/ prefix
-    diffResult = spawnSync('git', ['diff', `origin/${sourceBranch}...HEAD`], {
-      cwd: worktreePath,
-      encoding: 'utf-8',
-      timeout: 30000,
-    })
-    if (diffResult.status === 0) {
-      diff = (diffResult.stdout || '').trim()
-    } else {
-      // Fall back to diff against previous commit
-      diffResult = spawnSync('git', ['diff', 'HEAD~1'], {
-        cwd: worktreePath,
-        encoding: 'utf-8',
-        timeout: 30000,
-      })
-      diff = (diffResult.stdout || '').trim()
-    }
-  }
+  const diff = getDiff(worktreePath, sourceBranch)
 
   return { diff, branch, commitSha }
 }

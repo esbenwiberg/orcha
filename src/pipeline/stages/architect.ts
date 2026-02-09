@@ -15,6 +15,7 @@
 import { writeFile } from 'fs/promises'
 import { join } from 'path'
 import type { PipelineRun, StageResult, BlueprintOutput } from '../types.js'
+import { getBlueprintMilestones } from '../types.js'
 import { transition, recordStageResult, transitionToError } from '../pipeline-engine.js'
 import { getPipelineDir } from '../pipeline-store.js'
 import { runStage } from '../stage-runner.js'
@@ -173,7 +174,7 @@ export async function runArchitectStage(
       startedAt,
       completedAt,
       model: result.model,
-      output: `${blueprint.approach} (${blueprint.steps.length} steps, ${blueprint.filesToTouch.length} files)`,
+      output: `${blueprint.approach} (${getBlueprintMilestones(blueprint).length} steps, ${blueprint.filesToTouch.length} files)`,
     }
     run = await recordStageResult(run, stageResult)
 
