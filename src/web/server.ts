@@ -400,6 +400,87 @@ export class WebDashboardServer {
       }
     })
 
+    // API: Run cleanup (dead sessions + orphaned worktrees)
+    this.app.post('/api/cleanup', async (req, res) => {
+      try {
+        const { dryRun = true } = req.body as { dryRun?: boolean }
+        const { cleanupDeadSessions } = await import('../core/cleanup.js')
+
+        // Run session cleanup
+        const result = await cleanupDeadSessions(dryRun)
+
+        // Run worktree cleanup if not dry-run
+        let removedWorktrees: string[] = []
+        if (!dryRun) {
+          const instances = await listInstances()
+          for (const inst of instances) {
+            try {
+              const wm = new WorktreeManager(inst.repoPath)
+              const removed = await wm.cleanup([])
+              removedWorktrees.push(...removed)
+            } catch {
+              // Skip instances with cleanup errors
+            }
+          }
+        }
+
+        res.json({
+          dryRun,
+          deadSessions: result.deadSessions.map(s => ({ name: s.name })),
+          cleanedInstances: result.cleanedInstances,
+          cleanedTempDirs: result.cleanedTempDirs,
+          removedWorktrees,
+        })
+      } catch (err) {
+        console.error('[API] Cleanup error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: List presets
+    this.app.get('/api/presets', async (_req, res) => {
+      try {
+        const { ConfigLoader } = await import('../core/config-loader.js')
+        const loader = new ConfigLoader()
+        const presets = await loader.listPresets()
+        res.json(presets)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Get preset details
+    this.app.get('/api/presets/:name', async (req, res) => {
+      try {
+        const { ConfigLoader } = await import('../core/config-loader.js')
+        const loader = new ConfigLoader()
+        const preset = await loader.loadPreset(req.params.name)
+        res.json(preset)
+      } catch (err) {
+        if ((err as Error).message.includes('not found')) {
+          res.status(404).json({ error: (err as Error).message })
+        } else {
+          res.status(500).json({ error: (err as Error).message })
+        }
+      }
+    })
+
+    // API: Delete a preset
+    this.app.delete('/api/presets/:name', async (req, res) => {
+      try {
+        const { ConfigLoader } = await import('../core/config-loader.js')
+        const loader = new ConfigLoader()
+        const deleted = await loader.deletePreset(req.params.name)
+        if (!deleted) {
+          res.status(404).json({ error: 'Preset not found' })
+          return
+        }
+        res.json({ success: true })
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Rename a session
     this.app.put('/api/sessions/:instanceId/:sessionId/name', async (req, res) => {
       try {
@@ -2020,12 +2101,13 @@ export class WebDashboardServer {
         const { createPipelineRun, executeArchitectStage } = await import('../pipeline/index.js')
         const { defaultPipelineConfig } = await import('../pipeline/pipeline-config.js')
 
-        const { title, description, acceptanceCriteria, sourceBranch, worktreePath } = req.body as {
+        const { title, description, acceptanceCriteria, sourceBranch, worktreePath, repoPath } = req.body as {
           title?: string
           description?: string
           acceptanceCriteria?: string[]
           sourceBranch?: string
           worktreePath?: string
+          repoPath?: string
         }
 
         if (!description || typeof description !== 'string' || description.trim().length === 0) {
@@ -2039,7 +2121,8 @@ export class WebDashboardServer {
           description: description.trim(),
           acceptanceCriteria: Array.isArray(acceptanceCriteria) ? acceptanceCriteria.filter(Boolean) : [],
           sourceBranch: sourceBranch || 'main',
-          worktreePath: worktreePath || process.cwd(),
+          repoPath: repoPath || process.cwd(),
+          ...(worktreePath ? { worktreePath } : {}),
           title: typeof title === 'string' && title.trim() ? title.trim() : undefined,
         })
 
@@ -2097,6 +2180,26 @@ export class WebDashboardServer {
         }
       } catch (err) {
         console.error('[API] Pipeline logs error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Get pipeline usage breakdown
+    this.app.get('/api/pipelines/:id/usage', async (req, res) => {
+      try {
+        const { getPipelineDir } = await import('../pipeline/pipeline-store.js')
+        const { readFile } = await import('fs/promises')
+        const pipelineDir = getPipelineDir(req.params.id)
+        const usagePath = join(pipelineDir, 'usage.json')
+
+        try {
+          const content = await readFile(usagePath, 'utf-8')
+          res.json(JSON.parse(content))
+        } catch {
+          res.json({ stages: {}, total: null })
+        }
+      } catch (err) {
+        console.error('[API] Pipeline usage error:', err)
         res.status(500).json({ error: (err as Error).message })
       }
     })
@@ -2424,6 +2527,59 @@ export class WebDashboardServer {
       }
     })
 
+
+    // API: Resume a paused pipeline
+    this.app.post('/api/pipelines/:id/resume', async (req, res) => {
+      try {
+        const { loadPipelineRun, executeArchitectStage, executeDevStage, executeGateStage, executeFixLoopStage, executeShipStage } = await import('../pipeline/index.js')
+        const { resumePipeline } = await import('../pipeline/checkpoint.js')
+
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+
+        if (run.state !== 'paused') {
+          res.status(400).json({ error: `Pipeline is not paused (state: ${run.state})` })
+          return
+        }
+
+        const resumed = await resumePipeline(run)
+        console.log(`[API] Pipeline ${run.id} resumed to state: ${resumed.state}`)
+        res.status(202).json(resumed)
+
+        // Continue execution asynchronously
+        const rerun = async () => {
+          let current = resumed
+          if (current.state === 'created') {
+            current = await executeArchitectStage(current)
+          }
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            if (current.state === 'dev') {
+              current = await executeDevStage(current)
+            } else if (current.state === 'gate') {
+              current = await executeGateStage(current)
+            } else if (current.state === 'fix-loop') {
+              current = await executeFixLoopStage(current)
+            } else if (current.state === 'ship') {
+              current = await executeShipStage(current)
+            } else {
+              break
+            }
+          }
+        }
+        rerun().catch((err) => {
+          console.error(`[API] Pipeline ${run.id} resume re-run failed:`, (err as Error).message)
+        })
+      } catch (err) {
+        console.error('[API] Pipeline resume error:', err)
+        if (!res.headersSent) {
+          res.status(400).json({ error: (err as Error).message })
+        }
+      }
+    })
 
     // API: Retry an escalated pipeline with more fix loops
     this.app.post('/api/pipelines/:id/retry-escalated', async (req, res) => {

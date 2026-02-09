@@ -1729,8 +1729,9 @@ pipelineCmd
       process.exit(1)
     }
 
-    // Determine the worktree path (required for now)
-    const resolvedWorktreePath = worktreePath ? resolve(worktreePath) : resolve('.')
+    // Resolve repo path from cwd; only resolve worktree path if explicitly provided
+    const repoPath = resolve('.')
+    const resolvedWorktreePath = worktreePath ? resolve(worktreePath) : undefined
     const resolvedSourceBranch = sourceBranch || 'main'
     const resolvedDescription = description || `Work item ${workItem}`
 
@@ -1800,7 +1801,7 @@ pipelineCmd
     console.log('Creating pipeline run...')
     console.log(`  Description: ${resolvedDescription}`)
     console.log(`  Source branch: ${resolvedSourceBranch}`)
-    console.log(`  Worktree: ${resolvedWorktreePath}`)
+    console.log(`  Worktree: ${resolvedWorktreePath ?? '(auto-create)'}`)
     if (workItem) console.log(`  Work item: ${workItem}`)
     if (acceptanceCriteria.length > 0) {
       console.log(`  Acceptance criteria: ${acceptanceCriteria.length} item(s)`)
@@ -1813,7 +1814,8 @@ pipelineCmd
         description: resolvedDescription,
         acceptanceCriteria,
         sourceBranch: resolvedSourceBranch,
-        worktreePath: resolvedWorktreePath,
+        repoPath,
+        ...(resolvedWorktreePath ? { worktreePath: resolvedWorktreePath } : {}),
         workItemId: workItem,
         title: title || undefined,
       })

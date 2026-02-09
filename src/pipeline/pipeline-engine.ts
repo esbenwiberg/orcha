@@ -27,6 +27,7 @@ import type { PipelineRun, PipelineState, PipelineConfig, StageResult } from './
 import { ACTIVE_STATES, TERMINAL_STATES, SOFT_TERMINAL_STATES } from './types.js'
 import { savePipelineRun, generatePipelineId } from './pipeline-store.js'
 import { getHeadSha } from './git-utils.js'
+import { WorktreeManager } from '../core/worktree-manager.js'
 import { recordPipelineOutcome } from './learning-store.js'
 import { pipelineEvents } from './events.js'
 import { appendProgress } from './progress.js'
@@ -444,21 +445,43 @@ export interface CreatePipelineRunOptions {
   description: string
   acceptanceCriteria: string[]
   sourceBranch: string
-  worktreePath: string
+  /** Absolute path to the original repository. Used to auto-create a worktree when worktreePath is not provided. */
+  repoPath: string
+  /** Explicit worktree path. If omitted, a worktree is auto-created via WorktreeManager. */
+  worktreePath?: string
   workItemId?: string
   title?: string
 }
 
 /**
  * Create a new PipelineRun in the 'created' state and persist it.
+ *
+ * If `opts.worktreePath` is not provided, a new worktree is automatically
+ * created via WorktreeManager on branch `pipeline/{id}`.
  */
 export async function createPipelineRun(
   opts: CreatePipelineRunOptions,
 ): Promise<PipelineRun> {
   const now = new Date().toISOString()
-  const baseCommit = getHeadSha(opts.worktreePath)
+  const pipelineId = generatePipelineId()
+
+  let worktreePath: string
+  let worktreeManaged: boolean
+
+  if (opts.worktreePath) {
+    // User provided an explicit worktree path
+    worktreePath = opts.worktreePath
+    worktreeManaged = false
+  } else {
+    // Auto-create a worktree on branch pipeline/{id}
+    const wm = new WorktreeManager(opts.repoPath)
+    worktreePath = await wm.create(pipelineId, 'pipeline/' + pipelineId, opts.sourceBranch)
+    worktreeManaged = true
+  }
+
+  const baseCommit = getHeadSha(worktreePath)
   const run: PipelineRun = {
-    id: generatePipelineId(),
+    id: pipelineId,
     state: 'created',
     config: opts.config,
     workItemId: opts.workItemId,
@@ -467,7 +490,9 @@ export async function createPipelineRun(
     acceptanceCriteria: opts.acceptanceCriteria,
     sourceBranch: opts.sourceBranch,
     baseCommit,
-    worktreePath: opts.worktreePath,
+    worktreePath,
+    worktreeManaged,
+    repoPath: opts.repoPath,
     stageHistory: [],
     currentStage: null,
     gateResults: [],
