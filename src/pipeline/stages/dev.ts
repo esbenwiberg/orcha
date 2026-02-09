@@ -38,7 +38,7 @@
 
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
-import { execSync } from 'child_process'
+import { execSync, spawnSync } from 'child_process'
 import type { PipelineRun, StageResult, CompetingResult, MilestoneProgress, BlueprintOutput } from '../types.js'
 import { getBlueprintMilestones } from '../types.js'
 import { transition, recordStageResult, transitionToError } from '../pipeline-engine.js'
@@ -55,21 +55,23 @@ import { appendProgress } from '../progress.js'
 
 /**
  * Sanitize a string for use in git commit messages.
- * Removes/escapes characters that could be problematic in shell or git.
- * This prevents command injection from untrusted blueprint milestone descriptions.
+ * Uses a WHITELIST approach - only allows safe characters.
+ * This is defense-in-depth; the primary protection is using spawnSync with
+ * array arguments (which avoids shell interpolation entirely).
+ *
+ * SECURITY NOTE: Even though we use spawnSync for git commits (which is safe),
+ * this sanitization provides defense-in-depth in case the message is ever
+ * logged, displayed, or used in other contexts.
  */
 function sanitizeForGitMessage(input: string): string {
-  // Remove or replace characters that could cause issues:
-  // - Backticks (command substitution)
-  // - $() (command substitution)
-  // - Newlines (could break the commit message format)
-  // - Quotes (could break shell parsing)
+  // WHITELIST approach: only allow known-safe characters
+  // Allowed: alphanumeric, spaces, basic punctuation (.-_:,!?'), common brackets
+  // This is more restrictive but much safer than trying to blacklist dangerous chars
   return input
-    .replace(/`/g, "'")           // Replace backticks with single quotes
-    .replace(/\$/g, '')           // Remove $ signs (prevents $() and $VAR expansion)
-    .replace(/[\r\n]+/g, ' ')     // Replace newlines with spaces
-    .replace(/["\\]/g, '')        // Remove double quotes and backslashes
-    .slice(0, 200)                // Limit length to prevent excessively long messages
+    .replace(/[^a-zA-Z0-9 .\-_:,!?'()\[\]]/g, '') // Remove anything not in whitelist
+    .replace(/\s+/g, ' ')                          // Normalize whitespace
+    .trim()                                        // Remove leading/trailing whitespace
+    .slice(0, 200)                                 // Limit length
 }
 
 // ============================================================================
@@ -893,22 +895,29 @@ async function autoCommit(worktreePath: string, sourceBranch: string, commitSuff
   let commitSha: string
 
   if (status) {
-    // Build commit message safely - use git's -m flag with sanitized message
-    // to prevent command injection from untrusted milestone descriptions
+    // Build commit message safely
+    // Defense-in-depth: sanitize the message AND use spawnSync to avoid shell
     const baseMsg = 'pipeline: dev agent implementation'
     const commitMsg = commitSuffix
       ? `${baseMsg} (${sanitizeForGitMessage(commitSuffix)})`
       : baseMsg
 
-    // Use writeFileSync + --file to safely pass the commit message
-    // This avoids shell interpolation of the commitSuffix entirely
-    const { writeFileSync, unlinkSync } = await import('fs')
-    const commitMsgFile = join(worktreePath, '.git', 'PIPELINE_COMMIT_MSG')
-    writeFileSync(commitMsgFile, commitMsg, 'utf-8')
-    try {
-      execSync(`git commit --file="${commitMsgFile}"`, execOpts)
-    } finally {
-      try { unlinkSync(commitMsgFile) } catch { /* best-effort cleanup */ }
+    // SECURITY: Use spawnSync with array args to completely avoid shell interpolation.
+    // This is the most secure way to pass user-controlled data to git.
+    // No shell is involved, so no metacharacters can be interpreted.
+    const commitResult = spawnSync('git', ['commit', '-m', commitMsg], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      timeout: 30000,
+    })
+
+    if (commitResult.status !== 0 && commitResult.status !== null) {
+      // Non-zero exit could be "nothing to commit" which git add -A already handled
+      // Only throw if it's a real error (not empty commit)
+      const stderr = commitResult.stderr || ''
+      if (!stderr.includes('nothing to commit')) {
+        throw new Error(`git commit failed: ${stderr}`)
+      }
     }
   }
 
