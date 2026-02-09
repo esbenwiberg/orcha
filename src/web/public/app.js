@@ -4284,7 +4284,7 @@ function showNewPipelineDialog() {
         </div>
         <div>
           <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Description *</label>
-          <input type="text" class="pipeline-description" placeholder="What should be built or fixed?" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+          <textarea class="pipeline-description" rows="3" placeholder="What should be built or fixed?" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
         </div>
         <div>
           <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Acceptance Criteria (one per line)</label>
