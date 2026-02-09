@@ -1694,6 +1694,7 @@ pipelineCmd
   .command('run')
   .description('Run a pipeline (architect stage only for now)')
   .option('--work-item <id>', 'GitHub issue number or ADO work item ID')
+  .option('--title <text>', 'Short display title for the pipeline')
   .option('--description <text>', 'Inline description of the work')
   .option('--ac <criteria>', 'Inline acceptance criteria (comma-separated)')
   .option('--source-branch <branch>', 'Source branch (default: main)')
@@ -1708,6 +1709,7 @@ pipelineCmd
   .action(async (options) => {
     const {
       workItem,
+      title,
       description,
       ac,
       sourceBranch,
@@ -1813,6 +1815,7 @@ pipelineCmd
         sourceBranch: resolvedSourceBranch,
         worktreePath: resolvedWorktreePath,
         workItemId: workItem,
+        title: title || undefined,
       })
 
       console.log(`\nPipeline created: ${run.id}`)

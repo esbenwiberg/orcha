@@ -2020,7 +2020,8 @@ export class WebDashboardServer {
         const { createPipelineRun, executeArchitectStage } = await import('../pipeline/index.js')
         const { defaultPipelineConfig } = await import('../pipeline/pipeline-config.js')
 
-        const { description, acceptanceCriteria, sourceBranch, worktreePath } = req.body as {
+        const { title, description, acceptanceCriteria, sourceBranch, worktreePath } = req.body as {
+          title?: string
           description?: string
           acceptanceCriteria?: string[]
           sourceBranch?: string
@@ -2039,6 +2040,7 @@ export class WebDashboardServer {
           acceptanceCriteria: Array.isArray(acceptanceCriteria) ? acceptanceCriteria.filter(Boolean) : [],
           sourceBranch: sourceBranch || 'main',
           worktreePath: worktreePath || process.cwd(),
+          title: typeof title === 'string' && title.trim() ? title.trim() : undefined,
         })
 
         console.log(`[API] Pipeline ${run.id} created, starting architect stage async`)

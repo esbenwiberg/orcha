@@ -390,6 +390,7 @@ export interface CreatePipelineRunOptions {
   sourceBranch: string
   worktreePath: string
   workItemId?: string
+  title?: string
 }
 
 /**
@@ -404,6 +405,7 @@ export async function createPipelineRun(
     state: 'created',
     config: opts.config,
     workItemId: opts.workItemId,
+    title: opts.title,
     description: opts.description,
     acceptanceCriteria: opts.acceptanceCriteria,
     sourceBranch: opts.sourceBranch,

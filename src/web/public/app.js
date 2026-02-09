@@ -4231,9 +4231,9 @@ function updatePipelineSidebar(pipelines) {
 
     const name = document.createElement('div');
     name.className = 'pipeline-item-name';
-    const desc = pipeline.description || pipeline.id;
-    name.textContent = desc.length > 25 ? desc.slice(0, 22) + '...' : desc;
-    name.title = desc;
+    const displayName = pipeline.title || pipeline.description || pipeline.id;
+    name.textContent = displayName.length > 25 ? displayName.slice(0, 22) + '...' : displayName;
+    name.title = displayName;
 
     const stateLabel = document.createElement('div');
     stateLabel.className = 'pipeline-item-state';
@@ -4279,6 +4279,10 @@ function showNewPipelineDialog() {
           </select>
         </div>
         <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Title</label>
+          <input type="text" class="pipeline-title" placeholder="Short name (e.g. Auth system)" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+        </div>
+        <div>
           <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Description *</label>
           <input type="text" class="pipeline-description" placeholder="What should be built or fixed?" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
         </div>
@@ -4300,6 +4304,7 @@ function showNewPipelineDialog() {
   `;
 
   const repoSelect = overlay.querySelector('.pipeline-repo');
+  const titleInput = overlay.querySelector('.pipeline-title');
   const descInput = overlay.querySelector('.pipeline-description');
   const acTextarea = overlay.querySelector('.pipeline-ac');
   const branchInput = overlay.querySelector('.pipeline-source-branch');
@@ -4322,6 +4327,7 @@ function showNewPipelineDialog() {
       return;
     }
 
+    const title = titleInput.value.trim();
     const description = descInput.value.trim();
     if (!description) {
       errorEl.textContent = 'Description is required';
@@ -4342,7 +4348,7 @@ function showNewPipelineDialog() {
       const res = await fetch('/api/pipelines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description, acceptanceCriteria, sourceBranch, worktreePath }),
+        body: JSON.stringify({ title: title || undefined, description, acceptanceCriteria, sourceBranch, worktreePath }),
       });
 
       if (!res.ok) {
@@ -4417,7 +4423,12 @@ function renderPipelineDetail(pipelineId) {
   // Header
   html += '<div class="pipeline-detail-header">';
   html += '<div style="flex:1">';
-  html += '<div class="pipeline-detail-title">' + escapeHtml(pipeline.description || 'Pipeline') + '</div>';
+  if (pipeline.title) {
+    html += '<div class="pipeline-detail-title">' + escapeHtml(pipeline.title) + '</div>';
+    html += '<div style="color:#aaa;font-size:0.85rem;margin-top:2px;">' + escapeHtml(pipeline.description || '') + '</div>';
+  } else {
+    html += '<div class="pipeline-detail-title">' + escapeHtml(pipeline.description || 'Pipeline') + '</div>';
+  }
   html += '<div class="pipeline-detail-id">' + pipeline.id + '</div>';
   html += '</div>';
   html += '<div class="pipeline-detail-actions">';

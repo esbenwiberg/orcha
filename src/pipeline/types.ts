@@ -206,6 +206,8 @@ export interface PipelineRun {
   // --- Work item context ---
   /** External work-item identifier (e.g. GitHub issue number, ADO work item ID). */
   workItemId?: string
+  /** Short display title for the pipeline (optional, falls back to truncated description). */
+  title?: string
   /** Human-readable description of the task. */
   description: string
   /** Acceptance criteria the gate stage checks against. */
