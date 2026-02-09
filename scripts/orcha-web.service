@@ -1,0 +1,17 @@
+[Unit]
+Description=Orcha Web Dashboard Server
+After=network.target
+
+[Service]
+Type=simple
+# User and paths are populated by vm-redeploy-web.sh during installation
+User=REPLACE_USER
+WorkingDirectory=REPLACE_WORKING_DIR
+ExecStart=/usr/bin/node dist/web/server.js
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+[Install]
+WantedBy=multi-user.target

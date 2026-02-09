@@ -17,23 +17,33 @@ log()  { echo -e "${GREEN}[+]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[x]${NC} $1"; exit 1; }
 
-ORCHA_DIR="${ORCHA_DIR:-$HOME/projects/orcha}"
+# Security: Use hardcoded path to prevent path traversal attacks
+# Do not allow ORCHA_DIR override from environment
+ORCHA_DIR="$HOME/repos/orcha-clones/orcha"
 cd "$ORCHA_DIR" || err "Cannot cd to $ORCHA_DIR"
+
+# Validate we're in the expected git repository
+if [[ ! -f "$ORCHA_DIR/package.json" ]] || ! grep -q '"name": "@esbenwiberg/orcha"' "$ORCHA_DIR/package.json" 2>/dev/null; then
+    err "Not in the Orcha repository. Expected package.json with @esbenwiberg/orcha"
+fi
 
 # One-time setup: install systemd service if not present
 if ! systemctl list-unit-files orcha-web.service &>/dev/null || \
    ! systemctl list-unit-files orcha-web.service 2>/dev/null | grep -q orcha-web; then
     log "Installing orcha-web systemd service (one-time)..."
-    sudo cp "$ORCHA_DIR/scripts/orcha-web.service" /etc/systemd/system/orcha-web.service
+    # Generate service file with current user and directory
+    sed -e "s|REPLACE_USER|$(whoami)|g" \
+        -e "s|REPLACE_WORKING_DIR|$ORCHA_DIR|g" \
+        "$ORCHA_DIR/scripts/orcha-web.service" | sudo tee /etc/systemd/system/orcha-web.service > /dev/null
     sudo systemctl daemon-reload
     sudo systemctl enable orcha-web
     log "Service installed and enabled"
 fi
 
-# Optional: pull latest from git
+# Optional: pull latest from git (with explicit remote/branch for security)
 if [[ "${1:-}" == "--pull" ]]; then
-    log "Pulling latest from origin..."
-    git pull
+    log "Pulling latest from origin main..."
+    git pull origin main
 fi
 
 # Build
