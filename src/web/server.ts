@@ -2428,7 +2428,7 @@ export class WebDashboardServer {
     // API: Retry an escalated pipeline with more fix loops
     this.app.post('/api/pipelines/:id/retry-escalated', async (req, res) => {
       try {
-        const { loadPipelineRun, executeFixLoopStage } = await import('../pipeline/index.js')
+        const { loadPipelineRun, executeFixLoopStage, executeGateStage, executeDevStage, executeShipStage } = await import('../pipeline/index.js')
         const { retryEscalatedPipeline } = await import('../pipeline/checkpoint.js')
 
         const run = await loadPipelineRun(req.params.id)
@@ -2447,8 +2447,25 @@ export class WebDashboardServer {
         console.log(`[API] Pipeline ${run.id} retry-escalated -> state: ${retried.state}`)
         res.status(202).json(retried)
 
-        // Kick off the fix-loop stage asynchronously
-        executeFixLoopStage(retried).catch((err) => {
+        // Auto-continue: kick off fix-loop → gate → ... loop asynchronously
+        const continueRun = async (r: typeof retried) => {
+          let current = r
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            if (current.state === 'fix-loop') {
+              current = await executeFixLoopStage(current)
+            } else if (current.state === 'gate') {
+              current = await executeGateStage(current)
+            } else if (current.state === 'dev') {
+              current = await executeDevStage(current)
+            } else if (current.state === 'ship') {
+              current = await executeShipStage(current)
+            } else {
+              break // checkpoint, terminal, escalated, or error — stop
+            }
+          }
+        }
+        continueRun(retried).catch((err) => {
           console.error(`[API] Pipeline ${run.id} retry-escalated re-run failed:`, (err as Error).message)
         })
       } catch (err) {
