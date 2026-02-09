@@ -41,6 +41,10 @@ export const ACTIVE_STATES: ReadonlySet<PipelineState> = new Set<PipelineState>(
 export const TERMINAL_STATES: ReadonlySet<PipelineState> = new Set<PipelineState>([
   'completed',
   'cancelled',
+])
+
+/** Escalated is a "soft-terminal" state: the pipeline stops but the user can retry. */
+export const SOFT_TERMINAL_STATES: ReadonlySet<PipelineState> = new Set<PipelineState>([
   'escalated',
 ])
 
@@ -226,6 +230,12 @@ export interface PipelineRun {
   fixLoopCount: number
   /** Results from competing dev agents (populated if competingAgents > 1). */
   competingResults?: CompetingResult[]
+
+  // --- Recovery / retry hints ---
+  /** Gate check names to skip on next gate run (e.g. ['lint', 'security']). */
+  skipChecks?: string[]
+  /** User-provided instructions injected into the fix-loop prompt. */
+  userInstructions?: string
 
   // --- Usage ---
   /** Aggregated token/cost usage snapshot. */

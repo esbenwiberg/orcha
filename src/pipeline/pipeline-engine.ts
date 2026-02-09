@@ -13,6 +13,7 @@
  *   dev            -> gate
  *   gate           -> fix-loop | checkpoint:ship
  *   fix-loop       -> gate | escalated
+ *   escalated      -> fix-loop             (via user retry with more loops)
  *   checkpoint:ship -> ship | cancelled
  *   ship           -> completed
  *
@@ -22,7 +23,7 @@
  */
 
 import type { PipelineRun, PipelineState, PipelineConfig, StageResult } from './types.js'
-import { ACTIVE_STATES, TERMINAL_STATES } from './types.js'
+import { ACTIVE_STATES, TERMINAL_STATES, SOFT_TERMINAL_STATES } from './types.js'
 import { savePipelineRun, generatePipelineId } from './pipeline-store.js'
 import { recordPipelineOutcome } from './learning-store.js'
 import { pipelineEvents } from './events.js'
@@ -53,6 +54,7 @@ const TRANSITION_TABLE: ReadonlyMap<PipelineState, ReadonlySet<PipelineState>> =
   ['dev', new Set<PipelineState>(['gate'])],
   ['gate', new Set<PipelineState>(['fix-loop', 'checkpoint:ship'])],
   ['fix-loop', new Set<PipelineState>(['gate', 'escalated'])],
+  ['escalated', new Set<PipelineState>(['fix-loop'])],
   ['checkpoint:ship', new Set<PipelineState>(['ship', 'cancelled'])],
   ['ship', new Set<PipelineState>(['completed'])],
 ])
@@ -79,7 +81,8 @@ export class InvalidTransitionError extends Error {
  * - Any ACTIVE state can transition to "paused".
  * - "paused" can transition back to its saved `pausedStage` only.
  * - Any non-terminal state can transition to "error".
- * - Terminal states (completed, cancelled, escalated) cannot transition anywhere.
+ * - Terminal states (completed, cancelled) cannot transition anywhere.
+ * - Soft-terminal states (escalated) can transition via the explicit table.
  */
 export function isValidTransition(
   from: PipelineState,
@@ -176,8 +179,8 @@ export async function transition(
       currentStage: to,
     }
   }
-  // --- Handle terminal / error ---
-  else if (TERMINAL_STATES.has(to) || to === 'error') {
+  // --- Handle terminal / soft-terminal / error ---
+  else if (TERMINAL_STATES.has(to) || SOFT_TERMINAL_STATES.has(to) || to === 'error') {
     updated = {
       ...updated,
       state: to,
@@ -205,14 +208,14 @@ export async function transition(
 
   // Append progress entry for the transition
   await appendProgress(updated.id, {
-    type: TERMINAL_STATES.has(to) ? 'stage-complete' : to === 'error' ? 'stage-error' : 'info',
+    type: (TERMINAL_STATES.has(to) || SOFT_TERMINAL_STATES.has(to)) ? 'stage-complete' : to === 'error' ? 'stage-error' : 'info',
     stage: typeof to === 'string' ? to : undefined,
     title: `Transition: ${run.state} \u2192 ${to}`,
     data: { from: run.state, to },
   }).catch(() => { /* best-effort */ })
 
-  // Record pipeline outcome to learning store when reaching a terminal state
-  if (TERMINAL_STATES.has(to)) {
+  // Record pipeline outcome to learning store when reaching a terminal or soft-terminal state
+  if (TERMINAL_STATES.has(to) || SOFT_TERMINAL_STATES.has(to)) {
     try {
       await recordPipelineOutcome(updated)
     } catch {

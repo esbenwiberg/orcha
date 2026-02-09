@@ -97,13 +97,18 @@ export async function runFixLoopStage(
     }
 
     // Build the fix prompt
-    const { systemPrompt, userPrompt } = buildFixLoopPrompt(workItem, codebase, {
+    const { systemPrompt, userPrompt: baseUserPrompt } = buildFixLoopPrompt(workItem, codebase, {
       blueprintJson,
       diff,
       failureReport,
       attempt,
       maxAttempts: maxFixLoops,
     })
+
+    // Inject user instructions if provided (from retry-escalated)
+    const userPrompt = run.userInstructions
+      ? `${baseUserPrompt}\n\n# Additional Instructions from User\n${run.userInstructions}`
+      : baseUserPrompt
 
     // Use fix-{n} for log file naming, but resolve model/budget from 'fix' key
     const stageKey = `fix-${attempt}`

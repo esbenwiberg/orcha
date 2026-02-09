@@ -20,7 +20,7 @@ export type {
   PipelineRun,
 } from './types.js'
 
-export { ACTIVE_STATES, TERMINAL_STATES } from './types.js'
+export { ACTIVE_STATES, TERMINAL_STATES, SOFT_TERMINAL_STATES } from './types.js'
 
 // Config
 export {
@@ -121,9 +121,12 @@ export {
   pausePipeline,
   resumePipeline,
   recoverPipeline,
+  retryEscalatedPipeline,
   stopPipeline,
   loadPipelineOrThrow,
 } from './checkpoint.js'
+
+export type { RetryEscalatedOptions } from './checkpoint.js'
 
 // Usage Tracker
 export {

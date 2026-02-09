@@ -2315,6 +2315,73 @@ export class WebDashboardServer {
     })
 
 
+    // API: Retry an escalated pipeline with more fix loops
+    this.app.post('/api/pipelines/:id/retry-escalated', async (req, res) => {
+      try {
+        const { loadPipelineRun, executeFixLoopStage } = await import('../pipeline/index.js')
+        const { retryEscalatedPipeline } = await import('../pipeline/checkpoint.js')
+
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+
+        const { additionalRetries, skipChecks, instructions } = req.body ?? {}
+        const retried = await retryEscalatedPipeline(run, {
+          additionalRetries: typeof additionalRetries === 'number' ? additionalRetries : undefined,
+          skipChecks: Array.isArray(skipChecks) ? skipChecks : undefined,
+          instructions: typeof instructions === 'string' ? instructions : undefined,
+        })
+
+        console.log(`[API] Pipeline ${run.id} retry-escalated -> state: ${retried.state}`)
+        res.status(202).json(retried)
+
+        // Kick off the fix-loop stage asynchronously
+        executeFixLoopStage(retried).catch((err) => {
+          console.error(`[API] Pipeline ${run.id} retry-escalated re-run failed:`, (err as Error).message)
+        })
+      } catch (err) {
+        console.error('[API] Pipeline retry-escalated error:', err)
+        if (!res.headersSent) {
+          res.status(400).json({ error: (err as Error).message })
+        }
+      }
+    })
+
+    // API: Get gate results for a pipeline
+    this.app.get('/api/pipelines/:id/gate-results', async (req, res) => {
+      try {
+        const { loadPipelineRun, getPipelineDir } = await import('../pipeline/index.js')
+        const { readFile } = await import('fs/promises')
+        const { join } = await import('path')
+
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+
+        // Return gate results from the run object (always up to date)
+        const gateResults = run.gateResults ?? []
+
+        // Also try to load the verdict file for extra context
+        let verdict = null
+        try {
+          const verdictPath = join(getPipelineDir(run.id), 'gate-results', 'verdict.json')
+          const raw = await readFile(verdictPath, 'utf-8')
+          verdict = JSON.parse(raw)
+        } catch {
+          // No verdict file — that's fine
+        }
+
+        res.json({ gateResults, verdict })
+      } catch (err) {
+        console.error('[API] Gate results error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Restart server (graceful)
     this.app.post('/api/server/restart', async (_req, res) => {
       try {

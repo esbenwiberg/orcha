@@ -4437,6 +4437,9 @@ function renderPipelineDetail(pipelineId) {
   if (pipeline.state === 'error') {
     html += '<button class="pipeline-action-btn retry" onclick="pipelineRecover(\'' + pipeline.id + '\')" title="Retry from failed stage">Retry</button>';
   }
+  if (pipeline.state === 'escalated') {
+    html += '<button class="pipeline-action-btn retry" onclick="showRetryEscalatedModal(\'' + pipeline.id + '\')" title="Retry with more fix loops">Retry</button>';
+  }
   html += '<button class="pipeline-action-btn delete" onclick="pipelineDelete(\'' + pipeline.id + '\')" title="Delete this pipeline">Delete</button>';
   html += '</div>';
   html += '</div>';
@@ -4446,6 +4449,9 @@ function renderPipelineDetail(pipelineId) {
 
   // Checkpoint controls (above the two-column layout)
   html += renderCheckpointControls(pipeline);
+
+  // Gate failure details (shown when gate has failed)
+  html += renderGateFailureDetails(pipeline);
 
   // Two-column layout
   html += '<div class="pipeline-layout">';
@@ -5121,6 +5127,167 @@ function formatTokens(count) {
   if (count >= 1000000) return (count / 1000000).toFixed(1) + 'M';
   if (count >= 1000) return (count / 1000).toFixed(0) + 'K';
   return String(count);
+}
+
+// ============================================================================
+// Gate Failure Details
+// ============================================================================
+
+/**
+ * Render gate failure details panel.
+ * Shows individual check results when gate has failed or pipeline is escalated.
+ */
+function renderGateFailureDetails(pipeline) {
+  var gateResults = pipeline.gateResults;
+  if (!gateResults || gateResults.length === 0) return '';
+
+  var failures = gateResults.filter(function(r) { return r.verdict === 'fail'; });
+  if (failures.length === 0 && pipeline.state !== 'escalated') return '';
+
+  var html = '<div class="gate-failure-panel">';
+  html += '<div class="gate-failure-header">';
+  html += '<span class="gate-failure-title">Gate Results</span>';
+
+  var passCount = gateResults.filter(function(r) { return r.verdict === 'pass'; }).length;
+  var failCount = failures.length;
+  var skipCount = gateResults.filter(function(r) { return r.verdict === 'skip'; }).length;
+  html += '<span class="gate-failure-summary">' + passCount + ' passed, ' + failCount + ' failed, ' + skipCount + ' skipped</span>';
+  html += '</div>';
+
+  html += '<div class="gate-checks-grid">';
+  gateResults.forEach(function(result) {
+    var verdictClass = result.verdict === 'pass' ? 'pass' : result.verdict === 'fail' ? 'fail' : 'skip';
+    var verdictIcon = result.verdict === 'pass' ? '&#10003;' : result.verdict === 'fail' ? '&#10007;' : '&#8212;';
+    html += '<div class="gate-check-item ' + verdictClass + '">';
+    html += '<div class="gate-check-header">';
+    html += '<span class="gate-check-icon">' + verdictIcon + '</span>';
+    html += '<span class="gate-check-name">' + escapeHtml(result.checkName) + '</span>';
+    html += '<span class="gate-check-verdict">' + result.verdict.toUpperCase() + '</span>';
+    html += '</div>';
+    if (result.summary) {
+      html += '<div class="gate-check-summary">' + escapeHtml(result.summary) + '</div>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '</div>';
+
+  return html;
+}
+
+// ============================================================================
+// Retry Escalated Modal
+// ============================================================================
+
+/**
+ * Show the retry-escalated modal with options.
+ */
+function showRetryEscalatedModal(pipelineId) {
+  var pipeline = state.pipelines.find(function(p) { return p.id === pipelineId; });
+  if (!pipeline) return;
+
+  // Get failed check names for the skip checkboxes
+  var failedChecks = (pipeline.gateResults || [])
+    .filter(function(r) { return r.verdict === 'fail'; })
+    .map(function(r) { return r.checkName; });
+
+  var allChecks = ['test', 'lint', 'ac-validator', 'adversary', 'security', 'code-review'];
+
+  var overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'retry-escalated-modal';
+
+  var html = '<div class="retry-escalated-modal">';
+  html += '<div class="retry-modal-header">';
+  html += '<h3>Retry Escalated Pipeline</h3>';
+  html += '<button class="retry-modal-close" onclick="closeRetryEscalatedModal()">&times;</button>';
+  html += '</div>';
+
+  html += '<div class="retry-modal-body">';
+
+  // Additional retries
+  html += '<div class="retry-modal-field">';
+  html += '<label>Additional fix loop attempts</label>';
+  html += '<input type="number" id="retry-additional-count" value="3" min="1" max="10" class="retry-modal-input" />';
+  html += '</div>';
+
+  // Skip checks
+  html += '<div class="retry-modal-field">';
+  html += '<label>Skip gate checks <span class="retry-modal-hint">(failed checks are pre-selected)</span></label>';
+  html += '<div class="retry-modal-checks">';
+  allChecks.forEach(function(check) {
+    var isFailed = failedChecks.indexOf(check) !== -1;
+    html += '<label class="retry-check-label">';
+    html += '<input type="checkbox" class="retry-skip-check" value="' + check + '"' + (isFailed ? ' checked' : '') + ' />';
+    html += '<span class="retry-check-name' + (isFailed ? ' failed' : '') + '">' + check + '</span>';
+    html += '</label>';
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Instructions
+  html += '<div class="retry-modal-field">';
+  html += '<label>Instructions for fix agent <span class="retry-modal-hint">(optional — tell the agent what to do differently)</span></label>';
+  html += '<textarea id="retry-instructions" class="retry-modal-textarea" rows="4" placeholder="e.g., Ignore the lint error about unused imports — they are needed for side effects."></textarea>';
+  html += '</div>';
+
+  html += '</div>'; // end body
+
+  html += '<div class="retry-modal-footer">';
+  html += '<button class="retry-modal-btn cancel" onclick="closeRetryEscalatedModal()">Cancel</button>';
+  html += '<button class="retry-modal-btn confirm" onclick="submitRetryEscalated(\'' + pipelineId + '\')">Retry Pipeline</button>';
+  html += '</div>';
+
+  html += '</div>'; // end modal
+
+  overlay.innerHTML = html;
+  document.body.appendChild(overlay);
+
+  // Close on overlay click
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) closeRetryEscalatedModal();
+  });
+}
+
+function closeRetryEscalatedModal() {
+  var modal = document.getElementById('retry-escalated-modal');
+  if (modal) modal.remove();
+}
+
+async function submitRetryEscalated(pipelineId) {
+  var additionalRetries = parseInt(document.getElementById('retry-additional-count').value) || 3;
+
+  var skipChecks = [];
+  var checkboxes = document.querySelectorAll('.retry-skip-check:checked');
+  checkboxes.forEach(function(cb) { skipChecks.push(cb.value); });
+
+  var instructions = (document.getElementById('retry-instructions').value || '').trim();
+
+  closeRetryEscalatedModal();
+
+  try {
+    var res = await fetch('/api/pipelines/' + pipelineId + '/retry-escalated', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        additionalRetries: additionalRetries,
+        skipChecks: skipChecks.length > 0 ? skipChecks : undefined,
+        instructions: instructions || undefined,
+      }),
+    });
+    if (!res.ok) {
+      var err = await res.json();
+      showToast('Retry failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    var updated = await res.json();
+    showToast('Pipeline retrying with ' + additionalRetries + ' more fix loops', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Retry failed: ' + err.message, 'error');
+  }
 }
 
 // Start app

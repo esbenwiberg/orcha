@@ -268,6 +268,67 @@ export async function recoverPipeline(run: PipelineRun): Promise<PipelineRun> {
 }
 
 // ============================================================================
+// Retry Escalated
+// ============================================================================
+
+export interface RetryEscalatedOptions {
+  /** Additional fix-loop attempts to add (default: 3). */
+  additionalRetries?: number
+  /** Gate check names to skip on retry (e.g. ['lint', 'security']). */
+  skipChecks?: string[]
+  /** Extra instructions for the fix-loop agent. */
+  instructions?: string
+}
+
+/**
+ * Retry a pipeline stuck in 'escalated' state.
+ *
+ * Bumps maxFixLoops, optionally stores skipChecks and userInstructions,
+ * and transitions back to 'fix-loop' for another round of fixes.
+ */
+export async function retryEscalatedPipeline(
+  run: PipelineRun,
+  opts?: RetryEscalatedOptions,
+): Promise<PipelineRun> {
+  if (run.state !== 'escalated') {
+    throw new Error(`Cannot retry: pipeline is in '${run.state}', expected 'escalated'`)
+  }
+
+  const additionalRetries = opts?.additionalRetries ?? 3
+
+  // Bump maxFixLoops so fix-loop won't immediately re-escalate
+  const currentMax = run.config.maxFixLoops ?? 3
+  const newMax = currentMax + additionalRetries
+  const updatedConfig = { ...run.config, maxFixLoops: newMax }
+
+  // Store skip checks and user instructions on the run
+  const now = new Date().toISOString()
+  let updated: PipelineRun = {
+    ...run,
+    config: updatedConfig,
+    skipChecks: opts?.skipChecks?.length ? opts.skipChecks : run.skipChecks,
+    userInstructions: opts?.instructions || run.userInstructions,
+    updatedAt: now,
+  }
+  await savePipelineRun(updated)
+
+  await appendProgress(updated.id, {
+    type: 'info',
+    stage: 'fix-loop',
+    title: `Escalated pipeline retried — ${additionalRetries} more fix loops (max now ${newMax})`,
+    detail: [
+      opts?.skipChecks?.length ? `Skipping checks: ${opts.skipChecks.join(', ')}` : '',
+      opts?.instructions ? `Instructions: ${opts.instructions.slice(0, 200)}` : '',
+    ].filter(Boolean).join('. ') || undefined,
+  }).catch(() => { /* best-effort */ })
+
+  // Transition escalated → fix-loop
+  updated = await transition(updated, 'fix-loop')
+
+  return updated
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 

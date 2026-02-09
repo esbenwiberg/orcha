@@ -3289,3 +3289,249 @@ body {
     text-align: center;
   }
 }
+
+/* ============================================================================
+   Gate Failure Details Panel
+   ============================================================================ */
+
+.gate-failure-panel {
+  background: var(--bg-secondary);
+  border: 1px solid rgba(255, 100, 100, 0.2);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.gate-failure-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.gate-failure-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.gate-failure-summary {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.gate-checks-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gate-check-item {
+  background: var(--bg-primary);
+  border-radius: 6px;
+  padding: 10px 12px;
+  border-left: 3px solid transparent;
+}
+
+.gate-check-item.pass { border-left-color: var(--accent-green); }
+.gate-check-item.fail { border-left-color: var(--status-error); }
+.gate-check-item.skip { border-left-color: var(--text-secondary); }
+
+.gate-check-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.gate-check-icon {
+  font-size: 0.85rem;
+  width: 18px;
+  text-align: center;
+}
+
+.gate-check-item.pass .gate-check-icon { color: var(--accent-green); }
+.gate-check-item.fail .gate-check-icon { color: var(--status-error); }
+.gate-check-item.skip .gate-check-icon { color: var(--text-secondary); }
+
+.gate-check-name {
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.gate-check-verdict {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.gate-check-item.pass .gate-check-verdict { color: var(--accent-green); background: rgba(80, 200, 120, 0.1); }
+.gate-check-item.fail .gate-check-verdict { color: var(--status-error); background: rgba(255, 100, 100, 0.1); }
+.gate-check-item.skip .gate-check-verdict { color: var(--text-secondary); background: rgba(150, 150, 150, 0.1); }
+
+.gate-check-summary {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  padding-left: 26px;
+}
+
+/* ============================================================================
+   Retry Escalated Modal
+   ============================================================================ */
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  backdrop-filter: blur(2px);
+}
+
+.retry-escalated-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  width: 520px;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.retry-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.retry-modal-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.retry-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1.3rem;
+  cursor: pointer;
+  padding: 4px;
+  line-height: 1;
+}
+.retry-modal-close:hover { color: var(--text-primary); }
+
+.retry-modal-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.retry-modal-field label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.retry-modal-hint {
+  font-weight: 400;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.retry-modal-input {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  width: 80px;
+}
+
+.retry-modal-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.retry-check-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.retry-check-label:hover { border-color: var(--accent-blue); }
+
+.retry-check-name { color: var(--text-primary); }
+.retry-check-name.failed { color: var(--status-error); }
+
+.retry-modal-textarea {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-family: inherit;
+  resize: vertical;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.retry-modal-textarea::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.retry-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.retry-modal-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: none;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.retry-modal-btn.cancel {
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
+}
+.retry-modal-btn.cancel:hover { color: var(--text-primary); }
+
+.retry-modal-btn.confirm {
+  background: var(--accent-blue);
+  color: white;
+}
+.retry-modal-btn.confirm:hover { filter: brightness(1.1); }

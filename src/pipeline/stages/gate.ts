@@ -97,19 +97,20 @@ async function runSingleGateStage(
   const startedAt = new Date().toISOString()
 
   try {
-    // Run all gate agents in parallel
+    // Run all gate agents in parallel (respecting skipChecks)
     const agentOpts = {
       modelOverride: opts?.modelOverride,
       budgetOverride: opts?.budgetOverride,
     }
+    const skip = new Set(run.skipChecks ?? [])
 
     const [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
-      runTestRunner(run.worktreePath),
-      runLintRunner(run.worktreePath, run.sourceBranch),
-      runAcValidator(run, agentOpts),
-      runAdversary(run, agentOpts),
-      runSecurityReview(run, agentOpts),
-      runCodeReview(run, agentOpts),
+      skip.has('test') ? makeSkippedResult('test') : runTestRunner(run.worktreePath),
+      skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(run.worktreePath, run.sourceBranch),
+      skip.has('ac-validator') ? makeSkippedResult('ac-validator') : runAcValidator(run, agentOpts),
+      skip.has('adversary') ? makeSkippedResult('adversary') : runAdversary(run, agentOpts),
+      skip.has('security') ? makeSkippedResult('security') : runSecurityReview(run, agentOpts),
+      skip.has('code-review') ? makeSkippedResult('code-review') : runCodeReview(run, agentOpts),
     ])
 
     const results: GateResult[] = [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult]
@@ -183,6 +184,11 @@ async function runSingleGateStage(
 
     // Transition based on verdict
     if (gateOutcome.passed) {
+      // Clear retry hints — they were one-shot for the fix-loop cycle
+      if (run.skipChecks || run.userInstructions) {
+        run = { ...run, skipChecks: undefined, userInstructions: undefined }
+        await savePipelineRun(run)
+      }
       run = await transition(run, 'checkpoint:ship')
     } else {
       run = await transition(run, 'fix-loop')
@@ -380,14 +386,15 @@ async function evaluateCompetitor(
     ...run,
     worktreePath: competitor.worktreePath,
   }
+  const skip = new Set(run.skipChecks ?? [])
 
   const [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
-    runTestRunner(competitor.worktreePath),
-    runLintRunner(competitor.worktreePath, run.sourceBranch),
-    runAcValidator(competitorRun, agentOpts),
-    runAdversary(competitorRun, agentOpts),
-    runSecurityReview(competitorRun, agentOpts),
-    runCodeReview(competitorRun, agentOpts),
+    skip.has('test') ? makeSkippedResult('test') : runTestRunner(competitor.worktreePath),
+    skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(competitor.worktreePath, run.sourceBranch),
+    skip.has('ac-validator') ? makeSkippedResult('ac-validator') : runAcValidator(competitorRun, agentOpts),
+    skip.has('adversary') ? makeSkippedResult('adversary') : runAdversary(competitorRun, agentOpts),
+    skip.has('security') ? makeSkippedResult('security') : runSecurityReview(competitorRun, agentOpts),
+    skip.has('code-review') ? makeSkippedResult('code-review') : runCodeReview(competitorRun, agentOpts),
   ])
 
   const results: GateResult[] = [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult]
@@ -417,6 +424,27 @@ async function cleanupLosingWorktrees(
     }
   }
 }
+
+// ============================================================================
+// Skip Checks Helper
+// ============================================================================
+
+/**
+ * Create a skipped GateResult for a check the user chose to bypass.
+ */
+function makeSkippedResult(checkName: string): GateResult {
+  return {
+    verdict: 'skip',
+    checkName,
+    summary: `Skipped by user override`,
+    timestamp: new Date().toISOString(),
+  }
+}
+
+/**
+ * Gate check name mapping (friendly name → agent function key).
+ */
+const GATE_CHECK_NAMES = ['test', 'lint', 'ac-validator', 'adversary', 'security', 'code-review'] as const
 
 // ============================================================================
 // Verdict Aggregation
