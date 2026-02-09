@@ -182,8 +182,6 @@ export interface BlueprintOutput {
   headline: string
   /** 1-2 sentence summary of what this blueprint accomplishes. */
   shortDescription: string
-  /** Total number of milestones in this blueprint. */
-  milestoneCount: number
   /** High-level description of the implementation approach. */
   approach: string
   /** Array of file paths that need to be created or modified. */

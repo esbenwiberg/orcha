@@ -218,7 +218,6 @@ export function buildArchitectPrompt(
     'Your output must be a JSON object with these fields:',
     '- headline: A short, clear title for the plan (e.g. "Add User Authentication")',
     '- shortDescription: A 1-2 sentence summary of what this blueprint accomplishes',
-    '- milestoneCount: Total number of milestones in your plan',
     '- approach: High-level description of the implementation approach',
     '- filesToTouch: Array of file paths that need to be created or modified',
     '- risks: Array of potential risks or concerns',
