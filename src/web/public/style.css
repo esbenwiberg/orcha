@@ -3535,3 +3535,285 @@ body {
   color: white;
 }
 .retry-modal-btn.confirm:hover { filter: brightness(1.1); }
+
+/* ============================================================================
+   Ship Review Panel
+   ============================================================================ */
+
+.ship-review-loading {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.ship-review-error {
+  padding: 16px;
+  text-align: center;
+  color: var(--status-error);
+  font-size: 0.85rem;
+}
+
+.ship-review-error button {
+  margin-left: 8px;
+  padding: 4px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.ship-review-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.ship-review-actions-bottom {
+  margin-bottom: 0;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+/* Summary card */
+.ship-summary-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.ship-summary-approach {
+  margin-bottom: 12px;
+}
+
+.ship-summary-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.ship-summary-value {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.ship-summary-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.ship-metric {
+  text-align: center;
+  min-width: 70px;
+}
+
+.ship-metric-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ship-metric-add { color: var(--accent-green); }
+.ship-metric-del { color: var(--status-error); }
+
+.ship-metric-label {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+/* Gate results in ship review */
+.ship-gate-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.ship-gate-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.ship-gate-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.ship-gate-summary {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.ship-gate-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ship-gate-item {
+  background: var(--bg-primary);
+  border-radius: 6px;
+  border-left: 3px solid transparent;
+  overflow: hidden;
+}
+
+.ship-gate-item.pass { border-left-color: var(--accent-green); }
+.ship-gate-item.fail { border-left-color: var(--status-error); }
+.ship-gate-item.skip { border-left-color: var(--text-secondary); }
+
+.ship-gate-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ship-gate-item-header:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ship-gate-expand {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  transition: transform 0.15s;
+}
+
+.ship-gate-detail {
+  padding: 0 12px 12px 38px;
+}
+
+.ship-gate-detail-text {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  margin: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.15);
+  padding: 10px;
+  border-radius: 4px;
+}
+
+/* Diff viewer */
+.ship-diff-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.ship-diff-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ship-diff-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.ship-diff-stat {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.ship-diff-viewer {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.ship-diff-pre {
+  margin: 0;
+  padding: 8px 0;
+  font-family: 'SFMono-Regular', 'Consolas', 'Monaco', monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  tab-size: 4;
+}
+
+.ship-diff-pre span {
+  display: block;
+  padding: 0 16px;
+  min-height: 1.5em;
+}
+
+.diff-add {
+  background: rgba(46, 160, 67, 0.15);
+  color: #7ee787;
+}
+
+.diff-remove {
+  background: rgba(248, 81, 73, 0.15);
+  color: #ffa198;
+}
+
+.diff-hunk {
+  background: rgba(56, 139, 253, 0.1);
+  color: #79c0ff;
+}
+
+.diff-file-header {
+  color: var(--text-secondary);
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.03);
+  border-top: 1px solid var(--border-color);
+  padding-top: 4px;
+  margin-top: 4px;
+}
+
+.diff-context {
+  color: var(--text-secondary);
+}
+
+.ship-diff-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.ship-diff-truncated {
+  padding: 12px;
+  text-align: center;
+  border-top: 1px solid var(--border-color);
+}
+
+.ship-diff-show-all {
+  padding: 6px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--accent-blue);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.ship-diff-show-all:hover {
+  background: var(--bg-secondary);
+  border-color: var(--accent-blue);
+}

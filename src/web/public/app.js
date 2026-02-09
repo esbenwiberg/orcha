@@ -4581,18 +4581,26 @@ function renderCheckpointControls(pipeline) {
   if (pipeline.state !== 'checkpoint:arch' && pipeline.state !== 'checkpoint:ship') {
     return '';
   }
+
+  // Ship review gets a full review panel loaded asynchronously
+  if (pipeline.state === 'checkpoint:ship') {
+    let html = '<div id="ship-review-container" data-pipeline-id="' + pipeline.id + '">';
+    html += '<div class="ship-review-loading">Loading ship review...</div>';
+    html += '</div>';
+    // Trigger async load after render
+    setTimeout(function() { loadShipReview(pipeline.id); }, 0);
+    return html;
+  }
+
+  // Architect checkpoint: simple approve/reject/feedback
   let html = '<div class="pipeline-section">';
-  html += '<div class="pipeline-section-title">Checkpoint: ' + (pipeline.state === 'checkpoint:arch' ? 'Architect Review' : 'Ship Review') + '</div>';
+  html += '<div class="pipeline-section-title">Checkpoint: Architect Review</div>';
   html += '<div class="checkpoint-controls">';
   html += '<button class="checkpoint-btn approve" onclick="pipelineApprove(\'' + pipeline.id + '\')">Approve</button>';
   html += '<button class="checkpoint-btn reject" onclick="pipelineReject(\'' + pipeline.id + '\')">Reject</button>';
-  if (pipeline.state === 'checkpoint:arch') {
-    html += '<button class="checkpoint-btn feedback" onclick="pipelineFeedback(\'' + pipeline.id + '\')">Feedback</button>';
-  }
+  html += '<button class="checkpoint-btn feedback" onclick="pipelineFeedback(\'' + pipeline.id + '\')">Feedback</button>';
   html += '</div>';
-  if (pipeline.state === 'checkpoint:arch') {
-    html += '<textarea id="pipeline-feedback-text" class="feedback-textarea" placeholder="Enter feedback for the architect..." style="display:none;"></textarea>';
-  }
+  html += '<textarea id="pipeline-feedback-text" class="feedback-textarea" placeholder="Enter feedback for the architect..." style="display:none;"></textarea>';
   html += '</div>';
   return html;
 }
@@ -5300,6 +5308,288 @@ async function submitRetryEscalated(pipelineId) {
     updatePipelineSidebar(state.pipelines);
   } catch (err) {
     showToast('Retry failed: ' + err.message, 'error');
+  }
+}
+
+// ============================================================================
+// Ship Review Panel
+// ============================================================================
+
+/**
+ * Load all data for the ship review panel and render it.
+ */
+async function loadShipReview(pipelineId) {
+  var container = document.getElementById('ship-review-container');
+  if (!container || container.dataset.pipelineId !== pipelineId) return;
+
+  try {
+    // Fetch diff, gate results, and blueprint in parallel
+    var [diffRes, gateRes, bpRes] = await Promise.all([
+      fetch('/api/pipelines/' + pipelineId + '/diff').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+      fetch('/api/pipelines/' + pipelineId + '/gate-results').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+      fetch('/api/pipelines/' + pipelineId + '/blueprint').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    ]);
+
+    var pipeline = state.pipelines.find(function(p) { return p.id === pipelineId; });
+    if (!pipeline) return;
+
+    // Re-check container still exists (user may have navigated away)
+    container = document.getElementById('ship-review-container');
+    if (!container || container.dataset.pipelineId !== pipelineId) return;
+
+    container.innerHTML = renderShipReviewPanel(pipeline, diffRes, gateRes, bpRes);
+  } catch (err) {
+    console.error('Failed to load ship review:', err);
+    if (container) {
+      container.innerHTML = '<div class="ship-review-error">Failed to load review data. <button onclick="loadShipReview(\'' + pipelineId + '\')">Retry</button></div>';
+    }
+  }
+}
+
+/**
+ * Render the full ship review panel HTML.
+ */
+function renderShipReviewPanel(pipeline, diffData, gateData, blueprint) {
+  var html = '';
+
+  // Section title
+  html += '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Ship Review</div>';
+
+  // Action buttons (top)
+  html += '<div class="ship-review-actions">';
+  html += '<button class="checkpoint-btn approve" onclick="pipelineApprove(\'' + pipeline.id + '\')">Approve & Ship</button>';
+  html += '<button class="checkpoint-btn reject" onclick="pipelineReject(\'' + pipeline.id + '\')">Reject</button>';
+  html += '</div>';
+
+  // Summary card
+  html += renderShipSummaryCard(pipeline, diffData, blueprint);
+
+  // Gate results
+  html += renderShipGateResults(gateData);
+
+  // Diff viewer
+  html += renderDiffViewer(diffData);
+
+  // Action buttons (bottom, for long reviews)
+  html += '<div class="ship-review-actions ship-review-actions-bottom">';
+  html += '<button class="checkpoint-btn approve" onclick="pipelineApprove(\'' + pipeline.id + '\')">Approve & Ship</button>';
+  html += '<button class="checkpoint-btn reject" onclick="pipelineReject(\'' + pipeline.id + '\')">Reject</button>';
+  html += '</div>';
+
+  html += '</div>'; // end pipeline-section
+  return html;
+}
+
+/**
+ * Render the summary card with key metrics.
+ */
+function renderShipSummaryCard(pipeline, diffData, blueprint) {
+  var html = '<div class="ship-summary-card">';
+
+  // Blueprint approach
+  var approach = '';
+  if (blueprint) {
+    approach = blueprint.approach || blueprint.content || '';
+  }
+  if (approach) {
+    html += '<div class="ship-summary-approach">';
+    html += '<div class="ship-summary-label">Approach</div>';
+    html += '<div class="ship-summary-value">' + escapeHtml(approach) + '</div>';
+    html += '</div>';
+  }
+
+  // Metrics grid
+  html += '<div class="ship-summary-metrics">';
+
+  // Diff stats
+  if (diffData) {
+    html += '<div class="ship-metric">';
+    html += '<div class="ship-metric-value">' + (diffData.filesChanged || 0) + '</div>';
+    html += '<div class="ship-metric-label">Files changed</div>';
+    html += '</div>';
+    html += '<div class="ship-metric">';
+    html += '<div class="ship-metric-value ship-metric-add">+' + (diffData.insertions || 0) + '</div>';
+    html += '<div class="ship-metric-label">Insertions</div>';
+    html += '</div>';
+    html += '<div class="ship-metric">';
+    html += '<div class="ship-metric-value ship-metric-del">-' + (diffData.deletions || 0) + '</div>';
+    html += '<div class="ship-metric-label">Deletions</div>';
+    html += '</div>';
+  }
+
+  // Fix loops
+  html += '<div class="ship-metric">';
+  html += '<div class="ship-metric-value">' + (pipeline.fixLoopCount || 0) + '</div>';
+  html += '<div class="ship-metric-label">Fix loops</div>';
+  html += '</div>';
+
+  // Cost
+  if (pipeline.usageSnapshot && pipeline.usageSnapshot.totalCostUsd !== undefined) {
+    html += '<div class="ship-metric">';
+    html += '<div class="ship-metric-value">$' + pipeline.usageSnapshot.totalCostUsd.toFixed(2) + '</div>';
+    html += '<div class="ship-metric-label">Est. cost</div>';
+    html += '</div>';
+  }
+
+  // AC count
+  if (pipeline.acceptanceCriteria && pipeline.acceptanceCriteria.length > 0) {
+    html += '<div class="ship-metric">';
+    html += '<div class="ship-metric-value">' + pipeline.acceptanceCriteria.length + '</div>';
+    html += '<div class="ship-metric-label">Acceptance criteria</div>';
+    html += '</div>';
+  }
+
+  html += '</div>'; // end metrics
+  html += '</div>'; // end card
+  return html;
+}
+
+/**
+ * Render gate results for ship review — all checks with expandable details.
+ */
+function renderShipGateResults(gateData) {
+  if (!gateData || !gateData.gateResults || gateData.gateResults.length === 0) {
+    return '';
+  }
+
+  var results = gateData.gateResults;
+  var passCount = results.filter(function(r) { return r.verdict === 'pass'; }).length;
+  var failCount = results.filter(function(r) { return r.verdict === 'fail'; }).length;
+  var skipCount = results.filter(function(r) { return r.verdict === 'skip'; }).length;
+
+  var html = '<div class="ship-gate-section">';
+  html += '<div class="ship-gate-header">';
+  html += '<span class="ship-gate-title">Gate Results</span>';
+  html += '<span class="ship-gate-summary">' + passCount + ' passed' +
+    (failCount > 0 ? ', ' + failCount + ' failed' : '') +
+    (skipCount > 0 ? ', ' + skipCount + ' skipped' : '') + '</span>';
+  html += '</div>';
+
+  html += '<div class="ship-gate-grid">';
+  results.forEach(function(result, idx) {
+    var verdictClass = result.verdict === 'pass' ? 'pass' : result.verdict === 'fail' ? 'fail' : 'skip';
+    var verdictIcon = result.verdict === 'pass' ? '&#10003;' : result.verdict === 'fail' ? '&#10007;' : '&#8212;';
+
+    html += '<div class="ship-gate-item ' + verdictClass + '">';
+    html += '<div class="ship-gate-item-header" onclick="toggleShipGateDetail(' + idx + ')">';
+    html += '<span class="gate-check-icon">' + verdictIcon + '</span>';
+    html += '<span class="gate-check-name">' + escapeHtml(result.checkName) + '</span>';
+    html += '<span class="gate-check-verdict">' + result.verdict.toUpperCase() + '</span>';
+    html += '<span class="ship-gate-expand">&#9656;</span>';
+    html += '</div>';
+
+    // Expandable detail
+    if (result.summary) {
+      html += '<div class="ship-gate-detail" id="ship-gate-detail-' + idx + '" style="display:none;">';
+      html += '<pre class="ship-gate-detail-text">' + escapeHtml(result.summary) + '</pre>';
+      html += '</div>';
+    }
+
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '</div>';
+
+  return html;
+}
+
+/**
+ * Toggle a gate result detail panel.
+ */
+function toggleShipGateDetail(idx) {
+  var detail = document.getElementById('ship-gate-detail-' + idx);
+  if (!detail) return;
+  var isHidden = detail.style.display === 'none';
+  detail.style.display = isHidden ? 'block' : 'none';
+  // Rotate arrow
+  var item = detail.parentElement;
+  if (item) {
+    var arrow = item.querySelector('.ship-gate-expand');
+    if (arrow) arrow.innerHTML = isHidden ? '&#9662;' : '&#9656;';
+  }
+}
+
+/**
+ * Render the diff viewer with per-line coloring and truncation.
+ */
+function renderDiffViewer(diffData) {
+  if (!diffData || !diffData.diff) {
+    return '<div class="ship-diff-empty">No diff available</div>';
+  }
+
+  var lines = diffData.diff.split('\n');
+  var totalLines = lines.length;
+  var INITIAL_LIMIT = 500;
+  var truncated = totalLines > INITIAL_LIMIT;
+
+  var html = '<div class="ship-diff-section">';
+  html += '<div class="ship-diff-header">';
+  html += '<span class="ship-diff-title">Code Changes</span>';
+  html += '<span class="ship-diff-stat">' + totalLines + ' lines</span>';
+  html += '</div>';
+
+  html += '<div class="ship-diff-viewer" id="ship-diff-viewer">';
+  html += '<pre class="ship-diff-pre">';
+
+  var renderCount = truncated ? INITIAL_LIMIT : totalLines;
+  for (var i = 0; i < renderCount; i++) {
+    html += renderDiffLine(lines[i]);
+  }
+
+  html += '</pre>';
+
+  if (truncated) {
+    html += '<div class="ship-diff-truncated" id="ship-diff-truncated">';
+    html += '<button class="ship-diff-show-all" onclick="showAllDiffLines()">Show all ' + totalLines + ' lines (' + (totalLines - INITIAL_LIMIT) + ' more)</button>';
+    html += '</div>';
+    // Store remaining lines as data attribute for lazy expansion
+    html += '<script type="application/json" id="ship-diff-remaining">' + JSON.stringify(lines.slice(INITIAL_LIMIT)) + '<\/script>';
+  }
+
+  html += '</div>';
+  html += '</div>';
+
+  return html;
+}
+
+/**
+ * Render a single diff line with appropriate CSS class.
+ */
+function renderDiffLine(line) {
+  var cls = 'diff-context';
+  if (line.startsWith('+')) {
+    cls = line.startsWith('+++') ? 'diff-file-header' : 'diff-add';
+  } else if (line.startsWith('-')) {
+    cls = line.startsWith('---') ? 'diff-file-header' : 'diff-remove';
+  } else if (line.startsWith('@@')) {
+    cls = 'diff-hunk';
+  } else if (line.startsWith('diff ')) {
+    cls = 'diff-file-header';
+  }
+  return '<span class="' + cls + '">' + escapeHtml(line) + '\n</span>';
+}
+
+/**
+ * Show all remaining diff lines (called from truncation button).
+ */
+function showAllDiffLines() {
+  var remainingEl = document.getElementById('ship-diff-remaining');
+  var preEl = document.querySelector('.ship-diff-pre');
+  var truncatedEl = document.getElementById('ship-diff-truncated');
+  if (!remainingEl || !preEl) return;
+
+  try {
+    var remaining = JSON.parse(remainingEl.textContent || '[]');
+    var html = '';
+    for (var i = 0; i < remaining.length; i++) {
+      html += renderDiffLine(remaining[i]);
+    }
+    preEl.insertAdjacentHTML('beforeend', html);
+    if (truncatedEl) truncatedEl.remove();
+    remainingEl.remove();
+  } catch (err) {
+    console.error('Failed to expand diff:', err);
   }
 }
 

@@ -2382,6 +2382,69 @@ export class WebDashboardServer {
       }
     })
 
+    // API: Get diff for a pipeline (all changes from source branch)
+    this.app.get('/api/pipelines/:id/diff', async (req, res) => {
+      try {
+        const { loadPipelineRun } = await import('../pipeline/index.js')
+        const { execSync } = await import('child_process')
+
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+
+        const execOpts = { cwd: run.worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
+
+        // Find merge-base with source branch
+        let mergeBase: string
+        try {
+          mergeBase = execSync(`git merge-base origin/${run.sourceBranch} HEAD`, execOpts).trim()
+        } catch {
+          try {
+            mergeBase = execSync(`git merge-base ${run.sourceBranch} HEAD`, execOpts).trim()
+          } catch {
+            // Fallback: diff against parent commit
+            mergeBase = 'HEAD~1'
+          }
+        }
+
+        // Get full diff
+        let diff = ''
+        try {
+          diff = execSync(`git diff ${mergeBase}...HEAD`, execOpts)
+        } catch {
+          try { diff = execSync(`git diff ${mergeBase} HEAD`, execOpts) } catch { /* empty diff */ }
+        }
+
+        // Get stat summary
+        let stat = ''
+        let filesChanged = 0
+        let insertions = 0
+        let deletions = 0
+        try {
+          stat = execSync(`git diff --stat ${mergeBase}...HEAD`, execOpts)
+          // Parse last line: " N files changed, N insertions(+), N deletions(-)"
+          const lastLine = stat.trim().split('\n').pop() || ''
+          const filesMatch = lastLine.match(/(\d+) files? changed/)
+          const insMatch = lastLine.match(/(\d+) insertions?/)
+          const delMatch = lastLine.match(/(\d+) deletions?/)
+          if (filesMatch) filesChanged = parseInt(filesMatch[1], 10)
+          if (insMatch) insertions = parseInt(insMatch[1], 10)
+          if (delMatch) deletions = parseInt(delMatch[1], 10)
+        } catch {
+          try {
+            stat = execSync(`git diff --stat ${mergeBase} HEAD`, execOpts)
+          } catch { /* no stat */ }
+        }
+
+        res.json({ diff, stat, filesChanged, insertions, deletions })
+      } catch (err) {
+        console.error('[API] Pipeline diff error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Restart server (graceful)
     this.app.post('/api/server/restart', async (_req, res) => {
       try {
