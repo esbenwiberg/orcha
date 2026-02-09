@@ -5338,11 +5338,52 @@ async function loadShipReview(pipelineId) {
     if (!container || container.dataset.pipelineId !== pipelineId) return;
 
     container.innerHTML = renderShipReviewPanel(pipeline, diffRes, gateRes, bpRes);
+
+    // Fetch AI summary in background (may take a few seconds on first load)
+    fetchShipSummary(pipelineId);
   } catch (err) {
     console.error('Failed to load ship review:', err);
     if (container) {
       container.innerHTML = '<div class="ship-review-error">Failed to load review data. <button onclick="loadShipReview(\'' + pipelineId + '\')">Retry</button></div>';
     }
+  }
+}
+
+/**
+ * Fetch AI-generated ship summary and inject it into the summary card.
+ */
+async function fetchShipSummary(pipelineId) {
+  var el = document.getElementById('ship-noteworthy-slot');
+  if (!el) return;
+
+  el.innerHTML = '<div class="ship-summary-label" style="color:var(--text-muted);font-size:0.8rem;">Generating summary...</div>';
+
+  try {
+    var res = await fetch('/api/pipelines/' + pipelineId + '/ship-summary');
+    if (!res.ok) throw new Error('Failed');
+    var summary = await res.json();
+
+    // Re-check slot still exists
+    el = document.getElementById('ship-noteworthy-slot');
+    if (!el) return;
+
+    var html = '';
+    if (summary.description) {
+      html += '<div class="ship-summary-description">' + escapeHtml(summary.description) + '</div>';
+    }
+    if (summary.changes && summary.changes.length > 0) {
+      html += '<div class="ship-summary-label" style="margin-top:10px;">Noteworthy Changes</div>';
+      html += '<ul class="ship-noteworthy-list">';
+      summary.changes.forEach(function(c) {
+        html += '<li>' + escapeHtml(c) + '</li>';
+      });
+      html += '</ul>';
+    }
+    el.innerHTML = html;
+  } catch (err) {
+    console.error('Failed to load ship summary:', err);
+    el = document.getElementById('ship-noteworthy-slot');
+    if (el) el.innerHTML = '';
   }
 }
 
@@ -5552,17 +5593,8 @@ function renderShipSummaryCard(pipeline, diffData, blueprint) {
 
   html += '</div>'; // end metrics
 
-  // Noteworthy Changes — commit messages describing what was implemented
-  if (diffData && diffData.commits && diffData.commits.length > 0) {
-    html += '<div class="ship-summary-noteworthy">';
-    html += '<div class="ship-summary-label">Noteworthy Changes</div>';
-    html += '<ul class="ship-noteworthy-list">';
-    diffData.commits.forEach(function(c) {
-      html += '<li>' + escapeHtml(c.message) + '</li>';
-    });
-    html += '</ul>';
-    html += '</div>';
-  }
+  // AI-generated summary slot (populated async by fetchShipSummary)
+  html += '<div class="ship-summary-noteworthy" id="ship-noteworthy-slot"></div>';
 
   html += '</div>'; // end card
   return html;

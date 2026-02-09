@@ -2458,6 +2458,146 @@ export class WebDashboardServer {
       }
     })
 
+    // API: Generate AI ship summary for a pipeline
+    this.app.get('/api/pipelines/:id/ship-summary', async (req, res) => {
+      try {
+        const { loadPipelineRun, getPipelineDir } = await import('../pipeline/index.js')
+        const { readFile, writeFile, mkdir } = await import('fs/promises')
+        const { execSync, spawn: spawnProc } = await import('child_process')
+
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+
+        // Check for cached summary
+        const shipDir = join(getPipelineDir(run.id), 'ship')
+        const summaryPath = join(shipDir, 'summary.json')
+        try {
+          const cached = await readFile(summaryPath, 'utf-8')
+          res.json(JSON.parse(cached))
+          return
+        } catch { /* no cache, generate */ }
+
+        // Gather context for the AI
+        const execOpts = { cwd: run.worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
+
+        // Get diff stat (compact)
+        let diffStat = ''
+        try {
+          let mergeBase = ''
+          try { mergeBase = execSync(`git merge-base origin/${run.sourceBranch} HEAD`, execOpts).trim() }
+          catch { try { mergeBase = execSync(`git merge-base ${run.sourceBranch} HEAD`, execOpts).trim() } catch { mergeBase = 'HEAD~1' } }
+          diffStat = execSync(`git diff --stat ${mergeBase}...HEAD`, execOpts)
+        } catch { /* empty */ }
+
+        // Get commit messages
+        let commitLog = ''
+        try {
+          let mergeBase = ''
+          try { mergeBase = execSync(`git merge-base origin/${run.sourceBranch} HEAD`, execOpts).trim() }
+          catch { try { mergeBase = execSync(`git merge-base ${run.sourceBranch} HEAD`, execOpts).trim() } catch { mergeBase = 'HEAD~1' } }
+          commitLog = execSync(`git log --oneline ${mergeBase}...HEAD`, execOpts)
+        } catch { /* empty */ }
+
+        // Get blueprint approach
+        let approach = ''
+        try {
+          const bpPath = join(getPipelineDir(run.id), 'blueprint.json')
+          const bpRaw = await readFile(bpPath, 'utf-8')
+          const bp = JSON.parse(bpRaw)
+          approach = bp.approach || bp.content || ''
+        } catch { /* no blueprint */ }
+
+        // Get truncated diff (first 8000 chars to stay within context)
+        let diffSnippet = ''
+        try {
+          let mergeBase = ''
+          try { mergeBase = execSync(`git merge-base origin/${run.sourceBranch} HEAD`, execOpts).trim() }
+          catch { try { mergeBase = execSync(`git merge-base ${run.sourceBranch} HEAD`, execOpts).trim() } catch { mergeBase = 'HEAD~1' } }
+          const fullDiff = execSync(`git diff ${mergeBase}...HEAD`, execOpts)
+          diffSnippet = fullDiff.slice(0, 8000)
+        } catch { /* empty */ }
+
+        const prompt = `You are summarizing code changes for a ship review dashboard. Be concise and specific.
+
+Task description: ${run.description}
+
+${approach ? `Blueprint approach: ${approach.slice(0, 1000)}` : ''}
+
+Diff stat:
+${diffStat}
+
+Commits:
+${commitLog}
+
+Diff (truncated):
+${diffSnippet}
+
+Respond with ONLY valid JSON, no markdown fences, in this exact format:
+{"description":"One or two sentences describing what was implemented in plain English.","changes":["First noteworthy change in plain English","Second noteworthy change","Third noteworthy change"]}
+
+Rules:
+- "description" should summarize the overall implementation in plain English (what the code now does, not what files changed)
+- "changes" should be 3-6 bullet points of the most noteworthy things that were done, in plain English
+- Focus on user-visible behavior and architectural decisions, not file names or commit hashes
+- Be specific: "Added Stripe checkout session API endpoint" not "Updated payment code"
+- Keep each bullet to one sentence`
+
+        // Spawn claude CLI for a quick summary
+        const result = await new Promise<string>((resolve, reject) => {
+          const proc = spawnProc('claude', [
+            '--model', 'haiku',
+            '-p', prompt,
+            '--output-format', 'text',
+            '--max-budget-usd', '0.05',
+            '--dangerously-skip-permissions',
+          ], {
+            cwd: run.worktreePath,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: { ...process.env, CI: '1' },
+          })
+
+          const chunks: Buffer[] = []
+          proc.stdout.on('data', (chunk: Buffer) => chunks.push(chunk))
+          proc.stderr.on('data', () => {}) // ignore stderr
+          proc.on('error', reject)
+          proc.on('close', (code) => {
+            const output = Buffer.concat(chunks).toString('utf-8').trim()
+            if (code === 0 && output) {
+              resolve(output)
+            } else {
+              reject(new Error(`claude exited with code ${code}`))
+            }
+          })
+
+          // Timeout after 30 seconds
+          setTimeout(() => { try { proc.kill() } catch {} }, 30000)
+        })
+
+        // Parse the JSON response
+        let summary: { description: string; changes: string[] }
+        try {
+          // Strip markdown fences if present
+          const cleaned = result.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+          summary = JSON.parse(cleaned)
+        } catch {
+          // Fallback: use raw text as description
+          summary = { description: result.slice(0, 500), changes: [] }
+        }
+
+        // Cache to file
+        await mkdir(shipDir, { recursive: true })
+        await writeFile(summaryPath, JSON.stringify(summary, null, 2), 'utf-8')
+
+        res.json(summary)
+      } catch (err) {
+        console.error('[API] Ship summary error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Restart server (graceful)
     this.app.post('/api/server/restart', async (_req, res) => {
       try {

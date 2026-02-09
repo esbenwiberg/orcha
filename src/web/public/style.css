@@ -3691,6 +3691,7 @@ body {
   cursor: pointer;
   user-select: none;
 }
+.ship-gate-item-header .gate-check-name { flex: 1; }
 
 .ship-gate-item-header:hover {
   background: rgba(255, 255, 255, 0.03);
@@ -3876,4 +3877,10 @@ body {
   content: '•';
   color: var(--accent-purple);
   margin-right: 6px;
+}
+.ship-summary-description {
+  font-size: 0.88rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+  margin-bottom: 4px;
 }
