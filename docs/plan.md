@@ -1,147 +1,83 @@
-# Blueprint: Ship Review Feedback & Post-Ship Review Points
+# Blueprint: Scrollable Activity Timeline
 
 ## Goal
 
-Add two capabilities to the pipeline:
-1. **Ship checkpoint feedback** — instead of binary approve/reject at `checkpoint:ship`, allow the reviewer to send feedback that cycles the pipeline back through `dev → gate → fix-loop → checkpoint:ship` with the reviewer's notes.
-2. **Post-ship review points** — after a PR is created (`completed` state), allow the reviewer to paste PR review comments back into the pipeline, which re-enters `dev → gate → checkpoint:ship` to address them.
+Contain the Activity Timeline in a scrollable div with a fixed max-height so that when the timeline grows long, the Live Output panel remains visible without having to scroll the entire page.
 
 ## Non-Goals
 
-- **No GitHub/Azure DevOps API integration yet** — review points are manually copy/pasted (future milestone: a "Fetch from PR" button).
-- **No new AI summarization** of review points — the reviewer's text is passed verbatim as context to the dev agent.
-- **No changes to the architect checkpoint** — that flow already has approve/reject/feedback.
-- **No PR update logic** — after addressing review points, the pipeline pushes to the same branch (the existing PR updates automatically via force-push or new commits).
+- Changing the timeline entry rendering logic or styling.
+- Adding pagination or lazy-loading of timeline entries.
+- Modifying the side panel or responsive layout.
 
 ## Acceptance Criteria
 
-- [ ] Ship review panel shows a "Request Changes" button alongside Approve & Reject
-- [ ] Clicking "Request Changes" reveals a textarea for feedback
-- [ ] Submitting feedback transitions `checkpoint:ship → dev` and re-runs `dev → gate → checkpoint:ship`
-- [ ] The feedback text is injected into the dev agent's prompt as reviewer context
-- [ ] Completed pipelines show a "Address Review Points" section with a textarea
-- [ ] Pasting review comments and submitting transitions `completed → dev` and re-runs the dev→gate→ship cycle
-- [ ] Pipeline progress log shows entries for "Ship feedback" and "Review points received"
-- [ ] State machine allows `checkpoint:ship → dev` and `completed → dev` transitions
-- [ ] `fixLoopCount` resets to 0 when re-entering dev from either path
+- [ ] Activity Timeline section has `max-height` and `overflow-y: auto`, capped so the Live Output below is always reachable without scrolling the whole page.
+- [ ] New entries (prepended at top) remain visible — the scroll position stays at the top when new entries arrive.
+- [ ] The Live Output section is always visible on screen when a pipeline is active, without needing to scroll past the timeline.
+- [ ] No visual regressions — timeline entries, dots, lines, and gate cards render correctly inside the constrained container.
+- [ ] Both `src/web/public/` and `dist/web/public/` files are synced.
 
 ## Architecture
 
-### State Machine Changes
+Pure CSS change on `.activity-timeline` plus a minor JS tweak to ensure scroll position stays at top on live-append.
 
-```
-Current:
-  checkpoint:ship → ship | cancelled
-  completed       → (terminal, no transitions)
+### Changes
 
-New:
-  checkpoint:ship → ship | cancelled | dev         (feedback sends back to dev)
-  completed       → dev                             (review points re-open pipeline)
-```
+**CSS** (`style.css`):
+- Add `max-height: 50vh` and `overflow-y: auto` to `.activity-timeline`.
+- Add subtle styling (border/border-radius) so the scrollable area is visually distinct.
 
-`completed` moves from `TERMINAL_STATES` to `SOFT_TERMINAL_STATES` (like `escalated`) — the pipeline is done but can be reopened.
+**JS** (`app.js`):
+- After prepending a new timeline entry via live-append, set `container.scrollTop = 0` to keep the newest entry visible.
 
-### Data Flow
+## Key Files
 
-#### Ship Feedback (checkpoint:ship → dev)
-```
-UI: "Request Changes" button → reveals textarea
-  → POST /api/pipelines/:id/ship-feedback { feedback: string }
-  → feedbackShipCheckpoint(run, feedback)
-    → appendProgress("Ship review feedback — re-running dev")
-    → reset fixLoopCount to 0
-    → transition: checkpoint:ship → dev
-    → server's continueRun loop: dev → gate → fix-loop → checkpoint:ship
-```
-
-#### Post-Ship Review Points (completed → dev)
-```
-UI: "Address Review Points" textarea on completed pipeline detail
-  → POST /api/pipelines/:id/review-points { reviewPoints: string }
-  → submitReviewPoints(run, reviewPoints)
-    → appendProgress("PR review points received — re-running dev")
-    → reset fixLoopCount to 0
-    → transition: completed → dev
-    → server's continueRun loop: dev → gate → checkpoint:ship
-```
-
-### Components Modified
-
-| Layer | File | Change |
-|-------|------|--------|
-| Types | `src/pipeline/types.ts` | Move `completed` to SOFT_TERMINAL_STATES; add `reviewRounds?: number` to PipelineRun |
-| Engine | `src/pipeline/pipeline-engine.ts` | Add `dev` to checkpoint:ship transition set; add `completed → dev` entry; update recovery map |
-| Checkpoint | `src/pipeline/checkpoint.ts` | Add `feedbackShipCheckpoint()` and `submitReviewPoints()` |
-| Server | `src/web/server.ts` | Add `/ship-feedback` and `/review-points` API endpoints with continueRun |
-| Frontend | `src/web/public/app.js` | "Request Changes" in ship review; "Address Review Points" for completed pipelines |
-| Styles | `src/web/public/style.css` | Style new buttons and review points section |
+| File | Change |
+|------|--------|
+| `src/web/public/style.css` | Add max-height + overflow to `.activity-timeline` |
+| `src/web/public/app.js` | Add `scrollTop = 0` after prepend in live-append handler |
 
 ## Milestones
 
-### Milestone 1: State Machine & Backend Logic
+### M1: CSS — constrain activity timeline height
 
-**Intent:** Enable the two new transitions and add checkpoint handler functions.
+**Intent:** Make the `.activity-timeline` container scrollable with a sensible max-height.
 
-**Files:**
-- `src/pipeline/types.ts` — Move `completed` from TERMINAL_STATES to SOFT_TERMINAL_STATES
-- `src/pipeline/pipeline-engine.ts` — Add `dev` to checkpoint:ship's transition set (line 58); add new entry `['completed', new Set(['dev'])]` (after line 59); update recovery map entry for dev
-- `src/pipeline/checkpoint.ts` — Add `feedbackShipCheckpoint(run, feedback)` (mirrors `feedbackArchitectCheckpoint` pattern: append progress, reset fixLoopCount, transition to dev, augment description with feedback); Add `submitReviewPoints(run, reviewPoints)` (transition completed → dev with review context)
+**Files:** `src/web/public/style.css`
 
-**Verification:**
-```bash
-npx tsc --noEmit
-```
+**Changes:**
+- `.activity-timeline` — add `max-height: 50vh; overflow-y: auto;`
+- Optional: add a subtle left-border or background to signal scrollability.
 
-### Milestone 2: API Endpoints
+**Verify:** Open dashboard with a pipeline that has many timeline entries; confirm the timeline is scrollable and Live Output is visible below.
 
-**Intent:** Wire backend functions to HTTP endpoints the dashboard can call.
+### M2: JS — keep scroll at top on live-append
 
-**Files:**
-- `src/web/server.ts` — Add `POST /api/pipelines/:id/ship-feedback` (accepts `{ feedback: string }`, calls `feedbackShipCheckpoint`, responds 202, kicks off `continueRun`); Add `POST /api/pipelines/:id/review-points` (accepts `{ reviewPoints: string }`, calls `submitReviewPoints`, responds 202, kicks off `continueRun`)
+**Intent:** When a new timeline entry is prepended, ensure the container scrolls to the top so the newest entry is always visible.
 
-**Verification:**
-```bash
-npx tsc --noEmit
-```
+**Files:** `src/web/public/app.js`
 
-### Milestone 3: Ship Review "Request Changes" UI
+**Changes:**
+- After `container.insertBefore(newNode, container.firstChild)` in the `pipeline:progress` handler (~line 3903), add `container.scrollTop = 0;`
 
-**Intent:** Add the feedback button and textarea to the ship review panel.
+**Verify:** While a pipeline is running, observe that new activity entries appear at top without the scroll jumping away.
 
-**Files:**
-- `src/web/public/app.js` — Add "Request Changes" button to `renderShipReviewPanel()` (both top and bottom action bars); add `pipelineShipFeedback(pipelineId)` handler (mirrors `pipelineFeedback` pattern: toggle textarea, POST to `/ship-feedback`)
-- `src/web/public/style.css` — Reuse existing `.checkpoint-btn.feedback` style
+### M3: Sync dist and bump cache version
 
-**Verification:**
-```bash
-cp src/web/public/app.js dist/web/public/ && cp src/web/public/style.css dist/web/public/
-# Manual: start server, navigate to checkpoint:ship pipeline, verify button + textarea
-```
+**Intent:** Copy changed files to `dist/web/public/` and bump the `?v=` query strings in `index.html`.
 
-### Milestone 4: Post-Ship Review Points UI
+**Files:** `src/web/public/index.html`, `dist/web/public/*`
 
-**Intent:** Show a review points section on completed pipelines.
+**Verify:** `diff src/web/public/style.css dist/web/public/style.css` shows no diff. Dashboard loads with new styles.
 
-**Files:**
-- `src/web/public/app.js` — In `renderPipelineDetail()` (or wherever completed pipelines render), add a "Address Review Points" section with textarea + submit button; add `pipelineReviewPoints(pipelineId)` handler
-- `src/web/public/style.css` — Style the review points card
+## Risks / Unknowns
 
-**Verification:**
-```bash
-cp src/web/public/app.js dist/web/public/ && cp src/web/public/style.css dist/web/public/
-# Manual: find completed pipeline, verify review points section appears
-```
-
-## Risks & Unknowns
-
-| Risk | Impact | Quick Probe |
-|------|--------|-------------|
-| Moving `completed` out of TERMINAL_STATES may break rendering logic | Medium | `grep -rn 'TERMINAL_STATES\|terminalState' src/` to find all consumers |
-| Sidebar pipeline status badges may not handle completed-but-reopened | Low | Check how sidebar renders state — likely just reads `pipeline.state` |
-| Multiple review rounds could bloat `description` | Low | Inject feedback as one-shot augmentation (like architect feedback does), don't persist it into description |
-| Recovery map may need updating for completed → dev path | Medium | The `getRecoveryTarget()` uses stageHistory — verify it handles completed pipelines |
-| Tests may assert completed is terminal | Medium | `grep -rn 'TERMINAL.*completed\|completed.*terminal' test/` |
+| Risk | Mitigation |
+|------|-----------|
+| `50vh` may be too tall/short on some screen sizes | Can adjust; 50vh is a reasonable starting point; could also use `calc()` to account for header height |
+| Timeline connecting lines might clip at scroll boundary | Test visually; the gutter lines are CSS pseudo-elements that should clip naturally |
 
 ---
 
-Next: /probe 'Milestone 1 — state machine and backend logic'
+Next: /probe 'M1: CSS — constrain activity timeline height'

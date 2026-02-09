@@ -178,6 +178,12 @@ export interface Blueprint {
  * for backward compatibility with existing blueprints.
  */
 export interface BlueprintOutput {
+  /** Short title for the plan (e.g. "Add User Authentication"). */
+  headline: string
+  /** 1-2 sentence summary of what this blueprint accomplishes. */
+  shortDescription: string
+  /** Total number of milestones in this blueprint. */
+  milestoneCount: number
   /** High-level description of the implementation approach. */
   approach: string
   /** Array of file paths that need to be created or modified. */
