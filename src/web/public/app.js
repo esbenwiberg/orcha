@@ -4609,16 +4609,13 @@ function renderCollapsibleBlueprint(pipeline) {
   }
 
   let html = '<div class="collapsible-section">';
-  html += '<button class="collapsible-header" onclick="toggleCollapsible(this)">';
+  html += '<button class="collapsible-header" onclick="toggleBlueprintCollapsible(this, \'' + pipeline.id + '\')">';
   html += '<span class="collapsible-arrow">&#9656;</span> Blueprint';
   html += '</button>';
   html += '<div class="collapsible-body" style="display:none;">';
-  html += '<div class="blueprint-content" id="blueprint-content-' + pipeline.id + '">Loading blueprint...</div>';
+  html += '<div class="blueprint-content" id="blueprint-content-' + pipeline.id + '">Click to load blueprint...</div>';
   html += '</div>';
   html += '</div>';
-
-  // Async-fetch the full blueprint after render
-  setTimeout(function() { fetchAndRenderBlueprint(pipeline.id); }, 0);
 
   return html;
 }
@@ -4639,7 +4636,8 @@ async function fetchAndRenderBlueprint(pipelineId) {
     const bp = await res.json();
     container.innerHTML = renderBlueprintHtml(bp);
   } catch (err) {
-    container.textContent = 'Failed to load blueprint';
+    console.error('[Blueprint] Failed to load for pipeline ' + pipelineId + ':', err);
+    container.textContent = 'Failed to load blueprint: ' + (err.message || err);
   }
 }
 
@@ -4722,6 +4720,19 @@ function toggleCollapsible(headerEl) {
   } else {
     body.style.display = 'none';
     arrow.innerHTML = '&#9656;'; // right arrow
+  }
+}
+
+/**
+ * Toggle the blueprint collapsible and lazy-load on first expand.
+ */
+function toggleBlueprintCollapsible(headerEl, pipelineId) {
+  toggleCollapsible(headerEl);
+  const container = document.getElementById('blueprint-content-' + pipelineId);
+  if (container && !container.dataset.loaded) {
+    container.dataset.loaded = '1';
+    container.textContent = 'Loading blueprint...';
+    fetchAndRenderBlueprint(pipelineId);
   }
 }
 
