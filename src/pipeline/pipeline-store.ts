@@ -12,6 +12,7 @@ import { readFile, writeFile, mkdir, rename, readdir, rm } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
 import { randomBytes } from 'crypto'
+import { WorktreeManager } from '../core/worktree-manager.js'
 import type { PipelineRun } from './types.js'
 
 // ============================================================================
@@ -110,9 +111,22 @@ export async function listPipelineRuns(): Promise<PipelineRun[]> {
 
 /**
  * Delete a pipeline run directory entirely.
+ * If the pipeline had a managed worktree, removes it first (non-fatal on error).
  */
 export async function deletePipelineRun(pipelineId: string): Promise<boolean> {
   try {
+    // Load state before deletion to check for managed worktree
+    const run = await loadPipelineRun(pipelineId)
+    if (run?.worktreeManaged && run.repoPath) {
+      try {
+        const wm = new WorktreeManager(run.repoPath)
+        await wm.remove(pipelineId)
+        await wm.prune()
+      } catch (err) {
+        console.error(`[pipeline-store] Non-fatal: failed to remove worktree for ${pipelineId}:`, (err as Error).message)
+      }
+    }
+
     await rm(pipelineDir(pipelineId), { recursive: true, force: true })
     return true
   } catch {

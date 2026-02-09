@@ -2085,6 +2085,25 @@ pipelineCmd
     }
   })
 
+// orcha pipeline delete <id>
+pipelineCmd
+  .command('delete <id>')
+  .description('Delete a pipeline run and its managed worktree')
+  .action(async (id: string) => {
+    try {
+      const { deletePipelineRun } = await import('../pipeline/index.js')
+      const deleted = await deletePipelineRun(id)
+      if (!deleted) {
+        console.error(`Pipeline ${id} not found or already deleted.`)
+        process.exit(1)
+      }
+      console.log(`Pipeline ${id} deleted.`)
+    } catch (err) {
+      console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
 /**
  * Continue executing a pipeline from its current state.
  * Drives through dev → gate → fix-loop cycles automatically,
