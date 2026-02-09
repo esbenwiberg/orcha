@@ -323,6 +323,10 @@ export interface PipelineRun {
   baseCommit?: string
   /** Absolute path to the git worktree. */
   worktreePath: string
+  /** Whether the worktree was auto-created by the pipeline (vs. user-provided). */
+  worktreeManaged?: boolean
+  /** Absolute path to the original repository (before worktree creation). */
+  repoPath?: string
   /** Path to the saved blueprint file within the worktree. */
   blueprintPath?: string
 
