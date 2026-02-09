@@ -2353,6 +2353,61 @@ body {
   font-style: italic;
 }
 
+/* Presets sidebar */
+.presets-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.preset-item {
+  padding: 6px 16px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.preset-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.preset-item-name {
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
+.preset-item-meta {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+}
+
+.preset-session-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.preset-session-num {
+  color: var(--text-muted);
+  min-width: 24px;
+}
+
+.preset-session-mode {
+  color: var(--accent-purple);
+}
+
+.preset-session-branch {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
 .pipeline-item {
   display: flex;
   align-items: center;
@@ -2409,6 +2464,25 @@ body {
 .pipeline-item-state {
   font-size: 0.65rem;
   color: var(--text-secondary);
+}
+
+.pipeline-cost-badge {
+  font-size: 0.65rem;
+  color: var(--accent-green);
+  background: rgba(76, 175, 80, 0.1);
+  padding: 1px 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pipeline-header-cost {
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: var(--accent-green);
+  padding: 0 16px;
+  white-space: nowrap;
+  align-self: center;
 }
 
 /* Pipeline detail panel */
@@ -2989,6 +3063,30 @@ body {
 .side-panel .pipeline-usage {
   flex-direction: column;
   gap: 8px;
+}
+
+.stage-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  margin-top: 10px;
+}
+
+.stage-usage-table th {
+  text-align: left;
+  color: var(--text-secondary);
+  font-weight: 500;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.stage-usage-table td {
+  padding: 4px 8px;
+  color: var(--text-primary);
+}
+
+.stage-usage-table td:nth-child(2) {
+  color: var(--accent-green);
 }
 
 /* Acceptance criteria list in side panel */

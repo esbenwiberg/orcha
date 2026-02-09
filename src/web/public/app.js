@@ -1105,6 +1105,202 @@ async function fetchActions() {
 }
 
 /**
+ * Show cleanup dialog with dry-run preview
+ */
+async function showCleanupDialog() {
+  const existingDialog = document.querySelector('.new-session-overlay');
+  if (existingDialog) existingDialog.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;';
+
+  overlay.innerHTML = '<div class="new-session-dialog" style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:400px;max-width:500px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">' +
+    '<h3 style="margin:0 0 12px;font-size:1rem;color:#e0e0e0;">Cleanup</h3>' +
+    '<div id="cleanup-preview" style="font-size:0.8rem;color:#888;margin-bottom:16px;">Scanning...</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+    '<button class="cancel-btn" style="padding:6px 14px;background:#333;border:1px solid #555;color:#ccc;border-radius:4px;cursor:pointer;">Cancel</button>' +
+    '<button class="cleanup-confirm-btn" style="padding:6px 14px;background:#5c2020;border:1px solid #8b3030;color:#e0e0e0;border-radius:4px;cursor:pointer;" disabled>Clean Up</button>' +
+    '</div></div>';
+
+  overlay.querySelector('.cancel-btn').addEventListener('click', function() { overlay.remove(); });
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+
+  document.body.appendChild(overlay);
+
+  // Run dry-run preview
+  try {
+    const res = await fetch('/api/cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dryRun: true }),
+    });
+    const data = await res.json();
+    const previewEl = document.getElementById('cleanup-preview');
+    if (!previewEl) return;
+
+    const total = (data.deadSessions?.length || 0) + (data.cleanedInstances?.length || 0);
+    if (total === 0) {
+      previewEl.innerHTML = '<div style="color:var(--accent-green);">Nothing to clean up.</div>';
+      return;
+    }
+
+    let html = '<div style="margin-bottom:8px;">Found items to clean:</div>';
+    if (data.deadSessions?.length > 0) {
+      html += '<div style="margin-bottom:4px;">Dead sessions: <strong>' + data.deadSessions.length + '</strong></div>';
+      for (const s of data.deadSessions) {
+        html += '<div style="padding-left:12px;color:#aaa;font-size:0.75rem;">' + escapeHtml(s.name) + '</div>';
+      }
+    }
+    previewEl.innerHTML = html;
+
+    const confirmBtn = overlay.querySelector('.cleanup-confirm-btn');
+    confirmBtn.disabled = false;
+    confirmBtn.addEventListener('click', async function() {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Cleaning...';
+      try {
+        const res = await fetch('/api/cleanup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dryRun: false }),
+        });
+        const result = await res.json();
+        const cleaned = (result.cleanedInstances?.length || 0) + (result.removedWorktrees?.length || 0) + (result.deadSessions?.length || 0);
+        overlay.remove();
+        showToast('Cleaned up ' + cleaned + ' items', 'success');
+        render();
+      } catch (err) {
+        showToast('Cleanup failed: ' + err.message, 'error');
+        overlay.remove();
+      }
+    });
+  } catch (err) {
+    const previewEl = document.getElementById('cleanup-preview');
+    if (previewEl) previewEl.innerHTML = '<div style="color:var(--status-error);">Failed to scan: ' + escapeHtml(err.message) + '</div>';
+  }
+}
+
+/**
+ * Fetch presets from the API
+ */
+async function fetchPresets() {
+  try {
+    const res = await fetch('/api/presets');
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Render the presets section in the sidebar
+ */
+function updatePresetSidebar(presets) {
+  const presetListEl = document.getElementById('preset-list');
+  if (!presetListEl) return;
+
+  if (!presets || presets.length === 0) {
+    presetListEl.innerHTML = '';
+    return;
+  }
+
+  let html = '<div class="presets-header"><span>Presets</span></div>';
+  for (const preset of presets) {
+    html += '<div class="preset-item" onclick="showPresetActions(\'' + escapeHtml(preset.name) + '\')">';
+    html += '<div class="preset-item-name">' + escapeHtml(preset.name) + '</div>';
+    html += '<div class="preset-item-meta">' + preset.sessionCount + ' sessions</div>';
+    html += '</div>';
+  }
+  presetListEl.innerHTML = html;
+}
+
+/**
+ * Show preset actions (load/delete)
+ */
+async function showPresetActions(name) {
+  const existingDialog = document.querySelector('.new-session-overlay');
+  if (existingDialog) existingDialog.remove();
+
+  // Fetch full preset details
+  let preset;
+  try {
+    const res = await fetch('/api/presets/' + encodeURIComponent(name));
+    if (!res.ok) throw new Error('Not found');
+    preset = await res.json();
+  } catch {
+    showToast('Failed to load preset details', 'error');
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;';
+
+  const sessionsHtml = preset.sessions.map(function(s, i) {
+    return '<div class="preset-session-row">' +
+      '<span class="preset-session-num">#' + (i + 1) + '</span>' +
+      '<span class="preset-session-mode">' + escapeHtml(s.mode || 'claude') + '</span>' +
+      (s.branch ? '<span class="preset-session-branch">' + escapeHtml(s.branch) + '</span>' : '') +
+      '</div>';
+  }).join('');
+
+  overlay.innerHTML = '<div class="new-session-dialog" style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:400px;max-width:500px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">' +
+    '<h3 style="margin:0 0 8px;font-size:1rem;color:#e0e0e0;">' + escapeHtml(preset.name) + '</h3>' +
+    (preset.description ? '<p style="margin:0 0 12px;font-size:0.8rem;color:#888;">' + escapeHtml(preset.description) + '</p>' : '') +
+    '<p style="margin:0 0 8px;font-size:0.75rem;color:#666;">Repo: ' + escapeHtml(preset.repoPath) + '</p>' +
+    '<div style="margin-bottom:16px;">' + sessionsHtml + '</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+    '<button class="cancel-btn" style="padding:6px 14px;background:#333;border:1px solid #555;color:#ccc;border-radius:4px;cursor:pointer;">Cancel</button>' +
+    '<button class="delete-preset-btn" style="padding:6px 14px;background:#5c2020;border:1px solid #8b3030;color:#e0e0e0;border-radius:4px;cursor:pointer;">Delete</button>' +
+    '<button class="load-preset-btn" style="padding:6px 14px;background:var(--accent-purple);border:none;color:white;border-radius:4px;cursor:pointer;">Load</button>' +
+    '</div></div>';
+
+  overlay.querySelector('.cancel-btn').addEventListener('click', function() { overlay.remove(); });
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+
+  overlay.querySelector('.load-preset-btn').addEventListener('click', async function() {
+    overlay.remove();
+    showToast('Loading preset ' + preset.name + '...', 'info');
+    try {
+      // Start sessions from the preset config via the sessions API
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repoPath: preset.repoPath,
+          count: preset.sessions.length,
+          branch: preset.sessions[0]?.branch || '',
+          mode: preset.sessions[0]?.mode || 'claude',
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to start sessions');
+      showToast('Preset ' + preset.name + ' loaded', 'success');
+      render();
+    } catch (err) {
+      showToast('Failed to load preset: ' + err.message, 'error');
+    }
+  });
+
+  overlay.querySelector('.delete-preset-btn').addEventListener('click', async function() {
+    if (!confirm('Delete preset "' + preset.name + '"?')) return;
+    try {
+      const res = await fetch('/api/presets/' + encodeURIComponent(preset.name), { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete');
+      overlay.remove();
+      showToast('Preset deleted', 'success');
+      state.presets = await fetchPresets();
+      updatePresetSidebar(state.presets);
+    } catch (err) {
+      showToast('Failed to delete preset: ' + err.message, 'error');
+    }
+  });
+
+  document.body.appendChild(overlay);
+}
+
+/**
  * Restart the Orcha web server
  */
 async function restartServer() {
@@ -1153,6 +1349,9 @@ function renderActionBar(actions) {
     actionBarEl.innerHTML = `
       <div class="action-bar-empty">
         <button class="action-add-btn" onclick="showActionEditorDialog()">+ Add Action</button>
+        <button class="action-btn cleanup-btn" onclick="showCleanupDialog()" title="Cleanup dead sessions &amp; worktrees" style="margin-left:auto;">
+          <span class="action-icon">&#x1f9f9;</span>
+        </button>
       </div>
     `;
     return;
@@ -1171,6 +1370,9 @@ function renderActionBar(actions) {
       `).join('')}
       <button class="action-btn action-add-btn-inline" onclick="showActionEditorDialog()" title="Add action">
         <span class="action-icon">+</span>
+      </button>
+      <button class="action-btn cleanup-btn" onclick="showCleanupDialog()" title="Cleanup dead sessions &amp; worktrees">
+        <span class="action-icon">&#x1f9f9;</span>
       </button>
     </div>
   `;
@@ -3697,13 +3899,14 @@ function applyGridLayout(count) {
  */
 async function render() {
   // Fetch sessions, instances, usage, actions, health, and pipelines in parallel
-  const [{ sessions, summary }, instances, usage, actions, health, pipelines] = await Promise.all([
+  const [{ sessions, summary }, instances, usage, actions, health, pipelines, presets] = await Promise.all([
     fetchSessions(),
     fetchInstances(),
     fetchUsage(),
     fetchActions(),
     fetchHealth(),
     fetchPipelines(),
+    fetchPresets(),
   ]);
 
   // Store all sessions (for sidebar)
@@ -3712,6 +3915,7 @@ async function render() {
   state.usage = usage;
   state.actions = actions;
   state.pipelines = pipelines;
+  state.presets = presets;
 
   // Dedupe by tmux session for terminal panels (1 panel per tmux session)
   const tmuxSessions = dedupeByTmuxSession(sessions);
@@ -3720,6 +3924,7 @@ async function render() {
   // Pass instances to show empty repos too
   updateSidebar(tmuxSessions, instances);
   updatePipelineSidebar(pipelines);
+  updatePresetSidebar(presets);
   updateSummary(summary);
   renderActionBar(actions);
   updateUsageDisplay(usage);
@@ -4246,6 +4451,14 @@ function updatePipelineSidebar(pipelines) {
     item.appendChild(dot);
     item.appendChild(info);
 
+    // Cost badge
+    if (pipeline.usageSnapshot && pipeline.usageSnapshot.totalCostUsd > 0) {
+      const cost = document.createElement('div');
+      cost.className = 'pipeline-cost-badge';
+      cost.textContent = '$' + pipeline.usageSnapshot.totalCostUsd.toFixed(2);
+      item.appendChild(cost);
+    }
+
     item.addEventListener('click', () => selectPipeline(pipeline.id));
     pipelineListEl.appendChild(item);
   }
@@ -4432,6 +4645,9 @@ function renderPipelineDetail(pipelineId) {
   }
   html += '<div class="pipeline-detail-id">' + pipeline.id + '</div>';
   html += '</div>';
+  if (pipeline.usageSnapshot && pipeline.usageSnapshot.totalCostUsd > 0) {
+    html += '<div class="pipeline-header-cost">$' + pipeline.usageSnapshot.totalCostUsd.toFixed(2) + '</div>';
+  }
   html += '<div class="pipeline-detail-actions">';
   var runningStages = ['architect', 'dev', 'gate', 'fix-loop', 'ship'];
   if (runningStages.indexOf(pipeline.state) !== -1) {
@@ -4442,6 +4658,9 @@ function renderPipelineDetail(pipelineId) {
   }
   if (pipeline.state === 'escalated') {
     html += '<button class="pipeline-action-btn retry" onclick="showRetryEscalatedModal(\'' + pipeline.id + '\')" title="Retry with more fix loops">Retry</button>';
+  }
+  if (pipeline.state === 'paused') {
+    html += '<button class="pipeline-action-btn retry" onclick="pipelineResume(\'' + pipeline.id + '\')" title="Resume paused pipeline">Resume</button>';
   }
   html += '<button class="pipeline-action-btn delete" onclick="pipelineDelete(\'' + pipeline.id + '\')" title="Delete this pipeline">Delete</button>';
   html += '</div>';
@@ -4510,7 +4729,7 @@ function renderPipelineDetail(pipelineId) {
   html += '</div>';
   html += '</div>';
 
-  // Usage (in side panel)
+  // Usage (in side panel) — summary + per-stage breakdown loaded async
   if (pipeline.usageSnapshot) {
     html += '<div class="pipeline-section">';
     html += '<div class="pipeline-section-title">Usage</div>';
@@ -4525,6 +4744,7 @@ function renderPipelineDetail(pipelineId) {
       html += '<div class="usage-item"><div class="usage-item-label">Output</div><div class="usage-item-value">' + formatTokens(pipeline.usageSnapshot.outputTokens) + '</div></div>';
     }
     html += '</div>';
+    html += '<div id="pipeline-stage-usage"></div>';
     html += '</div>';
   }
 
@@ -4551,6 +4771,60 @@ function renderPipelineDetail(pipelineId) {
 
   // Fetch and render the activity timeline asynchronously
   fetchAndRenderTimeline(pipeline.id);
+
+  // Fetch and render per-stage usage breakdown
+  fetchAndRenderStageUsage(pipeline.id);
+}
+
+/**
+ * Fetch per-stage usage breakdown and render in side panel
+ */
+async function fetchAndRenderStageUsage(pipelineId) {
+  const container = document.getElementById('pipeline-stage-usage');
+  if (!container) return;
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/usage');
+    if (!res.ok) return;
+    const usage = await res.json();
+    if (!usage.stages || Object.keys(usage.stages).length === 0) return;
+
+    const stageOrder = ['architect', 'dev', 'gate', 'fix', 'ship'];
+    const stages = Object.values(usage.stages).sort(function(a, b) {
+      return (stageOrder.indexOf(a.stage) === -1 ? 99 : stageOrder.indexOf(a.stage)) -
+             (stageOrder.indexOf(b.stage) === -1 ? 99 : stageOrder.indexOf(b.stage));
+    });
+
+    let html = '<table class="stage-usage-table">';
+    html += '<thead><tr><th>Stage</th><th>Cost</th><th>Tokens</th><th>Time</th></tr></thead>';
+    html += '<tbody>';
+    for (const s of stages) {
+      const totalTokens = (s.inputTokens || 0) + (s.outputTokens || 0);
+      const duration = s.durationMs ? formatDuration(s.durationMs) : '-';
+      html += '<tr>';
+      html += '<td>' + escapeHtml(s.stage) + '</td>';
+      html += '<td>$' + (s.costUsd || 0).toFixed(2) + '</td>';
+      html += '<td>' + formatTokens(totalTokens) + '</td>';
+      html += '<td>' + duration + '</td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (err) {
+    console.error('Failed to fetch stage usage:', err);
+  }
+}
+
+/**
+ * Format duration in milliseconds to human-readable string
+ */
+function formatDuration(ms) {
+  if (ms < 1000) return ms + 'ms';
+  var secs = Math.floor(ms / 1000);
+  if (secs < 60) return secs + 's';
+  var mins = Math.floor(secs / 60);
+  secs = secs % 60;
+  return mins + 'm ' + secs + 's';
 }
 
 /**
@@ -5208,6 +5482,27 @@ async function pipelineRecover(pipelineId) {
     updatePipelineSidebar(state.pipelines);
   } catch (err) {
     showToast('Retry failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Resume a paused pipeline
+ */
+async function pipelineResume(pipelineId) {
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/resume', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Resume failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    const updated = await res.json();
+    showToast('Pipeline resumed: ' + updated.state, 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Resume failed: ' + err.message, 'error');
   }
 }
 
