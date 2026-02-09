@@ -5347,6 +5347,110 @@ async function loadShipReview(pipelineId) {
 }
 
 /**
+ * Parse file paths from a unified diff string.
+ * Returns array of { path, status } where status is 'A', 'D', or 'M'.
+ */
+function parseDiffFiles(diffText) {
+  if (!diffText) return [];
+  var files = [];
+  var lines = diffText.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (line.startsWith('diff --git')) {
+      // Extract b/ path: "diff --git a/foo/bar.ts b/foo/bar.ts"
+      var match = line.match(/b\/(.+)$/);
+      if (match) {
+        var path = match[1];
+        // Peek at next lines to determine status
+        var status = 'M';
+        for (var j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+          if (lines[j].startsWith('new file')) { status = 'A'; break; }
+          if (lines[j].startsWith('deleted file')) { status = 'D'; break; }
+        }
+        files.push({ path: path, status: status });
+      }
+    }
+  }
+  return files;
+}
+
+/**
+ * Show a file-by-file diff dialog for the ship review panel.
+ * Reuses existing diff-viewer CSS classes.
+ */
+function showShipDiffDialog() {
+  var diffData = window._shipDiffData;
+  if (!diffData || !diffData.diff) return;
+
+  var files = parseDiffFiles(diffData.diff);
+
+  var overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay diff-viewer-overlay';
+
+  overlay.innerHTML =
+    '<div class="diff-viewer-dialog">' +
+      '<div class="diff-viewer-header">' +
+        '<div class="diff-viewer-title">' +
+          '<span class="diff-viewer-icon">&#128196;</span>' +
+          '<span class="diff-viewer-heading">Code Changes</span>' +
+        '</div>' +
+        '<button class="diff-viewer-close">&times;</button>' +
+      '</div>' +
+      '<div class="diff-viewer-content">' +
+        '<div class="diff-viewer-sidebar">' +
+          '<div class="diff-sidebar-section">' +
+            '<div class="diff-sidebar-label">Files</div>' +
+            '<div class="diff-files-list"></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="diff-viewer-main"></div>' +
+      '</div>' +
+      '<div class="diff-viewer-footer">' +
+        '<span class="diff-stats">' +
+          (diffData.filesChanged || 0) + ' file' + ((diffData.filesChanged || 0) !== 1 ? 's' : '') +
+          ' changed · +' + (diffData.insertions || 0) + ' -' + (diffData.deletions || 0) + ' lines' +
+        '</span>' +
+      '</div>' +
+    '</div>';
+
+  var closeBtn = overlay.querySelector('.diff-viewer-close');
+  var filesListEl = overlay.querySelector('.diff-files-list');
+  var mainEl = overlay.querySelector('.diff-viewer-main');
+
+  var closeDialog = function() { overlay.remove(); };
+  closeBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) closeDialog(); });
+  overlay.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeDialog(); });
+
+  // Populate file sidebar
+  if (files.length === 0) {
+    filesListEl.innerHTML = '<div class="diff-empty">No files</div>';
+  } else {
+    filesListEl.innerHTML = files.map(function(f) {
+      var statusClass = f.status === 'A' ? 'added' : f.status === 'D' ? 'deleted' : 'modified';
+      return '<div class="diff-file-item ' + statusClass + '" data-path="' + escapeHtml(f.path) + '">' +
+        '<span class="diff-file-status">' + f.status + '</span>' +
+        '<span class="diff-file-path">' + escapeHtml(f.path) + '</span>' +
+      '</div>';
+    }).join('');
+
+    filesListEl.querySelectorAll('.diff-file-item').forEach(function(item) {
+      item.addEventListener('click', function() {
+        filesListEl.querySelectorAll('.diff-file-item').forEach(function(i) { i.classList.remove('selected'); });
+        item.classList.add('selected');
+        showFileDiff(mainEl, diffData.diff, item.dataset.path);
+      });
+    });
+  }
+
+  // Show full diff initially
+  renderDiff(mainEl, diffData.diff);
+
+  document.body.appendChild(overlay);
+  overlay.focus();
+}
+
+/**
  * Render the full ship review panel HTML.
  */
 function renderShipReviewPanel(pipeline, diffData, gateData, blueprint) {
@@ -5368,8 +5472,14 @@ function renderShipReviewPanel(pipeline, diffData, gateData, blueprint) {
   // Gate results
   html += renderShipGateResults(gateData);
 
-  // Diff viewer
-  html += renderDiffViewer(diffData);
+  // View Changes button (opens file-by-file dialog)
+  if (diffData && diffData.diff) {
+    window._shipDiffData = diffData;
+    html += '<button class="ship-view-changes-btn" onclick="showShipDiffDialog()">';
+    html += '<span class="btn-icon">&#128196;</span> View Changes';
+    html += ' <span style="color:var(--text-secondary);font-size:0.8rem;">(' + (diffData.filesChanged || 0) + ' files)</span>';
+    html += '</button>';
+  }
 
   // Action buttons (bottom, for long reviews)
   html += '<div class="ship-review-actions ship-review-actions-bottom">';
@@ -5441,6 +5551,25 @@ function renderShipSummaryCard(pipeline, diffData, blueprint) {
   }
 
   html += '</div>'; // end metrics
+
+  // Noteworthy Changes — list of changed files from diff
+  if (diffData && diffData.diff) {
+    var changedFiles = parseDiffFiles(diffData.diff);
+    if (changedFiles.length > 0) {
+      html += '<div class="ship-summary-noteworthy">';
+      html += '<div class="ship-summary-label">Noteworthy Changes</div>';
+      html += '<ul class="ship-noteworthy-list">';
+      changedFiles.forEach(function(f) {
+        var label = f.path;
+        // Show just the filename for readability, full path as title
+        var shortName = label.split('/').pop();
+        html += '<li title="' + escapeHtml(label) + '">' + escapeHtml(shortName) + '</li>';
+      });
+      html += '</ul>';
+      html += '</div>';
+    }
+  }
+
   html += '</div>'; // end card
   return html;
 }
@@ -5510,88 +5639,6 @@ function toggleShipGateDetail(idx) {
   }
 }
 
-/**
- * Render the diff viewer with per-line coloring and truncation.
- */
-function renderDiffViewer(diffData) {
-  if (!diffData || !diffData.diff) {
-    return '<div class="ship-diff-empty">No diff available</div>';
-  }
-
-  var lines = diffData.diff.split('\n');
-  var totalLines = lines.length;
-  var INITIAL_LIMIT = 500;
-  var truncated = totalLines > INITIAL_LIMIT;
-
-  var html = '<div class="ship-diff-section">';
-  html += '<div class="ship-diff-header">';
-  html += '<span class="ship-diff-title">Code Changes</span>';
-  html += '<span class="ship-diff-stat">' + totalLines + ' lines</span>';
-  html += '</div>';
-
-  html += '<div class="ship-diff-viewer" id="ship-diff-viewer">';
-  html += '<pre class="ship-diff-pre">';
-
-  var renderCount = truncated ? INITIAL_LIMIT : totalLines;
-  for (var i = 0; i < renderCount; i++) {
-    html += renderDiffLine(lines[i]);
-  }
-
-  html += '</pre>';
-
-  if (truncated) {
-    html += '<div class="ship-diff-truncated" id="ship-diff-truncated">';
-    html += '<button class="ship-diff-show-all" onclick="showAllDiffLines()">Show all ' + totalLines + ' lines (' + (totalLines - INITIAL_LIMIT) + ' more)</button>';
-    html += '</div>';
-    // Store remaining lines as data attribute for lazy expansion
-    html += '<script type="application/json" id="ship-diff-remaining">' + JSON.stringify(lines.slice(INITIAL_LIMIT)) + '<\/script>';
-  }
-
-  html += '</div>';
-  html += '</div>';
-
-  return html;
-}
-
-/**
- * Render a single diff line with appropriate CSS class.
- */
-function renderDiffLine(line) {
-  var cls = 'diff-context';
-  if (line.startsWith('+')) {
-    cls = line.startsWith('+++') ? 'diff-file-header' : 'diff-add';
-  } else if (line.startsWith('-')) {
-    cls = line.startsWith('---') ? 'diff-file-header' : 'diff-remove';
-  } else if (line.startsWith('@@')) {
-    cls = 'diff-hunk';
-  } else if (line.startsWith('diff ')) {
-    cls = 'diff-file-header';
-  }
-  return '<span class="' + cls + '">' + escapeHtml(line) + '\n</span>';
-}
-
-/**
- * Show all remaining diff lines (called from truncation button).
- */
-function showAllDiffLines() {
-  var remainingEl = document.getElementById('ship-diff-remaining');
-  var preEl = document.querySelector('.ship-diff-pre');
-  var truncatedEl = document.getElementById('ship-diff-truncated');
-  if (!remainingEl || !preEl) return;
-
-  try {
-    var remaining = JSON.parse(remainingEl.textContent || '[]');
-    var html = '';
-    for (var i = 0; i < remaining.length; i++) {
-      html += renderDiffLine(remaining[i]);
-    }
-    preEl.insertAdjacentHTML('beforeend', html);
-    if (truncatedEl) truncatedEl.remove();
-    remainingEl.remove();
-  } catch (err) {
-    console.error('Failed to expand diff:', err);
-  }
-}
 
 // Start app
 init();

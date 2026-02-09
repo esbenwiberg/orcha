@@ -3675,6 +3675,12 @@ body {
 .ship-gate-item.pass { border-left-color: var(--accent-green); }
 .ship-gate-item.fail { border-left-color: var(--status-error); }
 .ship-gate-item.skip { border-left-color: var(--text-secondary); }
+.ship-gate-item.pass .gate-check-icon { color: var(--accent-green); }
+.ship-gate-item.fail .gate-check-icon { color: var(--status-error); }
+.ship-gate-item.skip .gate-check-icon { color: var(--text-secondary); }
+.ship-gate-item.pass .gate-check-verdict { color: var(--accent-green); background: rgba(80, 200, 120, 0.1); }
+.ship-gate-item.fail .gate-check-verdict { color: var(--status-error); background: rgba(255, 100, 100, 0.1); }
+.ship-gate-item.skip .gate-check-verdict { color: var(--text-secondary); background: rgba(150, 150, 150, 0.1); }
 
 .ship-gate-item-header {
   display: flex;
@@ -3816,4 +3822,56 @@ body {
 .ship-diff-show-all:hover {
   background: var(--bg-secondary);
   border-color: var(--accent-blue);
+}
+
+/* View Changes button */
+.ship-view-changes-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--accent-blue);
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
+  margin-bottom: 16px;
+}
+.ship-view-changes-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-blue);
+}
+.ship-view-changes-btn .btn-icon {
+  font-size: 1.1rem;
+}
+
+/* Noteworthy Changes */
+.ship-summary-noteworthy {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+.ship-summary-noteworthy .ship-summary-label {
+  margin-bottom: 6px;
+}
+.ship-noteworthy-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.ship-noteworthy-list li {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  padding: 2px 0;
+}
+.ship-noteworthy-list li::before {
+  content: '•';
+  color: var(--accent-purple);
+  margin-right: 6px;
 }
