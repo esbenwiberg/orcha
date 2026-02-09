@@ -61,9 +61,8 @@ export async function runFixLoopStage(
       return run
     }
 
-    // Increment the fix loop counter
-    run = await incrementFixLoop(run)
-    const attempt = run.fixLoopCount
+    // Determine attempt number (pre-increment, for labeling)
+    const attempt = run.fixLoopCount + 1
 
     // Emit progress for fix-loop iteration start
     await appendProgress(run.id, {
@@ -129,6 +128,9 @@ export async function runFixLoopStage(
       const errorMsg = `Fix loop attempt ${attempt} failed (exit code ${result.exitCode}): ${result.stderr.slice(0, 500)}`
       return await transitionToError(run, errorMsg)
     }
+
+    // Increment fix loop counter only after the stage ran successfully
+    run = await incrementFixLoop(run)
 
     // Auto-commit fix changes
     const commitResult = await autoCommitFix(run.worktreePath, attempt)

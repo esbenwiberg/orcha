@@ -2390,23 +2390,27 @@ export class WebDashboardServer {
         console.log(`[API] Pipeline ${run.id} recovered to state: ${recovered.state}`)
         res.status(202).json(recovered)
 
-        // Kick off the recovered stage asynchronously
-        const stage = recovered.state
+        // Kick off the recovered stage asynchronously with continuation loop
         const rerun = async () => {
-          if (stage === 'created') {
-            await executeArchitectStage(recovered)
-          } else if (stage === 'checkpoint:arch') {
-            // Just wait for human action — no auto-run needed
-          } else if (stage === 'dev') {
-            await executeDevStage(recovered)
-          } else if (stage === 'gate') {
-            await executeGateStage(recovered)
-          } else if (stage === 'fix-loop') {
-            await executeFixLoopStage(recovered)
-          } else if (stage === 'checkpoint:ship') {
-            // Just wait for human action
-          } else if (stage === 'ship') {
-            await executeShipStage(recovered)
+          let current = recovered
+          // Bootstrap: stages like architect/dev need an initial transition
+          if (current.state === 'created') {
+            current = await executeArchitectStage(current)
+          }
+          // Continue through active stages until a checkpoint, terminal, or error
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            if (current.state === 'dev') {
+              current = await executeDevStage(current)
+            } else if (current.state === 'gate') {
+              current = await executeGateStage(current)
+            } else if (current.state === 'fix-loop') {
+              current = await executeFixLoopStage(current)
+            } else if (current.state === 'ship') {
+              current = await executeShipStage(current)
+            } else {
+              break // checkpoint, terminal, or error — stop
+            }
           }
         }
         rerun().catch((err) => {
