@@ -432,13 +432,17 @@ function getDiff(worktreePath: string, sourceBranch: string): string {
   const spawnOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
 
   // SECURITY: Validate branch name doesn't contain path traversal sequences
-  // that could escape the origin/ prefix (e.g., '../--exec=evil')
-  const sanitizedBranch = sourceBranch.replace(/^\.\.\/+/, '').replace(/\.\.\/+/g, '')
+  // that could be used for injection (e.g., '../--exec=evil', '..', etc.)
+  if (sourceBranch.includes('..')) {
+    throw new Error('Invalid branch name: contains path traversal sequence')
+  }
+  const sanitizedBranch = sourceBranch
 
   // Compute the merge-base SHA first, then diff against it.
   // This is equivalent to `git diff sourceBranch...HEAD` but safer because
   // the merge-base SHA is a hex string that can't be misinterpreted as a flag.
   //
+  // Try branch name directly first, then with origin/ prefix, then common defaults.
   // SECURITY: Use '--' to separate options from arguments. This tells git that
   // everything after '--' is a ref/path, not an option. This prevents flag
   // injection attacks where a branch named '--help' would be interpreted as an option.
@@ -448,7 +452,7 @@ function getDiff(worktreePath: string, sourceBranch: string): string {
     const mbResult = spawnSync('git', ['merge-base', '--', ref, 'HEAD'], spawnOpts)
     if (mbResult.status === 0 && mbResult.stdout) {
       const mergeBase = mbResult.stdout.trim()
-      const diffResult = spawnSync('git', ['diff', mergeBase, 'HEAD'], spawnOpts)
+      const diffResult = spawnSync('git', ['diff', '--', mergeBase, 'HEAD'], spawnOpts)
       if (diffResult.status === 0) {
         return (diffResult.stdout || '').trim()
       }
@@ -456,7 +460,7 @@ function getDiff(worktreePath: string, sourceBranch: string): string {
   }
 
   // Fall back to diff against previous commit
-  const fallback = spawnSync('git', ['diff', 'HEAD~1'], spawnOpts)
+  const fallback = spawnSync('git', ['diff', '--', 'HEAD~1'], spawnOpts)
   return (fallback.stdout || '').trim()
 }
 
