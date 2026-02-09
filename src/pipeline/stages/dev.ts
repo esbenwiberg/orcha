@@ -423,29 +423,52 @@ async function runSingleMilestoneDevStage(
 /**
  * Get the cumulative diff from source branch to current HEAD.
  * This captures ALL changes from all milestones, not just the last commit.
+ *
+ * SECURITY: Uses spawnSync with array arguments to avoid command injection.
+ * The sourceBranch parameter originates from user input and must not be
+ * interpolated into shell commands.
  */
 async function getFinalDiff(worktreePath: string, sourceBranch: string): Promise<string> {
-  const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
+  const spawnOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
 
-  try {
-    // Try to diff against the source branch directly
-    return execSync(`git diff ${sourceBranch}...HEAD`, execOpts).trim()
-  } catch {
-    try {
-      // Try with origin/ prefix
-      return execSync(`git diff origin/${sourceBranch}...HEAD`, execOpts).trim()
-    } catch {
-      try {
-        // Try to find the merge-base with main/master as fallback
-        const mergeBase = execSync('git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD origin/master 2>/dev/null || git rev-list --max-parents=0 HEAD', execOpts).trim()
-        return execSync(`git diff ${mergeBase}...HEAD`, execOpts).trim()
-      } catch {
-        // Last resort: get diff of all changes in the working tree
-        // This won't capture committed milestone changes, but is better than nothing
-        return execSync('git diff HEAD', execOpts).trim()
-      }
+  // SECURITY: Use spawnSync with array args to avoid shell interpolation
+  // This prevents command injection via malicious branch names like "main; rm -rf /"
+
+  // Try to diff against the source branch directly
+  let result = spawnSync('git', ['diff', `${sourceBranch}...HEAD`], spawnOpts)
+  if (result.status === 0) {
+    return (result.stdout || '').trim()
+  }
+
+  // Try with origin/ prefix
+  result = spawnSync('git', ['diff', `origin/${sourceBranch}...HEAD`], spawnOpts)
+  if (result.status === 0) {
+    return (result.stdout || '').trim()
+  }
+
+  // Try to find the merge-base with main as fallback
+  let mergeBaseResult = spawnSync('git', ['merge-base', 'HEAD', 'origin/main'], spawnOpts)
+  if (mergeBaseResult.status !== 0) {
+    // Try master
+    mergeBaseResult = spawnSync('git', ['merge-base', 'HEAD', 'origin/master'], spawnOpts)
+  }
+  if (mergeBaseResult.status !== 0) {
+    // Fall back to initial commit
+    mergeBaseResult = spawnSync('git', ['rev-list', '--max-parents=0', 'HEAD'], spawnOpts)
+  }
+
+  if (mergeBaseResult.status === 0 && mergeBaseResult.stdout) {
+    const mergeBase = mergeBaseResult.stdout.trim()
+    result = spawnSync('git', ['diff', `${mergeBase}...HEAD`], spawnOpts)
+    if (result.status === 0) {
+      return (result.stdout || '').trim()
     }
   }
+
+  // Last resort: get diff of all changes in the working tree
+  // This won't capture committed milestone changes, but is better than nothing
+  result = spawnSync('git', ['diff', 'HEAD'], spawnOpts)
+  return (result.stdout || '').trim()
 }
 
 // ============================================================================
@@ -522,77 +545,90 @@ async function runCompetingDevStage(
       )
     }
 
-    // Multi-milestone competing: for EACH milestone, run N competing agents
+    // DESIGN DECISION: Multi-milestone competing mode
+    // In competing mode with multiple milestones, we run all agents on the FIRST
+    // milestone only, then let gate evaluate and select a winner. The winning
+    // agent's worktree becomes the base for subsequent milestones (non-competing).
+    // This is because:
+    // 1. Running N agents for M milestones would create N*M worktrees (expensive)
+    // 2. Without winner selection between milestones, results would conflict
+    // 3. The competing feature is meant to find the best APPROACH, not repeat it
+    //
+    // For truly parallel milestone execution, use --competing 1 (default) and
+    // the milestone-based sequential execution, which gives fresh context per milestone.
+
     await appendProgress(run.id, {
       type: 'info',
       stage: 'dev',
-      title: `Starting per-milestone competing dev (${milestones.length} milestones, ${count} agents each)`,
-      data: { totalMilestones: milestones.length, agentsPerMilestone: count },
+      title: `Starting competing dev for milestone 1/${milestones.length} (${count} agents)`,
+      data: {
+        totalMilestones: milestones.length,
+        agentsPerMilestone: count,
+        note: 'Competing agents run on first milestone; gate will select winner for remaining milestones',
+      },
     }).catch(() => { /* best-effort */ })
 
-    for (let milestoneIdx = startingMilestoneIndex; milestoneIdx < milestones.length; milestoneIdx++) {
-      const milestone = milestones[milestoneIdx]
+    // Run competing agents on the FIRST milestone only
+    const milestoneStartedAt = new Date().toISOString()
 
-      // Record milestone start time BEFORE running agents
-      const milestoneStartedAt = new Date().toISOString()
+    // Update current milestone index
+    run = {
+      ...run,
+      currentMilestoneIndex: startingMilestoneIndex,
+      updatedAt: new Date().toISOString(),
+    }
+    await savePipelineRun(run)
 
-      // Update current milestone index
-      run = {
-        ...run,
-        currentMilestoneIndex: milestoneIdx,
-        updatedAt: new Date().toISOString(),
-      }
-      await savePipelineRun(run)
+    const milestone = milestones[startingMilestoneIndex]
 
-      await appendProgress(run.id, {
-        type: 'competing-start',
-        stage: 'dev',
-        title: `Starting ${count} competing agents for milestone ${milestoneIdx + 1}/${milestones.length}`,
-        data: { milestoneIndex: milestoneIdx, count, description: milestone.description },
-      }).catch(() => { /* best-effort */ })
+    await appendProgress(run.id, {
+      type: 'competing-start',
+      stage: 'dev',
+      title: `Starting ${count} competing agents for milestone ${startingMilestoneIndex + 1}/${milestones.length}`,
+      data: { milestoneIndex: startingMilestoneIndex, count, description: milestone.description },
+    }).catch(() => { /* best-effort */ })
 
-      // Build milestone context for this iteration
-      const milestoneContext: MilestoneContext = {
-        blueprintJson,
-        milestoneIndex: milestoneIdx,
-        totalMilestones: milestones.length,
-        milestoneDescription: milestone.description,
-        milestoneDetails: milestone.details,
-        milestoneFilesToTouch: milestone.filesToTouch,
-      }
-
-      // Run competing agents on this milestone
-      run = await runCompetingAgentsOnMilestone(
-        run, count, blueprintJson, workItem, codebase, opts, startedAt, milestoneContext
-      )
-
-      // If we hit an error, stop
-      if (run.state === 'error') {
-        return run
-      }
-
-      // Record milestone completion with data from competing results
-      // Get the commit SHA from the first successful agent (winner will be determined by gate)
-      const firstSuccessfulResult = run.competingResults?.find((r) => r.commitSha !== '')
-      const milestoneProgress: MilestoneProgress = {
-        index: milestoneIdx,
-        startedAt: milestoneStartedAt,
-        completedAt: new Date().toISOString(),
-        commitSha: firstSuccessfulResult?.commitSha, // Gate will determine final winner
-      }
-      run = {
-        ...run,
-        milestoneHistory: [...(run.milestoneHistory || []), milestoneProgress],
-      }
-      await savePipelineRun(run)
-
-      // If this isn't the last milestone, we need gate to pick a winner
-      // The gate stage will evaluate competing results and select winner
-      // For now, transition to gate after all milestones are done
+    // Build milestone context for the first milestone
+    const milestoneContext: MilestoneContext = {
+      blueprintJson,
+      milestoneIndex: startingMilestoneIndex,
+      totalMilestones: milestones.length,
+      milestoneDescription: milestone.description,
+      milestoneDetails: milestone.details,
+      milestoneFilesToTouch: milestone.filesToTouch,
     }
 
-    // All milestones completed with competing agents
-    // Transition: dev → gate (gate will evaluate the final competing results)
+    // Run competing agents on first milestone (worktrees are NOT cleaned up yet)
+    run = await runCompetingAgentsOnMilestone(
+      run, count, blueprintJson, workItem, codebase, opts, startedAt, milestoneContext
+    )
+
+    // If we hit an error, stop
+    if (run.state === 'error') {
+      return run
+    }
+
+    // Record first milestone completion
+    const firstSuccessfulResult = run.competingResults?.find((r) => r.commitSha !== '')
+    const milestoneProgress: MilestoneProgress = {
+      index: startingMilestoneIndex,
+      startedAt: milestoneStartedAt,
+      completedAt: new Date().toISOString(),
+      commitSha: firstSuccessfulResult?.commitSha,
+    }
+    run = {
+      ...run,
+      milestoneHistory: [...(run.milestoneHistory || []), milestoneProgress],
+      // Store info about remaining milestones for gate to handle after winner selection
+      pendingMilestoneCount: milestones.length - startingMilestoneIndex - 1,
+    }
+    await savePipelineRun(run)
+
+    // Transition to gate - gate will:
+    // 1. Evaluate competing results for milestone 1
+    // 2. Select a winner
+    // 3. Merge winner's changes into main worktree
+    // 4. If more milestones remain, transition back to dev (non-competing) for remaining milestones
     run = await transition(run, 'gate')
 
     return run
@@ -723,20 +759,10 @@ async function runCompetingAgentsOnMilestone(
     },
   }).catch(() => { /* best-effort */ })
 
-  // Clean up worktrees after results are saved (diffs are preserved in files)
-  // The gate stage will use the saved diff files, not the worktrees directly
-  for (const result of competingResults) {
-    if (result.worktreePath) {
-      try {
-        execSync(
-          `git worktree remove --force "${result.worktreePath}"`,
-          { cwd: run.worktreePath, encoding: 'utf-8', timeout: 30000 },
-        )
-      } catch {
-        // Best-effort cleanup - don't fail the stage if cleanup fails
-      }
-    }
-  }
+  // IMPORTANT: Do NOT clean up worktrees here!
+  // The gate stage needs access to the worktrees to evaluate competing agents.
+  // Gate is responsible for cleanup after selecting a winner.
+  // The worktreePath is stored in each CompetingResult for gate to use.
 
   // Check if we have at least one successful agent
   if (successfulResults.length === 0) {
@@ -784,8 +810,17 @@ async function runCompetingAgent(
 
   const execOpts = { cwd: run.worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
 
+  // SECURITY: Use spawnSync with array args to avoid command injection via
+  // malicious run.id values that could craft dangerous branchName or worktreePath.
   // Create a new branch from the current pipeline branch and add worktree
-  execSync(`git worktree add -b "${branchName}" "${worktreePath}" HEAD`, execOpts)
+  const worktreeResult = spawnSync('git', ['worktree', 'add', '-b', branchName, worktreePath, 'HEAD'], {
+    cwd: run.worktreePath,
+    encoding: 'utf-8',
+    timeout: 30000,
+  })
+  if (worktreeResult.status !== 0) {
+    throw new Error(`Failed to create worktree: ${worktreeResult.stderr || 'unknown error'}`)
+  }
 
   try {
     // Build codebase context for this agent's worktree
@@ -860,8 +895,13 @@ async function runCompetingAgent(
     }
   } catch (err) {
     // Clean up worktree on failure
+    // SECURITY: Use spawnSync with array args to avoid command injection via worktreePath
     try {
-      execSync(`git worktree remove --force "${worktreePath}"`, execOpts)
+      spawnSync('git', ['worktree', 'remove', '--force', worktreePath], {
+        cwd: run.worktreePath,
+        encoding: 'utf-8',
+        timeout: 30000,
+      })
     } catch {
       // Best effort cleanup
     }
@@ -921,17 +961,43 @@ async function autoCommit(worktreePath: string, sourceBranch: string, commitSuff
     }
   }
 
-  commitSha = execSync('git rev-parse HEAD', execOpts).trim()
+  // Get commit SHA using spawnSync for consistency (though this is safe since HEAD is not user input)
+  const shaResult = spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: worktreePath,
+    encoding: 'utf-8',
+    timeout: 30000,
+  })
+  commitSha = (shaResult.stdout || '').trim()
 
-  // Capture diff after commit (consistent: always use three-dot syntax)
+  // SECURITY: Use spawnSync with array args to avoid command injection via sourceBranch.
+  // The sourceBranch originates from user input and must not be interpolated into shell commands.
   let diff: string
-  try {
-    diff = execSync(`git diff ${sourceBranch}...HEAD`, execOpts).trim()
-  } catch {
-    try {
-      diff = execSync(`git diff origin/${sourceBranch}...HEAD`, execOpts).trim()
-    } catch {
-      diff = execSync('git diff HEAD~1', execOpts).trim()
+
+  // Try to diff against the source branch directly
+  let diffResult = spawnSync('git', ['diff', `${sourceBranch}...HEAD`], {
+    cwd: worktreePath,
+    encoding: 'utf-8',
+    timeout: 30000,
+  })
+  if (diffResult.status === 0) {
+    diff = (diffResult.stdout || '').trim()
+  } else {
+    // Try with origin/ prefix
+    diffResult = spawnSync('git', ['diff', `origin/${sourceBranch}...HEAD`], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      timeout: 30000,
+    })
+    if (diffResult.status === 0) {
+      diff = (diffResult.stdout || '').trim()
+    } else {
+      // Fall back to diff against previous commit
+      diffResult = spawnSync('git', ['diff', 'HEAD~1'], {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+        timeout: 30000,
+      })
+      diff = (diffResult.stdout || '').trim()
     }
   }
 

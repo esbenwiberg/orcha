@@ -351,6 +351,13 @@ export interface PipelineRun {
    * This allows resuming from a failed milestone without re-running earlier ones.
    */
   milestoneHistory?: MilestoneProgress[]
+  /**
+   * Number of milestones remaining after competing mode completes milestone 1.
+   * When competing mode runs on a multi-milestone blueprint, only milestone 1
+   * gets competing agents. After gate selects a winner, the remaining milestones
+   * run non-competing (sequential). This field tells gate how many remain.
+   */
+  pendingMilestoneCount?: number
 
   // --- Usage ---
   /** Aggregated token/cost usage snapshot. */
