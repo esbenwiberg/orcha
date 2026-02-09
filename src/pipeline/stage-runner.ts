@@ -152,8 +152,8 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
   await mkdir(logsDir, { recursive: true })
   const logPath = join(logsDir, `${stageKey}.log`)
 
-  // Build the CLI arguments
-  const args = buildCliArgs({
+  // Build the CLI arguments (prompt is passed via stdin to avoid E2BIG)
+  const { cliArgs: args, stdinPrompt } = buildCliArgs({
     model,
     budget,
     systemPrompt,
@@ -187,7 +187,7 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
     }).catch(() => { /* best-effort */ })
   }
 
-  const result = await spawnClaude(args, cwd, pipelineId, onData, onActivity)
+  const result = await spawnClaude(args, cwd, pipelineId, stdinPrompt, onData, onActivity)
 
   // Write log file
   const logContent = [
@@ -245,13 +245,14 @@ interface CliArgs {
   prompt: string
 }
 
-function buildCliArgs(args: CliArgs): string[] {
+function buildCliArgs(args: CliArgs): { cliArgs: string[]; stdinPrompt: string } {
   const cliArgs: string[] = [
     '--model', args.model,
     '--append-system-prompt', args.systemPrompt,
     '--dangerously-skip-permissions',
     '--max-budget-usd', String(args.budget),
-    '-p', args.prompt,
+    // Prompt is passed via stdin to avoid E2BIG when diffs are large
+    '-p', '-',
     // Always use stream-json for live progress streaming
     '--output-format', 'stream-json',
     '--verbose',
@@ -261,7 +262,7 @@ function buildCliArgs(args: CliArgs): string[] {
     cliArgs.push('--allowedTools', args.allowedTools)
   }
 
-  return cliArgs
+  return { cliArgs, stdinPrompt: args.prompt }
 }
 
 /**
@@ -349,19 +350,24 @@ function spawnClaude(
   args: string[],
   cwd: string,
   pipelineId: string,
+  stdinPrompt: string,
   onData?: (stream: 'stdout' | 'stderr', chunk: string) => void,
   onActivity?: (title: string) => void,
 ): Promise<{ exitCode: number; stdout: string; stderr: string; success: boolean }> {
   return new Promise((resolve, reject) => {
     const proc = spawn('claude', args, {
       cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
         // Ensure non-interactive
         CI: '1',
       },
     })
+
+    // Write prompt via stdin to avoid E2BIG for large diffs
+    proc.stdin.write(stdinPrompt)
+    proc.stdin.end()
 
     registerProcess(pipelineId, proc)
 
