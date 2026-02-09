@@ -428,8 +428,10 @@ export async function executeArchitectStage(
   run: PipelineRun,
   opts?: ArchitectOptions,
 ): Promise<PipelineRun> {
-  // Transition: created -> architect
-  run = await transition(run, 'architect')
+  // Transition: created -> architect (skip if already in architect, e.g. recovery)
+  if (run.state !== 'architect') {
+    run = await transition(run, 'architect')
+  }
 
   // Run the architect stage (handles checkpoint:arch transition internally)
   run = await runArchitectStage(run, opts)
@@ -452,8 +454,10 @@ export async function executeDevStage(
   run: PipelineRun,
   opts?: DevOptions,
 ): Promise<PipelineRun> {
-  // Transition: checkpoint:arch -> dev
-  run = await transition(run, 'dev')
+  // Transition: checkpoint:arch -> dev (skip if already in dev, e.g. after approve)
+  if (run.state !== 'dev') {
+    run = await transition(run, 'dev')
+  }
 
   // Run the dev stage (handles gate transition internally)
   run = await runDevStage(run, opts)
