@@ -2474,11 +2474,13 @@ export class WebDashboardServer {
         // Check for cached summary
         const shipDir = join(getPipelineDir(run.id), 'ship')
         const summaryPath = join(shipDir, 'summary.json')
-        try {
-          const cached = await readFile(summaryPath, 'utf-8')
-          res.json(JSON.parse(cached))
-          return
-        } catch { /* no cache, generate */ }
+        if (req.query.force !== '1') {
+          try {
+            const cached = await readFile(summaryPath, 'utf-8')
+            res.json(JSON.parse(cached))
+            return
+          } catch { /* no cache, generate */ }
+        }
 
         // Gather context for the AI
         const execOpts = { cwd: run.worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
@@ -2510,21 +2512,21 @@ export class WebDashboardServer {
           approach = bp.approach || bp.content || ''
         } catch { /* no blueprint */ }
 
-        // Get truncated diff (first 8000 chars to stay within context)
+        // Get truncated diff (first 20000 chars for thorough summary)
         let diffSnippet = ''
         try {
           let mergeBase = ''
           try { mergeBase = execSync(`git merge-base origin/${run.sourceBranch} HEAD`, execOpts).trim() }
           catch { try { mergeBase = execSync(`git merge-base ${run.sourceBranch} HEAD`, execOpts).trim() } catch { mergeBase = 'HEAD~1' } }
           const fullDiff = execSync(`git diff ${mergeBase}...HEAD`, execOpts)
-          diffSnippet = fullDiff.slice(0, 8000)
+          diffSnippet = fullDiff.slice(0, 20000)
         } catch { /* empty */ }
 
         const prompt = `You are summarizing code changes for a ship review dashboard. Be concise and specific.
 
 Task description: ${run.description}
 
-${approach ? `Blueprint approach: ${approach.slice(0, 1000)}` : ''}
+${approach ? `Blueprint approach: ${approach.slice(0, 2000)}` : ''}
 
 Diff stat:
 ${diffStat}
@@ -2536,14 +2538,13 @@ Diff (truncated):
 ${diffSnippet}
 
 Respond with ONLY valid JSON, no markdown fences, in this exact format:
-{"description":"One or two sentences describing what was implemented in plain English.","changes":["First noteworthy change in plain English","Second noteworthy change","Third noteworthy change"]}
+{"description":"A detailed paragraph explaining what was implemented...","changes":["First noteworthy change","Second noteworthy change","Third noteworthy change"]}
 
 Rules:
-- "description" should summarize the overall implementation in plain English (what the code now does, not what files changed)
-- "changes" should be 3-6 bullet points of the most noteworthy things that were done, in plain English
-- Focus on user-visible behavior and architectural decisions, not file names or commit hashes
-- Be specific: "Added Stripe checkout session API endpoint" not "Updated payment code"
-- Keep each bullet to one sentence`
+- "description" should be a thorough 3-5 sentence summary written for a reviewer who needs to understand and approve these changes. Cover: what was built, how it works at a high level, key design decisions, and any important trade-offs or patterns used. Write in plain English as if briefing a colleague.
+- "changes" should be 4-8 bullet points highlighting the most noteworthy individual changes. Each bullet should be specific and actionable — a reviewer should understand what to look for. Good: "Added graceful degradation so the app works without a Stripe key configured". Bad: "Updated payment code".
+- Focus on behavior, architecture, and user impact — not file names or commit messages
+- Keep each change bullet to one sentence`
 
         // Spawn claude CLI for a quick summary
         const result = await new Promise<string>((resolve, reject) => {
