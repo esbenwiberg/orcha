@@ -54,7 +54,7 @@ export const BLUEPRINT_SCHEMA = {
     },
     shortDescription: {
       type: 'string' as const,
-      description: '1-2 sentence summary including the milestone count (e.g. "Implements X with Y milestones")',
+      description: 'Summary including the milestone count (e.g. "Implements X with Y milestones"). MUST explicitly state the number of milestones.',
     },
     approach: {
       type: 'string' as const,
@@ -198,12 +198,13 @@ export async function runArchitectStage(
     // Record the stage result
     const completedAt = new Date().toISOString()
     const milestoneCount = getBlueprintMilestones(blueprint).length
+    const milestoneSuffix = milestoneCount === 1 ? 'milestone' : 'milestones'
     const stageResult: StageResult = {
       stage: 'architect',
       startedAt,
       completedAt,
       model: result.model,
-      output: `${blueprint.headline} (${milestoneCount} milestones, ${blueprint.filesToTouch.length} files)`,
+      output: `${blueprint.headline} — ${milestoneCount} ${milestoneSuffix}, ${blueprint.filesToTouch.length} files`,
     }
     run = await recordStageResult(run, stageResult)
 
