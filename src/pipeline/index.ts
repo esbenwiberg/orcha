@@ -66,7 +66,7 @@ export {
 export type { CreatePipelineRunOptions } from './pipeline-engine.js'
 
 // Stage Runner
-export { runStage } from './stage-runner.js'
+export { runStage, killPipelineProcesses } from './stage-runner.js'
 export type { StageRunnerOptions, StageRunnerResult } from './stage-runner.js'
 
 // Git Utilities
@@ -121,6 +121,7 @@ export {
   pausePipeline,
   resumePipeline,
   recoverPipeline,
+  stopPipeline,
   loadPipelineOrThrow,
 } from './checkpoint.js'
 

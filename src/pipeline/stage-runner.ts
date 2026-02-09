@@ -9,15 +9,58 @@
  * Does NOT use SessionManager — directly invokes `claude` CLI via child_process.
  */
 
-import { spawn } from 'child_process'
+import { spawn, type ChildProcess } from 'child_process'
 import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
+import treeKill from 'tree-kill'
 import type { PipelineConfig } from './types.js'
 import { resolveModel, resolveBudget } from './pipeline-config.js'
 import { getPipelineDir } from './pipeline-store.js'
 import { takeSnapshot, computeDelta, recordStageUsage } from './usage-tracker.js'
 import { pipelineEvents } from './events.js'
 import { appendProgress } from './progress.js'
+
+// ============================================================================
+// Active process tracking (for stop/kill support)
+// ============================================================================
+
+/** Map of pipelineId → active child processes spawned for that pipeline. */
+const activeProcesses = new Map<string, ChildProcess[]>()
+
+function registerProcess(pipelineId: string, proc: ChildProcess): void {
+  const procs = activeProcesses.get(pipelineId) || []
+  procs.push(proc)
+  activeProcesses.set(pipelineId, procs)
+}
+
+function unregisterProcess(pipelineId: string, proc: ChildProcess): void {
+  const procs = activeProcesses.get(pipelineId)
+  if (!procs) return
+  const filtered = procs.filter(p => p !== proc)
+  if (filtered.length === 0) {
+    activeProcesses.delete(pipelineId)
+  } else {
+    activeProcesses.set(pipelineId, filtered)
+  }
+}
+
+/**
+ * Kill all active child processes for a pipeline.
+ * Uses tree-kill to ensure the entire process tree is terminated.
+ * Returns true if any processes were killed.
+ */
+export function killPipelineProcesses(pipelineId: string): boolean {
+  const procs = activeProcesses.get(pipelineId)
+  if (!procs || procs.length === 0) return false
+
+  for (const proc of procs) {
+    if (proc.pid && !proc.killed) {
+      treeKill(proc.pid, 'SIGTERM')
+    }
+  }
+  activeProcesses.delete(pipelineId)
+  return true
+}
 
 // ============================================================================
 // Types
@@ -144,7 +187,7 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
     }).catch(() => { /* best-effort */ })
   }
 
-  const result = await spawnClaude(args, cwd, onData, onActivity)
+  const result = await spawnClaude(args, cwd, pipelineId, onData, onActivity)
 
   // Write log file
   const logContent = [
@@ -305,6 +348,7 @@ function extractActivityTitle(evt: Record<string, unknown>): string | null {
 function spawnClaude(
   args: string[],
   cwd: string,
+  pipelineId: string,
   onData?: (stream: 'stdout' | 'stderr', chunk: string) => void,
   onActivity?: (title: string) => void,
 ): Promise<{ exitCode: number; stdout: string; stderr: string; success: boolean }> {
@@ -318,6 +362,8 @@ function spawnClaude(
         CI: '1',
       },
     })
+
+    registerProcess(pipelineId, proc)
 
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
@@ -360,6 +406,7 @@ function spawnClaude(
     })
 
     proc.on('close', (code) => {
+      unregisterProcess(pipelineId, proc)
       // Process any remaining buffered line
       if (lineBuf.trim() && onData) {
         try {

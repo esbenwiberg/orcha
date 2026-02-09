@@ -2442,6 +2442,16 @@ body {
   transition: background 0.15s, color 0.15s;
 }
 
+.pipeline-action-btn.stop {
+  color: #e67e22;
+  border-color: #e67e22;
+}
+
+.pipeline-action-btn.stop:hover {
+  background: #e67e22;
+  color: white;
+}
+
 .pipeline-action-btn.retry {
   color: var(--accent-purple);
   border-color: var(--accent-purple);

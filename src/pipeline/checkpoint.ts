@@ -9,10 +9,12 @@
  */
 
 import type { PipelineRun } from './types.js'
-import { transition, executeArchitectStage, getRecoveryTarget, isValidTransition } from './pipeline-engine.js'
+import { ACTIVE_STATES } from './types.js'
+import { transition, executeArchitectStage, getRecoveryTarget, isValidTransition, transitionToError } from './pipeline-engine.js'
 import { loadPipelineRun, savePipelineRun } from './pipeline-store.js'
 import { pipelineEvents } from './events.js'
 import { appendProgress } from './progress.js'
+import { killPipelineProcesses } from './stage-runner.js'
 
 // ============================================================================
 // Checkpoint: Architect
@@ -184,6 +186,32 @@ export async function resumePipeline(run: PipelineRun): Promise<PipelineRun> {
     title: `Pipeline resumed (returning to ${run.pausedStage})`,
   }).catch(() => { /* best-effort */ })
   return await transition(run, run.pausedStage)
+}
+
+// ============================================================================
+// Stop (user-initiated kill)
+// ============================================================================
+
+/**
+ * Stop a running pipeline by killing its subprocess(es) and transitioning to error.
+ *
+ * The existing "Retry" button (which calls recoverPipeline) handles resume after stop.
+ */
+export async function stopPipeline(run: PipelineRun): Promise<PipelineRun> {
+  if (!ACTIVE_STATES.has(run.state)) {
+    throw new Error(`Cannot stop: pipeline is in '${run.state}', expected an active state`)
+  }
+
+  // Kill subprocess(es) — may be a no-op if nothing is running (e.g. checkpoint states)
+  killPipelineProcesses(run.id)
+
+  await appendProgress(run.id, {
+    type: 'info',
+    stage: run.state,
+    title: 'Pipeline stopped by user',
+  }).catch(() => { /* best-effort */ })
+
+  return await transitionToError(run, 'Stopped by user')
 }
 
 // ============================================================================

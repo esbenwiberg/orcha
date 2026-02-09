@@ -4430,6 +4430,10 @@ function renderPipelineDetail(pipelineId) {
   html += '<div class="pipeline-detail-id">' + pipeline.id + '</div>';
   html += '</div>';
   html += '<div class="pipeline-detail-actions">';
+  var runningStages = ['architect', 'dev', 'gate', 'fix-loop', 'ship'];
+  if (runningStages.indexOf(pipeline.state) !== -1) {
+    html += '<button class="pipeline-action-btn stop" onclick="pipelineStop(\'' + pipeline.id + '\')" title="Stop this pipeline">Stop</button>';
+  }
   if (pipeline.state === 'error') {
     html += '<button class="pipeline-action-btn retry" onclick="pipelineRecover(\'' + pipeline.id + '\')" title="Retry from failed stage">Retry</button>';
   }
@@ -5026,6 +5030,27 @@ async function pipelineFeedback(pipelineId) {
     updatePipelineSidebar(state.pipelines);
   } catch (err) {
     showToast('Feedback failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Stop a running pipeline
+ */
+async function pipelineStop(pipelineId) {
+  if (!confirm('Stop this pipeline? You can retry it later.')) return;
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/stop', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Stop failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Pipeline stopped', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Stop failed: ' + err.message, 'error');
   }
 }
 

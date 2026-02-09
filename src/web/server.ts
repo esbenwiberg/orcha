@@ -2247,6 +2247,27 @@ export class WebDashboardServer {
       }
     })
 
+    // API: Stop a running pipeline
+    this.app.post('/api/pipelines/:id/stop', async (req, res) => {
+      try {
+        const { loadPipelineRun } = await import('../pipeline/index.js')
+        const { stopPipeline } = await import('../pipeline/checkpoint.js')
+
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+
+        const stopped = await stopPipeline(run)
+        console.log(`[API] Pipeline ${run.id} stopped by user (was in ${run.state})`)
+        res.json(stopped)
+      } catch (err) {
+        console.error('[API] Pipeline stop error:', err)
+        res.status(400).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Recover (retry) a failed pipeline
     this.app.post('/api/pipelines/:id/recover', async (req, res) => {
       try {
