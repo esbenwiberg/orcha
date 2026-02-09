@@ -119,7 +119,10 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
     prompt,
   })
 
-  // Spawn the process with live log streaming
+  // Spawn the process with live log streaming + activity progress
+  let lastActivityTime = 0
+  const ACTIVITY_THROTTLE_MS = 3000 // Max 1 activity event per 3 seconds
+
   const onData = (stream: 'stdout' | 'stderr', chunk: string) => {
     pipelineEvents.emitLog({
       pipelineId,
@@ -129,7 +132,19 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
       timestamp: new Date().toISOString(),
     })
   }
-  const result = await spawnClaude(args, cwd, onData)
+
+  const onActivity = (activityTitle: string) => {
+    const now = Date.now()
+    if (now - lastActivityTime < ACTIVITY_THROTTLE_MS) return
+    lastActivityTime = now
+    appendProgress(pipelineId, {
+      type: 'stage-activity',
+      stage: stageKey,
+      title: activityTitle,
+    }).catch(() => { /* best-effort */ })
+  }
+
+  const result = await spawnClaude(args, cwd, onData, onActivity)
 
   // Write log file
   const logContent = [
@@ -252,10 +267,46 @@ function formatStreamEvent(line: string): string | null {
   }
 }
 
+/**
+ * Extract a concise activity title from a parsed stream-json event.
+ * Returns null for events that shouldn't appear in the timeline.
+ */
+function extractActivityTitle(evt: Record<string, unknown>): string | null {
+  if (evt.type === 'system' && evt.subtype === 'init') {
+    return `Initialized (${(evt.tools as string[] | undefined)?.length ?? 0} tools)`
+  }
+  if (evt.type === 'assistant' && evt.message) {
+    const message = evt.message as { content?: Array<{ type: string; name?: string; input?: Record<string, unknown> }> }
+    const content = message.content
+    if (!Array.isArray(content)) return null
+    for (const block of content) {
+      if (block.type === 'tool_use' && block.name) {
+        const input = block.input || {}
+        if (block.name === 'Read' && input.file_path) return `Read ${input.file_path}`
+        if (block.name === 'Grep' && input.pattern) return `Grep "${input.pattern}"`
+        if (block.name === 'Glob' && input.pattern) return `Glob ${input.pattern}`
+        if (block.name === 'Edit' && input.file_path) return `Edit ${input.file_path}`
+        if (block.name === 'Write' && input.file_path) return `Write ${input.file_path}`
+        if (block.name === 'Bash' && input.command) return `Bash: ${(input.command as string).slice(0, 60)}`
+        return block.name
+      }
+    }
+    return null
+  }
+  if (evt.type === 'result') {
+    const turns = (evt.num_turns as number) || 0
+    const cost = evt.total_cost_usd ? `$${(evt.total_cost_usd as number).toFixed(2)}` : ''
+    const dur = evt.duration_ms ? `${((evt.duration_ms as number) / 1000).toFixed(0)}s` : ''
+    return `Completed: ${turns} turns, ${cost}, ${dur}`
+  }
+  return null
+}
+
 function spawnClaude(
   args: string[],
   cwd: string,
   onData?: (stream: 'stdout' | 'stderr', chunk: string) => void,
+  onActivity?: (title: string) => void,
 ): Promise<{ exitCode: number; stdout: string; stderr: string; success: boolean }> {
   return new Promise((resolve, reject) => {
     const proc = spawn('claude', args, {
@@ -283,12 +334,19 @@ function spawnClaude(
         for (const line of lines) {
           if (!line.trim()) continue
           // Check if this is a result event (save it)
+          let parsed: Record<string, unknown> | null = null
           try {
-            const parsed = JSON.parse(line)
-            if (parsed.type === 'result') resultLine = line
+            parsed = JSON.parse(line) as Record<string, unknown>
+            if (parsed && parsed.type === 'result') resultLine = line
           } catch { /* not json */ }
           const msg = formatStreamEvent(line)
           if (msg) onData('stderr', msg + '\n') // Use 'stderr' channel for log display
+
+          // Emit activity events for timeline
+          if (onActivity && parsed) {
+            const activityTitle = extractActivityTitle(parsed)
+            if (activityTitle) onActivity(activityTitle)
+          }
         }
       }
     })

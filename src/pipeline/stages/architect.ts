@@ -169,7 +169,7 @@ export async function runArchitectStage(
       startedAt,
       completedAt,
       model: result.model,
-      output: JSON.stringify(blueprint).slice(0, 1000), // Truncate for state.json
+      output: `${blueprint.approach} (${blueprint.steps.length} steps, ${blueprint.filesToTouch.length} files)`,
     }
     run = await recordStageResult(run, stageResult)
 

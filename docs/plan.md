@@ -1,104 +1,140 @@
-# Blueprint: Pipeline View — Visible UI with Start Form
+# Blueprint: Pipeline Dashboard Improvements
 
 ## Goal
 
-Add a permanent "Pipelines" tab/view to the web dashboard so users can see pipeline runs at a glance and start new ones from a dialog — without needing CLI access.
+Fix the dev stage "silent hang" problem, add real-time log streaming to the pipeline detail view, enrich the activity timeline with intra-stage events, and make the blueprint display readable instead of showing truncated raw JSON.
 
 ## Non-Goals
 
-- Editing pipeline config (models, budgets) from the UI — use defaults for now
-- Real-time stage streaming via WebSocket (existing polling is fine for v1)
-- Competing agent configuration from the UI (CLI-only for now)
+- Changing the pipeline state machine or transition logic
+- Adding new pipeline stages
+- Modifying the Claude CLI subprocess spawning mechanism
+- Reworking the competing agents system
+- Adding pipeline-level timeouts or watchdog processes (separate concern)
 
 ## Acceptance Criteria
 
-- [ ] Sidebar shows a "Pipelines" section header that is always visible (even when no pipelines exist), with a "+" button to start a new pipeline
-- [ ] Clicking "+" opens a "New Pipeline" dialog with fields: description (required), acceptance criteria (textarea, one per line), source branch (default: main), worktree path (optional, default: cwd on server)
-- [ ] Submitting the dialog calls `POST /api/pipelines` and the new pipeline appears in the sidebar
-- [ ] `POST /api/pipelines` backend endpoint creates a pipeline run and kicks off the architect stage asynchronously
-- [ ] Pipeline list in the sidebar always renders (shows "No pipelines yet" placeholder when empty)
-- [ ] Existing pipeline detail view, approve/reject/feedback controls continue to work
-- [ ] `npm run build` succeeds with no type errors
+- [ ] When a stage is running, the pipeline detail page shows a live-updating log panel with real-time output (tool calls, text, init/done events)
+- [ ] The activity timeline shows intra-stage events: tool calls (Read, Edit, Write, Bash, Grep, Glob), agent thinking text, and init/done summary — not just "stage started" and "stage ended"
+- [ ] The blueprint is rendered as formatted, human-readable HTML (approach, steps, files, risks, test strategy) instead of truncated raw JSON
+- [ ] The full blueprint is displayed (currently truncated to 1000 chars in stageHistory)
+- [ ] Dev stage failures are visible in the UI — errors surface in the timeline and the state transitions to `error` correctly
+- [ ] If the Claude subprocess exits non-zero or produces no output, the error detail is shown in the timeline
 
 ## Architecture
 
+### Data Flow (current)
+
 ```
-Browser (app.js)                    Server (server.ts)              Pipeline Engine
-     │                                    │                              │
-     │ click "+" → showNewPipelineDialog  │                              │
-     │ fill form → POST /api/pipelines    │                              │
-     │ ─────────────────────────────────► │                              │
-     │                                    │  createPipelineRun(opts)     │
-     │                                    │ ────────────────────────────►│
-     │                                    │  executeArchitectStage(run)  │
-     │                                    │ ────────────────────────────►│ (async, non-blocking)
-     │                                    │◄─── 202 { id, state }       │
-     │ ◄───────────────────────────────── │                              │
-     │ refresh loop picks up new pipeline │                              │
-     │ sidebar shows pipeline item        │                              │
+Claude subprocess (stream-json stdout)
+  → formatStreamEvent() parses lines → emitLog() → WebSocket → frontend buffers in state.pipelineLogs
+  → appendProgress() writes stage-start/stage-complete → WebSocket → timeline entries
 ```
 
-## Key Files
+### Problems Found
 
-| File | Change |
-|------|--------|
-| `src/web/server.ts` | Add `POST /api/pipelines` endpoint |
-| `src/web/public/app.js` | Add always-visible pipeline header + "New Pipeline" dialog |
-| `src/web/public/style.css` | Minor: pipeline header always-visible styles |
+1. **Blueprint truncated**: `architect.ts:172` does `JSON.stringify(blueprint).slice(0, 1000)` — the stageHistory only stores 1000 chars of raw JSON
+2. **Blueprint shown as raw JSON**: `renderCollapsibleBlueprint()` wraps it in `<pre>` with `escapeHtml()` — no formatting
+3. **Live log panel missing**: WebSocket handler looks for `#pipeline-live-log` element but it's never rendered in the pipeline detail HTML
+4. **Timeline is sparse**: Only `stage-start` and `stage-complete` entries exist — no visibility into what's happening during a stage
+5. **Dev stage errors**: Error paths do call `transitionToError()` which sets state, but the timeline `stage-error` entry only comes from `stage-runner.ts` after subprocess exit — if the error is in `dev.ts` (e.g., git commands), there may be no timeline entry
 
-3 files total. Small, well-scoped.
+### Data Flow (proposed)
+
+```
+Claude subprocess (stream-json stdout)
+  → formatStreamEvent() parses lines → emitLog() → WebSocket → frontend live log panel
+  → NEW: emit fine-grained progress events for tool calls → WebSocket → timeline sub-entries
+  → appendProgress() writes stage-start/stage-complete → WebSocket → timeline entries
+
+Blueprint display:
+  → Fetch full blueprint.json from /api/pipelines/:id/blueprint
+  → Render as structured HTML cards (approach, steps, files, risks)
+```
+
+### Components Changed
+
+| Component | File | Change |
+|-----------|------|--------|
+| Frontend - Pipeline Detail | `src/web/public/app.js` | Add live log panel, render `#pipeline-live-log`, render blueprint as HTML |
+| Frontend - Styles | `src/web/public/style.css` | Styles for live log panel, blueprint cards, timeline sub-events |
+| Stage Runner | `src/pipeline/stage-runner.ts` | Emit fine-grained progress entries for tool calls during stage execution |
+| Architect Stage | `src/pipeline/stages/architect.ts` | Stop truncating blueprint in stageHistory output |
+| Progress Types | `src/pipeline/progress.ts` | Add `stage-activity` progress type for intra-stage events |
 
 ## Milestones
 
-### Milestone 1: Backend — `POST /api/pipelines` endpoint
+### Milestone 1: Fix Blueprint Display
 
-**Intent:** Add the API endpoint so the frontend has something to call.
+**Intent:** Make the blueprint human-readable instead of truncated JSON.
 
-**Key changes in `src/web/server.ts`:**
-- Add `POST /api/pipelines` route after existing pipeline GET routes (~line 2013)
-- Accept JSON body: `{ description, acceptanceCriteria?, sourceBranch?, worktreePath? }`
-- Import `createPipelineRun`, `executeArchitectStage`, `defaultPipelineConfig` from pipeline module
-- Create the run, respond with 202 + run data, then kick off architect stage async (same pattern as feedback endpoint at line 2088)
-- Default `worktreePath` to the server's cwd, default `sourceBranch` to "main"
+**Key files:**
+- `src/pipeline/stages/architect.ts:172` — change stageHistory output from `JSON.stringify(blueprint).slice(0, 1000)` to a meaningful summary string (approach + step count)
+- `src/web/public/app.js` — `renderCollapsibleBlueprint()` (~line 4582): instead of reading from `stageHistory[].output`, fetch full `blueprint.json` from `/api/pipelines/:id/blueprint` and render structured HTML sections: approach, numbered steps with details, file list, risks, test strategy
+- `src/web/public/style.css` — blueprint card styles (sections, step numbers, file chips, risk items)
 
 **Verification:**
-```bash
-npm run build
-curl -X POST http://localhost:3000/api/pipelines \
-  -H 'Content-Type: application/json' \
-  -d '{"description":"test pipeline"}'
-```
+- Start a pipeline, let architect complete
+- Open pipeline detail → expand Blueprint section
+- Confirm it shows formatted approach, steps, files, risks — not raw JSON
+- Confirm full content is shown (not truncated)
 
-### Milestone 2: Frontend — Always-visible pipeline sidebar + start dialog
+### Milestone 2: Add Live Log Panel to Pipeline Detail
 
-**Intent:** Make pipelines discoverable with a permanent sidebar section and a dialog to create new ones.
+**Intent:** Show real-time Claude subprocess output while a stage runs so it doesn't look like a silent hang.
 
-**Key changes in `src/web/public/app.js`:**
-- Modify `updatePipelineSidebar()` (~line 4125) to always render a header with a "+" button, even when pipelines list is empty
-- Add `showNewPipelineDialog()` function following the existing `showNewSessionDialog()` pattern (~line 1700):
-  - Fields: description (input, required), acceptance criteria (textarea), source branch (input, default "main")
-  - Submit button calls `POST /api/pipelines`, shows toast on success/error
-  - Auto-refreshes pipeline list on success
-
-**Key changes in `src/web/public/style.css`:**
-- Ensure `.pipelines-header` is always visible with the "+" button styled like existing action buttons
-
-**Key changes in `src/web/public/index.html`:**
-- Bump cache buster on app.js and style.css
+**Key files:**
+- `src/web/public/app.js` — in `renderPipelineDetail()` (~line 4440), add a "Live Output" section below the activity timeline with `<pre id="pipeline-live-log" data-pipeline-id="...">`. Show only when pipeline is in an active stage (dev, gate, fix-loop, architect, ship). The existing WebSocket handler at line 3835 already writes to `#pipeline-live-log` — it just needs the element to exist.
+- `src/web/public/style.css` — log panel styling (dark bg, monospace, auto-scroll, max-height with overflow)
 
 **Verification:**
-- Open dashboard, see "Pipelines" section in sidebar even with no pipelines
-- Click "+", fill description, submit → pipeline appears in sidebar
-- Click pipeline → detail view shows stage progress
+- Start a pipeline, approve the architect checkpoint
+- Watch dev stage run — log panel should show tool calls and text in real time
+- After stage completes, log panel should show final summary
+
+### Milestone 3: Enrich Activity Timeline with Stage Activity
+
+**Intent:** Add intra-stage events to the timeline so users see what's happening inside each stage.
+
+**Key files:**
+- `src/pipeline/progress.ts` — add `'stage-activity'` to the `ProgressType` union
+- `src/pipeline/stage-runner.ts` — in the `onData` callback (~line 123), after `formatStreamEvent()` returns a message, also emit `appendProgress()` with type `stage-activity` for: init events, tool_use events, and result events. Rate-limit to avoid flooding (e.g., max 1 event per 5 seconds, or batch consecutive tool calls).
+- `src/web/public/app.js` — `renderTimelineEntry()` (~line 4678): handle `stage-activity` type with compact sub-entry styling (smaller dot, indented, lighter text)
+- `src/web/public/style.css` — sub-entry styles
+
+**Verification:**
+- Run a pipeline through dev and gate stages
+- Timeline should show entries like:
+  - "Stage dev started"
+  - "[tool] Read src/web/server.ts" (stage-activity, compact)
+  - "[tool] Edit src/web/server.ts" (stage-activity, compact)
+  - "[tool] Bash: npm test" (stage-activity, compact)
+  - "Stage dev completed (42 turns, $0.85, 3m 12s)"
+
+### Milestone 4: Surface Dev Stage Errors Properly
+
+**Intent:** Make sure dev stage failures are clearly visible — not silent.
+
+**Key files:**
+- `src/pipeline/stages/dev.ts` — in the catch blocks (~lines 170-177), add `appendProgress()` call with `stage-error` type and the error message before calling `transitionToError()`
+- `src/web/public/app.js` — ensure `renderTimelineEntry()` renders `stage-error` entries prominently (red dot, error message visible, expanded by default)
+
+**Verification:**
+- Intentionally trigger a dev stage error (e.g., make blueprint.json unreadable)
+- Confirm error appears in timeline with red indicator and error message
+- Confirm pipeline state shows `error` in the stage progress bar
+- Confirm the "Error" detail appears in the side panel
 
 ## Risks / Unknowns
 
 | Risk | Mitigation |
 |------|-----------|
-| `worktreePath` — what should the default be when starting from web? | Use server's cwd (the orcha project root). The pipeline creates its own worktree within that. |
-| Architect stage is long-running — will the 202 pattern work? | Yes, same pattern already used by the feedback endpoint (line 2088). Polling refresh picks up state changes. |
-| Pipeline module import is dynamic (`await import(...)`) | Follow existing pattern in server.ts — all pipeline imports are already dynamic. |
+| **Progress event volume** — Tool calls during dev could generate 50+ events, cluttering the timeline | Rate-limit `stage-activity` emissions (max 1 per 5s, or group consecutive tool calls into a single "N tool calls" entry). Keep them visually compact. |
+| **Blueprint fetch timing** — Switching from stageHistory to API fetch means an extra network call | Show loading skeleton briefly. The `/api/pipelines/:id/blueprint` endpoint already exists. Low risk. |
+| **Live log memory** — Long stages accumulate text in `state.pipelineLogs[id]` | Cap buffer at ~100KB; trim from the front when exceeded. |
+| **Existing `showPipelineLogs` dialog** — Already a logs dialog that fetches historical logs | Keep it as "full historical log" view. The new inline live panel serves a different purpose (real-time). |
+| **Static file sync** — CLAUDE.md requires copying `src/web/public/*` to `dist/web/public/*` | Each milestone's verification includes the copy step. |
 
-## Next
+---
 
-Next: `/probe 'Milestone 1'`
+Next: /probe 'Milestone 1 — fix blueprint display'

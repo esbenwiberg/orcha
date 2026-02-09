@@ -2462,15 +2462,29 @@ body {
   font-size: 0.82rem;
   color: var(--text-secondary);
   line-height: 1.6;
-  max-height: 400px;
+  max-height: 500px;
   overflow-y: auto;
   padding: 8px 0;
 }
 
 .pipeline-blueprint h3 {
   color: var(--text-primary);
-  font-size: 0.9rem;
-  margin: 0 0 8px;
+  font-size: 0.85rem;
+  margin: 12px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.pipeline-blueprint h3:first-child {
+  margin-top: 0;
+}
+
+.blueprint-section {
+  margin-bottom: 12px;
+}
+
+.blueprint-section p {
+  margin: 4px 0;
 }
 
 .pipeline-blueprint code {
@@ -2483,6 +2497,31 @@ body {
 .pipeline-blueprint ol, .pipeline-blueprint ul {
   padding-left: 20px;
   margin: 4px 0;
+}
+
+.blueprint-steps li {
+  margin-bottom: 8px;
+}
+
+.blueprint-step-detail {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+.blueprint-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.blueprint-file {
+  display: inline-block;
+  background: #1a1a2e;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: var(--accent-blue);
 }
 
 .pipeline-live-log {
@@ -3011,6 +3050,29 @@ body {
   min-height: 40px;
 }
 
+.timeline-entry.activity {
+  min-height: 24px;
+  margin-left: 16px;
+}
+
+.timeline-entry.activity .timeline-content {
+  padding-bottom: 4px;
+}
+
+.timeline-entry.activity .timeline-title {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.timeline-entry.activity .timeline-time {
+  font-size: 0.65rem;
+}
+
+.timeline-dot.activity {
+  font-size: 0.5rem;
+  color: var(--text-muted);
+}
+
 .timeline-entry.last .timeline-content {
   padding-bottom: 0;
 }
@@ -3046,6 +3108,19 @@ body {
 
 .timeline-dot.error {
   color: var(--status-error);
+}
+
+.timeline-entry.error .timeline-title {
+  color: var(--status-error);
+}
+
+.timeline-entry.error .timeline-detail {
+  color: var(--status-error);
+  opacity: 0.85;
+  background: rgba(255, 80, 80, 0.08);
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-top: 4px;
 }
 
 .timeline-line {

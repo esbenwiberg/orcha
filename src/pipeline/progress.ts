@@ -28,6 +28,7 @@ export type ProgressType =
   | 'stage-start'
   | 'stage-complete'
   | 'stage-error'
+  | 'stage-activity'
   | 'gate-result'
   | 'checkpoint'
   | 'fix-loop'

@@ -75,6 +75,7 @@ export class WebDashboardServer {
   private ptySessions = new Map<string, PtySession>()
   private statusMonitors = new Map<string, StatusMonitor>() // Reusable monitors per instance
   private port: number
+  private authEnabled = false
 
   constructor(port = 3847) {
     this.port = port
@@ -181,6 +182,7 @@ export class WebDashboardServer {
     this.app.get('/mobile', authMiddleware)
     this.app.get('/mobile.html', authMiddleware)
 
+    this.authEnabled = true
     console.log(`[Auth] OIDC configured with Entra ID (tenant: ${tenantId.substring(0, 8)}...)`)
   }
 
@@ -189,15 +191,15 @@ export class WebDashboardServer {
    */
   private setupUpgradeHandler(): void {
     this.server.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
-      // Allow localhost connections without auth (SSH tunnel)
-      if (this.isLocalhost(req)) {
+      // Allow without auth when OIDC is not configured or request is from localhost
+      if (!this.authEnabled || this.isLocalhost(req)) {
         this.wss.handleUpgrade(req, socket, head, (ws) => {
           this.wss.emit('connection', ws, req)
         })
         return
       }
 
-      // For remote connections, check for auth cookie
+      // For remote connections with auth enabled, check for auth cookie
       const cookies = req.headers.cookie || ''
       if (!cookies.includes('appSession')) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')

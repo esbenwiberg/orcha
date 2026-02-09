@@ -3831,6 +3831,10 @@ function connectPipelineEvents() {
         // For stderr, show as-is (progress info). For stdout, skip (it's the big JSON result).
         if (stream === 'stderr') {
           state.pipelineLogs[id] += text;
+          // Cap buffer at ~100KB to avoid memory issues on long stages
+          if (state.pipelineLogs[id].length > 100000) {
+            state.pipelineLogs[id] = '... (earlier output trimmed)\n' + state.pipelineLogs[id].slice(-80000);
+          }
           // If this pipeline's detail is currently shown, append to the live log
           const logEl = document.getElementById('pipeline-live-log');
           if (logEl && logEl.dataset.pipelineId === id) {
@@ -3846,6 +3850,11 @@ function connectPipelineEvents() {
         if (existing) {
           existing.state = msg.data.state;
           existing.updatedAt = msg.data.updatedAt;
+        }
+        // Clear live log buffer on stage transitions so new stage starts fresh
+        const activeStages = ['architect', 'dev', 'gate', 'fix-loop', 'ship'];
+        if (activeStages.includes(msg.data.state)) {
+          state.pipelineLogs[msg.data.id] = '';
         }
         // Re-render pipeline sidebar and detail immediately
         updatePipelineSidebar(state.pipelines);
@@ -4451,6 +4460,18 @@ function renderPipelineDetail(pipelineId) {
   html += '</div>';
   html += '</div>';
 
+  // Live Output panel — shows real-time stage logs when a stage is running
+  const activeStages = ['architect', 'dev', 'gate', 'fix-loop', 'ship'];
+  const isActive = activeStages.includes(pipeline.state);
+  if (isActive || state.pipelineLogs[pipeline.id]) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Live Output' + (isActive ? ' <span style="color:var(--accent-green);font-size:0.7rem;">&#9679; streaming</span>' : '') + '</div>';
+    html += '<pre class="pipeline-live-log" id="pipeline-live-log" data-pipeline-id="' + pipeline.id + '">';
+    html += escapeHtml(state.pipelineLogs[pipeline.id] || (isActive ? 'Waiting for output...' : 'Stage output from last run'));
+    html += '</pre>';
+    html += '</div>';
+  }
+
   html += '</div>'; // end pipeline-main-col
 
   // --- Right column / side panel ---
@@ -4577,20 +4598,13 @@ function renderCheckpointControls(pipeline) {
 
 /**
  * Render the collapsible blueprint section.
- * Shows architect output from stageHistory if available.
+ * Fetches full blueprint.json from API and renders as structured HTML.
  */
 function renderCollapsibleBlueprint(pipeline) {
-  // Find architect stage output for blueprint content
-  let blueprintText = '';
-  if (pipeline.stageHistory && pipeline.stageHistory.length > 0) {
-    const archStage = pipeline.stageHistory.find(function(s) { return s.stage === 'architect'; });
-    if (archStage && archStage.output) {
-      blueprintText = archStage.output;
-    }
-  }
-
-  if (!blueprintText) {
-    return ''; // No blueprint available yet
+  // Only show if architect stage has completed
+  const hasArchitect = pipeline.stageHistory && pipeline.stageHistory.some(function(s) { return s.stage === 'architect'; });
+  if (!hasArchitect) {
+    return '';
   }
 
   let html = '<div class="collapsible-section">';
@@ -4598,8 +4612,99 @@ function renderCollapsibleBlueprint(pipeline) {
   html += '<span class="collapsible-arrow">&#9656;</span> Blueprint';
   html += '</button>';
   html += '<div class="collapsible-body" style="display:none;">';
-  html += '<pre class="blueprint-content">' + escapeHtml(blueprintText) + '</pre>';
+  html += '<div class="blueprint-content" id="blueprint-content-' + pipeline.id + '">Loading blueprint...</div>';
   html += '</div>';
+  html += '</div>';
+
+  // Async-fetch the full blueprint after render
+  setTimeout(function() { fetchAndRenderBlueprint(pipeline.id); }, 0);
+
+  return html;
+}
+
+/**
+ * Fetch the full blueprint from API and render as structured HTML.
+ */
+async function fetchAndRenderBlueprint(pipelineId) {
+  const container = document.getElementById('blueprint-content-' + pipelineId);
+  if (!container) return;
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/blueprint');
+    if (!res.ok) {
+      container.textContent = 'Blueprint not available';
+      return;
+    }
+    const bp = await res.json();
+    container.innerHTML = renderBlueprintHtml(bp);
+  } catch (err) {
+    container.textContent = 'Failed to load blueprint';
+  }
+}
+
+/**
+ * Render a blueprint object as structured HTML.
+ */
+function renderBlueprintHtml(bp) {
+  let html = '<div class="pipeline-blueprint">';
+
+  // Approach
+  if (bp.approach) {
+    html += '<div class="blueprint-section">';
+    html += '<h3>Approach</h3>';
+    html += '<p>' + escapeHtml(bp.approach) + '</p>';
+    html += '</div>';
+  }
+
+  // Steps
+  if (bp.steps && bp.steps.length > 0) {
+    html += '<div class="blueprint-section">';
+    html += '<h3>Implementation Steps</h3>';
+    html += '<ol class="blueprint-steps">';
+    for (const step of bp.steps) {
+      html += '<li>';
+      html += '<strong>' + escapeHtml(step.description) + '</strong>';
+      if (step.details) {
+        html += '<div class="blueprint-step-detail">' + escapeHtml(step.details) + '</div>';
+      }
+      html += '</li>';
+    }
+    html += '</ol>';
+    html += '</div>';
+  }
+
+  // Files to touch
+  if (bp.filesToTouch && bp.filesToTouch.length > 0) {
+    html += '<div class="blueprint-section">';
+    html += '<h3>Files</h3>';
+    html += '<div class="blueprint-files">';
+    for (const f of bp.filesToTouch) {
+      html += '<code class="blueprint-file">' + escapeHtml(f) + '</code>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Risks
+  if (bp.risks && bp.risks.length > 0) {
+    html += '<div class="blueprint-section">';
+    html += '<h3>Risks</h3>';
+    html += '<ul>';
+    for (const r of bp.risks) {
+      html += '<li>' + escapeHtml(r) + '</li>';
+    }
+    html += '</ul>';
+    html += '</div>';
+  }
+
+  // Test strategy
+  if (bp.testStrategy) {
+    html += '<div class="blueprint-section">';
+    html += '<h3>Test Strategy</h3>';
+    html += '<p>' + escapeHtml(bp.testStrategy) + '</p>';
+    html += '</div>';
+  }
+
   html += '</div>';
   return html;
 }
@@ -4676,22 +4781,24 @@ function renderTimelineEntries(entries) {
  * Render a single timeline entry.
  */
 function renderTimelineEntry(entry, isLast) {
+  const isActivity = entry.type === 'stage-activity';
   const isCompleted = entry.type === 'stage-complete' || entry.type === 'checkpoint' || entry.type === 'info';
   const isError = entry.type === 'stage-error';
   const isRunning = isLast && (entry.type === 'stage-start' || entry.type === 'competing-start');
 
   let dotClass = 'timeline-dot';
-  if (isRunning) dotClass += ' running';
+  if (isActivity) dotClass += ' activity';
+  else if (isRunning) dotClass += ' running';
   else if (isError) dotClass += ' error';
   else if (isCompleted) dotClass += ' completed';
 
   const timeStr = formatTimeOnly(entry.timestamp);
 
-  let html = '<div class="timeline-entry' + (isLast ? ' last' : '') + '">';
+  let html = '<div class="timeline-entry' + (isLast ? ' last' : '') + (isActivity ? ' activity' : '') + (isError ? ' error' : '') + '">';
 
   // Vertical line + dot
   html += '<div class="timeline-gutter">';
-  html += '<div class="' + dotClass + '">' + (isRunning ? '&#9675;' : '&#9679;') + '</div>';
+  html += '<div class="' + dotClass + '">' + (isActivity ? '&#8226;' : isRunning ? '&#9675;' : '&#9679;') + '</div>';
   if (!isLast) {
     html += '<div class="timeline-line"></div>';
   }

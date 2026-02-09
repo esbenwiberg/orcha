@@ -169,6 +169,12 @@ async function runSingleDevStage(
     return run
   } catch (err) {
     const errorMsg = `Dev stage error: ${(err as Error).message}`
+    await appendProgress(run.id, {
+      type: 'stage-error',
+      stage: 'dev',
+      title: 'Dev stage error',
+      detail: errorMsg,
+    }).catch(() => { /* best-effort */ })
     try {
       return await transitionToError(run, errorMsg)
     } catch {
@@ -312,6 +318,12 @@ async function runCompetingDevStage(
     return run
   } catch (err) {
     const errorMsg = `Competing dev stage error: ${(err as Error).message}`
+    await appendProgress(run.id, {
+      type: 'stage-error',
+      stage: 'dev',
+      title: 'Competing dev stage error',
+      detail: errorMsg,
+    }).catch(() => { /* best-effort */ })
     try {
       return await transitionToError(run, errorMsg)
     } catch {
