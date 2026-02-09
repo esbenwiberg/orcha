@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
-  <link rel="stylesheet" href="mobile.css?v=6">
+  <link rel="stylesheet" href="mobile.css?v=7">
   <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
 </head>
 <body>
@@ -26,10 +26,10 @@
       <button id="refresh-btn" class="header-btn" title="Refresh">&#8635;</button>
     </header>
 
-    <!-- Session info bar -->
+    <!-- Session info bar (sessions tab only) -->
     <div id="session-info"></div>
 
-    <!-- Special key toolbar for mobile -->
+    <!-- Special key toolbar for mobile (sessions tab only) -->
     <div id="key-toolbar">
       <button class="key-btn" data-key="esc">Esc</button>
       <button class="key-btn" data-key="tab">Tab</button>
@@ -41,13 +41,20 @@
       <button class="key-btn" data-key="right">&#9654;</button>
     </div>
 
-    <!-- Terminal container -->
+    <!-- Terminal container (sessions tab) -->
     <div id="terminal-container"></div>
+
+    <!-- Pipeline list container (pipelines tab, hidden by default) -->
+    <div id="pipeline-list-container" class="hidden"></div>
 
     <!-- Bottom navigation -->
     <nav id="bottom-nav">
+      <div id="nav-tabs">
+        <button class="nav-tab active" data-tab="sessions">Sessions</button>
+        <button class="nav-tab" data-tab="pipelines">Pipelines</button>
+      </div>
       <div id="session-dots"></div>
-      <button id="create-btn" class="fab" title="Create session">+</button>
+      <button id="create-btn" class="fab" title="Create">+</button>
     </nav>
 
     <!-- Create session bottom sheet -->
@@ -74,8 +81,36 @@
         </div>
       </div>
     </div>
+
+    <!-- Create pipeline bottom sheet -->
+    <div id="pipeline-sheet" class="bottom-sheet hidden">
+      <div class="sheet-backdrop"></div>
+      <div class="sheet-content">
+        <h3>New Pipeline</h3>
+        <label>Repository
+          <select id="pl-create-repo"></select>
+        </label>
+        <label>Title
+          <input type="text" id="pl-create-title" placeholder="Short name (optional)">
+        </label>
+        <label>Description
+          <textarea id="pl-create-desc" rows="3" placeholder="What should be built or fixed?"></textarea>
+        </label>
+        <label>Acceptance Criteria
+          <textarea id="pl-create-ac" rows="3" placeholder="One per line"></textarea>
+        </label>
+        <label>Source Branch
+          <input type="text" id="pl-create-branch" value="main" placeholder="main">
+        </label>
+        <div id="pl-create-error" class="sheet-error hidden"></div>
+        <div class="sheet-actions">
+          <button id="pl-create-cancel" class="btn-secondary">Cancel</button>
+          <button id="pl-create-submit" class="btn-primary">Start Pipeline</button>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <script src="mobile.js?v=6"></script>
+  <script src="mobile.js?v=7"></script>
 </body>
 </html>
