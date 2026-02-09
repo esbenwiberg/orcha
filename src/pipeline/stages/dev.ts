@@ -237,10 +237,12 @@ async function runSingleDevStage(
 
       const { systemPrompt, userPrompt } = buildMilestoneDevPrompt(workItem, codebase, milestoneContext)
 
-      // Run the milestone with a FRESH Claude session (this is the key for context isolation)
+      // AC #1: Run the milestone with a FRESH Claude session (clean context per milestone)
+      // Each milestone gets a unique stageKey which ensures a completely new session is spawned.
+      // This prevents context pollution between milestones and reduces token costs.
       const result = await runStage({
         pipelineId: run.id,
-        stageKey: `dev-milestone-${i}`,
+        stageKey: `dev-milestone-${i}`, // Unique key = fresh session
         config: run.config,
         cwd: run.worktreePath,
         prompt: userPrompt,
@@ -651,7 +653,13 @@ async function runCompetingDevStage(
 }
 
 /**
- * Run N competing agents on a single milestone (or full blueprint if milestoneContext is null).
+ * AC #2: Run N competing agents in PARALLEL on a single milestone.
+ *
+ * This function spawns N dev agents that work simultaneously on the same milestone.
+ * Each agent gets its own worktree and fresh context. The gate stage later evaluates
+ * all results and selects a winner.
+ *
+ * @param count - Number of parallel agents to spawn (from --competing N flag)
  */
 async function runCompetingAgentsOnMilestone(
   run: PipelineRun,
@@ -671,6 +679,7 @@ async function runCompetingAgentsOnMilestone(
     ? `milestone-${milestoneContext.milestoneIndex}`
     : 'full'
 
+  // Spawn N agents in PARALLEL - each gets its own worktree and runs concurrently
   for (let i = 0; i < count; i++) {
     agentPromises.push(
       runCompetingAgent(run, i, blueprintJson, workItem, opts, milestoneContext).then(
@@ -701,7 +710,7 @@ async function runCompetingAgentsOnMilestone(
     )
   }
 
-  // Wait for all agents to complete
+  // Wait for all parallel agents to complete (AC #2: parallel dev agents)
   await Promise.all(agentPromises)
 
   // Sort by agent index for consistent ordering
