@@ -50,6 +50,29 @@ import type { WorkItemContext, CodebaseContext, MilestoneContext } from '../prom
 import { appendProgress } from '../progress.js'
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Sanitize a string for use in git commit messages.
+ * Removes/escapes characters that could be problematic in shell or git.
+ * This prevents command injection from untrusted blueprint milestone descriptions.
+ */
+function sanitizeForGitMessage(input: string): string {
+  // Remove or replace characters that could cause issues:
+  // - Backticks (command substitution)
+  // - $() (command substitution)
+  // - Newlines (could break the commit message format)
+  // - Quotes (could break shell parsing)
+  return input
+    .replace(/`/g, "'")           // Replace backticks with single quotes
+    .replace(/\$/g, '')           // Remove $ signs (prevents $() and $VAR expansion)
+    .replace(/[\r\n]+/g, ' ')     // Replace newlines with spaces
+    .replace(/["\\]/g, '')        // Remove double quotes and backslashes
+    .slice(0, 200)                // Limit length to prevent excessively long messages
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -122,6 +145,11 @@ async function runSingleDevStage(
     // Get milestones from blueprint (supports both 'milestones' and 'steps')
     const milestones = getBlueprintMilestones(blueprint)
 
+    // Validate that blueprint has at least one milestone
+    if (milestones.length === 0) {
+      return await transitionToError(run, 'Blueprint has no milestones or steps defined. Cannot proceed with dev stage.')
+    }
+
     // Build work item context
     const workItem: WorkItemContext = {
       workItemId: run.workItemId,
@@ -142,6 +170,20 @@ async function runSingleDevStage(
 
     // Determine starting milestone (support recovery from failed milestone)
     const startingMilestoneIndex = run.currentMilestoneIndex ?? 0
+
+    // If recovering from a failed milestone, remove any error entries for that milestone
+    // to avoid duplicate entries in milestoneHistory when the milestone is retried
+    if (startingMilestoneIndex > 0 && run.milestoneHistory && run.milestoneHistory.length > 0) {
+      const lastEntry = run.milestoneHistory[run.milestoneHistory.length - 1]
+      if (lastEntry.index === startingMilestoneIndex && lastEntry.error) {
+        // Remove the failed entry - we're retrying this milestone
+        run = {
+          ...run,
+          milestoneHistory: run.milestoneHistory.slice(0, -1),
+        }
+        await savePipelineRun(run)
+      }
+    }
 
     // If only one milestone, use the simpler single-prompt approach
     if (milestones.length <= 1) {
@@ -378,18 +420,28 @@ async function runSingleMilestoneDevStage(
 
 /**
  * Get the cumulative diff from source branch to current HEAD.
+ * This captures ALL changes from all milestones, not just the last commit.
  */
 async function getFinalDiff(worktreePath: string, sourceBranch: string): Promise<string> {
   const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
 
   try {
+    // Try to diff against the source branch directly
     return execSync(`git diff ${sourceBranch}...HEAD`, execOpts).trim()
   } catch {
     try {
+      // Try with origin/ prefix
       return execSync(`git diff origin/${sourceBranch}...HEAD`, execOpts).trim()
     } catch {
-      // Fallback: diff from initial commit on this branch
-      return execSync('git diff HEAD~1', execOpts).trim()
+      try {
+        // Try to find the merge-base with main/master as fallback
+        const mergeBase = execSync('git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD origin/master 2>/dev/null || git rev-list --max-parents=0 HEAD', execOpts).trim()
+        return execSync(`git diff ${mergeBase}...HEAD`, execOpts).trim()
+      } catch {
+        // Last resort: get diff of all changes in the working tree
+        // This won't capture committed milestone changes, but is better than nothing
+        return execSync('git diff HEAD', execOpts).trim()
+      }
     }
   }
 }
@@ -408,9 +460,16 @@ async function getFinalDiff(worktreePath: string, sourceBranch: string): Promise
  * - Proceed to next milestone with fresh agents
  *
  * This ensures:
- * 1. Competition is fair (all agents start from same state)
- * 2. Context is fresh for each milestone (no pollution)
- * 3. Parallelism happens within milestones, not across them
+ * 1. Competition is fair (all agents start from same state for each milestone)
+ * 2. Context is fresh for each milestone (no pollution from previous conversations)
+ * 3. Parallelism happens WITHIN milestones (N agents), not ACROSS milestones
+ *
+ * Why milestones are sequential but competing agents are parallel:
+ * - Milestones have sequential dependencies (M2 builds on M1's file changes)
+ * - Competing agents work on the SAME milestone, so they're independent
+ * - Each agent gets a fresh worktree branched from the same commit
+ * - After gate selects a winner, that code becomes the base for next milestone
+ * - Fresh context per milestone prevents conversation bloat and reduces costs
  */
 async function runCompetingDevStage(
   run: PipelineRun,
@@ -427,6 +486,11 @@ async function runCompetingDevStage(
 
     // Get milestones from blueprint
     const milestones = getBlueprintMilestones(blueprint)
+
+    // Validate that blueprint has at least one milestone
+    if (milestones.length === 0) {
+      return await transitionToError(run, 'Blueprint has no milestones or steps defined. Cannot proceed with dev stage.')
+    }
 
     // Build work item context
     const workItem: WorkItemContext = {
@@ -467,6 +531,9 @@ async function runCompetingDevStage(
     for (let milestoneIdx = startingMilestoneIndex; milestoneIdx < milestones.length; milestoneIdx++) {
       const milestone = milestones[milestoneIdx]
 
+      // Record milestone start time BEFORE running agents
+      const milestoneStartedAt = new Date().toISOString()
+
       // Update current milestone index
       run = {
         ...run,
@@ -502,12 +569,14 @@ async function runCompetingDevStage(
         return run
       }
 
-      // Record milestone completion
+      // Record milestone completion with data from competing results
+      // Get the commit SHA from the first successful agent (winner will be determined by gate)
+      const firstSuccessfulResult = run.competingResults?.find((r) => r.commitSha !== '')
       const milestoneProgress: MilestoneProgress = {
         index: milestoneIdx,
-        startedAt: new Date().toISOString(),
+        startedAt: milestoneStartedAt,
         completedAt: new Date().toISOString(),
-        // Note: commitSha will be from the winning agent, stored in competingResults
+        commitSha: firstSuccessfulResult?.commitSha, // Gate will determine final winner
       }
       run = {
         ...run,
@@ -565,7 +634,15 @@ async function runCompetingAgentsOnMilestone(
   for (let i = 0; i < count; i++) {
     agentPromises.push(
       runCompetingAgent(run, i, blueprintJson, workItem, opts, milestoneContext).then(
-        (result) => { competingResults.push(result) },
+        (result) => {
+          // THREAD-SAFETY NOTE: Array.push() is safe here because JavaScript is
+          // single-threaded. Even though these promises run concurrently, each
+          // .then() callback executes atomically on the event loop. The sort
+          // and filter operations below only run AFTER Promise.all() completes,
+          // when all pushes are done. Do NOT add any shared state mutations
+          // beyond this push without careful consideration.
+          competingResults.push(result)
+        },
         (err) => {
           // Record failed agent but don't abort the whole stage
           console.error(`Competing agent ${i} (${milestoneLabel}) failed:`, (err as Error).message)
@@ -643,6 +720,21 @@ async function runCompetingAgentsOnMilestone(
       })),
     },
   }).catch(() => { /* best-effort */ })
+
+  // Clean up worktrees after results are saved (diffs are preserved in files)
+  // The gate stage will use the saved diff files, not the worktrees directly
+  for (const result of competingResults) {
+    if (result.worktreePath) {
+      try {
+        execSync(
+          `git worktree remove --force "${result.worktreePath}"`,
+          { cwd: run.worktreePath, encoding: 'utf-8', timeout: 30000 },
+        )
+      } catch {
+        // Best-effort cleanup - don't fail the stage if cleanup fails
+      }
+    }
+  }
 
   // Check if we have at least one successful agent
   if (successfulResults.length === 0) {
@@ -751,6 +843,10 @@ async function runCompetingAgent(
       : undefined
     const devResult = await autoCommit(worktreePath, run.sourceBranch, commitSuffix)
 
+    // Note: worktree is intentionally kept on success - the gate stage needs it
+    // to evaluate the agent's work. The gate stage is responsible for cleanup
+    // after evaluation, or runCompetingAgentsOnMilestone cleans up after all
+    // agents complete and results are saved.
     return {
       agentIndex,
       branch: devResult.branch,
@@ -797,14 +893,23 @@ async function autoCommit(worktreePath: string, sourceBranch: string, commitSuff
   let commitSha: string
 
   if (status) {
-    // Commit the changes with optional milestone info
+    // Build commit message safely - use git's -m flag with sanitized message
+    // to prevent command injection from untrusted milestone descriptions
+    const baseMsg = 'pipeline: dev agent implementation'
     const commitMsg = commitSuffix
-      ? `pipeline: dev agent implementation (${commitSuffix})`
-      : 'pipeline: dev agent implementation'
-    execSync(
-      `git commit -m "${commitMsg}"`,
-      execOpts,
-    )
+      ? `${baseMsg} (${sanitizeForGitMessage(commitSuffix)})`
+      : baseMsg
+
+    // Use writeFileSync + --file to safely pass the commit message
+    // This avoids shell interpolation of the commitSuffix entirely
+    const { writeFileSync, unlinkSync } = await import('fs')
+    const commitMsgFile = join(worktreePath, '.git', 'PIPELINE_COMMIT_MSG')
+    writeFileSync(commitMsgFile, commitMsg, 'utf-8')
+    try {
+      execSync(`git commit --file="${commitMsgFile}"`, execOpts)
+    } finally {
+      try { unlinkSync(commitMsgFile) } catch { /* best-effort cleanup */ }
+    }
   }
 
   commitSha = execSync('git rev-parse HEAD', execOpts).trim()
