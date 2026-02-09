@@ -423,20 +423,29 @@ async function runSingleMilestoneDevStage(
 /**
  * Get the diff from sourceBranch to HEAD using merge-base (three-dot) semantics.
  *
- * SECURITY: Uses spawnSync with array arguments to avoid command injection.
- * We explicitly compute the merge-base first, then diff against the resulting
- * SHA — this avoids passing user-controlled branch names in range syntax
- * (e.g. "branch...HEAD") where they could be misinterpreted as git flags.
+ * SECURITY: Uses spawnSync with array arguments to avoid shell command injection.
+ * Additionally, we use '--' to separate git options from ref arguments, preventing
+ * git flag injection attacks where a malicious branch name like '--help' or
+ * '--exec=evil' could be interpreted as a git option.
  */
 function getDiff(worktreePath: string, sourceBranch: string): string {
   const spawnOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
 
+  // SECURITY: Validate branch name doesn't contain path traversal sequences
+  // that could escape the origin/ prefix (e.g., '../--exec=evil')
+  const sanitizedBranch = sourceBranch.replace(/^\.\.\/+/, '').replace(/\.\.\/+/g, '')
+
   // Compute the merge-base SHA first, then diff against it.
   // This is equivalent to `git diff sourceBranch...HEAD` but safer because
   // the merge-base SHA is a hex string that can't be misinterpreted as a flag.
-  const candidates = [sourceBranch, `origin/${sourceBranch}`, 'origin/main', 'origin/master']
+  //
+  // SECURITY: Use '--' to separate options from arguments. This tells git that
+  // everything after '--' is a ref/path, not an option. This prevents flag
+  // injection attacks where a branch named '--help' would be interpreted as an option.
+  const candidates = [sanitizedBranch, `origin/${sanitizedBranch}`, 'origin/main', 'origin/master']
   for (const ref of candidates) {
-    const mbResult = spawnSync('git', ['merge-base', ref, 'HEAD'], spawnOpts)
+    // '--' ensures 'ref' is treated as a revision, not a flag
+    const mbResult = spawnSync('git', ['merge-base', '--', ref, 'HEAD'], spawnOpts)
     if (mbResult.status === 0 && mbResult.stdout) {
       const mergeBase = mbResult.stdout.trim()
       const diffResult = spawnSync('git', ['diff', mergeBase, 'HEAD'], spawnOpts)
