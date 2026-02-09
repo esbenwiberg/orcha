@@ -104,7 +104,9 @@ export const BLUEPRINT_SCHEMA = {
       description: '(Deprecated - use milestones instead) Backward compatibility alias for milestones',
     },
   },
-  required: ['headline', 'shortDescription', 'approach', 'filesToTouch', 'risks', 'testStrategy'],
+  // Note: milestones/steps not in required array because JSON schema can't express "one of".
+  // The isValidBlueprint type guard enforces that at least one is present.
+  required: ['headline', 'shortDescription', 'approach', 'filesToTouch', 'risks', 'testStrategy', 'milestones'],
 }
 
 // Re-export BlueprintOutput from types.ts for backward compatibility
