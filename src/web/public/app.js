@@ -4662,9 +4662,13 @@ function renderBlueprintHtml(bp) {
     html += '<ol class="blueprint-steps">';
     for (const step of bp.steps) {
       html += '<li>';
-      html += '<strong>' + escapeHtml(step.description) + '</strong>';
-      if (step.details) {
-        html += '<div class="blueprint-step-detail">' + escapeHtml(step.details) + '</div>';
+      if (typeof step === 'string') {
+        html += escapeHtml(step);
+      } else if (step && typeof step === 'object') {
+        html += '<strong>' + escapeHtml(step.description || step.title || '') + '</strong>';
+        if (step.details) {
+          html += '<div class="blueprint-step-detail">' + escapeHtml(step.details) + '</div>';
+        }
       }
       html += '</li>';
     }
@@ -4678,7 +4682,8 @@ function renderBlueprintHtml(bp) {
     html += '<h3>Files</h3>';
     html += '<div class="blueprint-files">';
     for (const f of bp.filesToTouch) {
-      html += '<code class="blueprint-file">' + escapeHtml(f) + '</code>';
+      var fname = typeof f === 'string' ? f : (f && (f.path || f.file || JSON.stringify(f)));
+      html += '<code class="blueprint-file">' + escapeHtml(fname || '') + '</code>';
     }
     html += '</div>';
     html += '</div>';
@@ -4690,7 +4695,13 @@ function renderBlueprintHtml(bp) {
     html += '<h3>Risks</h3>';
     html += '<ul>';
     for (const r of bp.risks) {
-      html += '<li>' + escapeHtml(r) + '</li>';
+      if (typeof r === 'string') {
+        html += '<li>' + escapeHtml(r) + '</li>';
+      } else if (r && typeof r === 'object') {
+        html += '<li><strong>' + escapeHtml(r.risk || r.description || '') + '</strong>';
+        if (r.mitigation) html += '<br><em>Mitigation:</em> ' + escapeHtml(r.mitigation);
+        html += '</li>';
+      }
     }
     html += '</ul>';
     html += '</div>';
