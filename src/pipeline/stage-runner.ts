@@ -152,14 +152,13 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
   await mkdir(logsDir, { recursive: true })
   const logPath = join(logsDir, `${stageKey}.log`)
 
-  // Build the CLI arguments
+  // Build the CLI arguments (prompt is passed via stdin to avoid E2BIG)
   const args = buildCliArgs({
     model,
     budget,
     systemPrompt,
     allowedTools,
     outputFormat,
-    prompt,
   })
 
   // Spawn the process with live log streaming + activity progress
@@ -187,7 +186,7 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
     }).catch(() => { /* best-effort */ })
   }
 
-  const result = await spawnClaude(args, cwd, pipelineId, onData, onActivity)
+  const result = await spawnClaude(args, cwd, pipelineId, prompt, onData, onActivity)
 
   // Write log file
   const logContent = [
@@ -242,7 +241,6 @@ interface CliArgs {
   systemPrompt: string
   allowedTools?: string
   outputFormat?: string
-  prompt: string
 }
 
 function buildCliArgs(args: CliArgs): string[] {
@@ -251,7 +249,7 @@ function buildCliArgs(args: CliArgs): string[] {
     '--append-system-prompt', args.systemPrompt,
     '--dangerously-skip-permissions',
     '--max-budget-usd', String(args.budget),
-    '-p', args.prompt,
+    '-p',
     // Always use stream-json for live progress streaming
     '--output-format', 'stream-json',
     '--verbose',
@@ -349,19 +347,24 @@ function spawnClaude(
   args: string[],
   cwd: string,
   pipelineId: string,
+  prompt: string,
   onData?: (stream: 'stdout' | 'stderr', chunk: string) => void,
   onActivity?: (title: string) => void,
 ): Promise<{ exitCode: number; stdout: string; stderr: string; success: boolean }> {
   return new Promise((resolve, reject) => {
     const proc = spawn('claude', args, {
       cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
         // Ensure non-interactive
         CI: '1',
       },
     })
+
+    // Pipe the prompt via stdin to avoid E2BIG when prompts are large
+    proc.stdin.on('error', () => { /* ignore broken pipe errors */ })
+    proc.stdin.end(prompt)
 
     registerProcess(pipelineId, proc)
 
