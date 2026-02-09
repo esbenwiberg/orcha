@@ -306,6 +306,7 @@ export async function retryEscalatedPipeline(
   let updated: PipelineRun = {
     ...run,
     config: updatedConfig,
+    gateResults: [],
     skipChecks: opts?.skipChecks?.length ? opts.skipChecks : run.skipChecks,
     userInstructions: opts?.instructions || run.userInstructions,
     updatedAt: now,

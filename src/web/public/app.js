@@ -3882,19 +3882,12 @@ function connectPipelineEvents() {
               placeholder.remove();
             }
 
-            // Update the previous last entry: remove "last" class and swap hollow dot to filled
-            const prevLast = container.querySelector('.timeline-entry.last');
-            if (prevLast) {
-              prevLast.classList.remove('last');
-              // Add a connecting line to the previous entry's gutter
-              const gutter = prevLast.querySelector('.timeline-gutter');
-              if (gutter && !gutter.querySelector('.timeline-line')) {
-                const line = document.createElement('div');
-                line.className = 'timeline-line';
-                gutter.appendChild(line);
-              }
+            // Update the previous newest entry: remove "last" class and swap hollow dot to filled
+            const prevNewest = container.querySelector('.timeline-entry.last');
+            if (prevNewest) {
+              prevNewest.classList.remove('last');
               // Change running (hollow) dot to completed (filled)
-              const dot = prevLast.querySelector('.timeline-dot.running');
+              const dot = prevNewest.querySelector('.timeline-dot.running');
               if (dot) {
                 dot.classList.remove('running');
                 dot.classList.add('completed');
@@ -3902,14 +3895,12 @@ function connectPipelineEvents() {
               }
             }
 
-            // Render and append the new entry as the last one
+            // Render and prepend the new entry as the newest (top)
             const wrapper = document.createElement('div');
             wrapper.innerHTML = renderTimelineEntry(entry, true);
             const newNode = wrapper.firstElementChild;
             if (newNode) {
-              container.appendChild(newNode);
-              // Scroll the timeline to show the new entry
-              newNode.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+              container.insertBefore(newNode, container.firstChild);
             }
           }
         }
@@ -4778,11 +4769,13 @@ async function fetchAndRenderTimeline(pipelineId) {
  * Render all timeline entries as HTML.
  */
 function renderTimelineEntries(entries) {
+  // Newest first — reverse chronological
+  const reversed = entries.slice().reverse();
   let html = '';
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    const isLast = (i === entries.length - 1);
-    html += renderTimelineEntry(entry, isLast);
+  for (let i = 0; i < reversed.length; i++) {
+    const entry = reversed[i];
+    const isNewest = (i === 0);
+    html += renderTimelineEntry(entry, isNewest);
   }
   return html;
 }
@@ -4790,11 +4783,11 @@ function renderTimelineEntries(entries) {
 /**
  * Render a single timeline entry.
  */
-function renderTimelineEntry(entry, isLast) {
+function renderTimelineEntry(entry, isNewest) {
   const isActivity = entry.type === 'stage-activity';
   const isCompleted = entry.type === 'stage-complete' || entry.type === 'checkpoint' || entry.type === 'info';
   const isError = entry.type === 'stage-error';
-  const isRunning = isLast && (entry.type === 'stage-start' || entry.type === 'competing-start');
+  const isRunning = isNewest && (entry.type === 'stage-start' || entry.type === 'competing-start');
 
   let dotClass = 'timeline-dot';
   if (isActivity) dotClass += ' activity';
@@ -4804,14 +4797,12 @@ function renderTimelineEntry(entry, isLast) {
 
   const timeStr = formatTimeOnly(entry.timestamp);
 
-  let html = '<div class="timeline-entry' + (isLast ? ' last' : '') + (isActivity ? ' activity' : '') + (isError ? ' error' : '') + '">';
+  let html = '<div class="timeline-entry' + (isNewest ? ' last' : '') + (isActivity ? ' activity' : '') + (isError ? ' error' : '') + '">';
 
-  // Vertical line + dot
+  // Vertical line + dot (line connects down to the next older entry)
   html += '<div class="timeline-gutter">';
   html += '<div class="' + dotClass + '">' + (isActivity ? '&#8226;' : isRunning ? '&#9675;' : '&#9679;') + '</div>';
-  if (!isLast) {
-    html += '<div class="timeline-line"></div>';
-  }
+  html += '<div class="timeline-line"></div>';
   html += '</div>';
 
   // Content
