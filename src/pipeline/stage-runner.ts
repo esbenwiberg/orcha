@@ -399,9 +399,18 @@ function spawnClaude(
 
     proc.stderr.on('data', (chunk: Buffer) => {
       stderrChunks.push(chunk)
+      // Forward real stderr to the live log so startup errors are visible
+      if (onData) {
+        const text = chunk.toString('utf-8')
+        onData('stderr', text)
+      }
     })
 
     proc.on('error', (err) => {
+      // Forward spawn errors to live log so they're visible in the UI
+      if (onData) {
+        onData('stderr', `[error] Failed to spawn claude CLI: ${err.message}\n`)
+      }
       reject(new Error(`Failed to spawn claude CLI: ${err.message}`))
     })
 
