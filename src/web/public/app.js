@@ -5552,22 +5552,16 @@ function renderShipSummaryCard(pipeline, diffData, blueprint) {
 
   html += '</div>'; // end metrics
 
-  // Noteworthy Changes — list of changed files from diff
-  if (diffData && diffData.diff) {
-    var changedFiles = parseDiffFiles(diffData.diff);
-    if (changedFiles.length > 0) {
-      html += '<div class="ship-summary-noteworthy">';
-      html += '<div class="ship-summary-label">Noteworthy Changes</div>';
-      html += '<ul class="ship-noteworthy-list">';
-      changedFiles.forEach(function(f) {
-        var label = f.path;
-        // Show just the filename for readability, full path as title
-        var shortName = label.split('/').pop();
-        html += '<li title="' + escapeHtml(label) + '">' + escapeHtml(shortName) + '</li>';
-      });
-      html += '</ul>';
-      html += '</div>';
-    }
+  // Noteworthy Changes — commit messages describing what was implemented
+  if (diffData && diffData.commits && diffData.commits.length > 0) {
+    html += '<div class="ship-summary-noteworthy">';
+    html += '<div class="ship-summary-label">Noteworthy Changes</div>';
+    html += '<ul class="ship-noteworthy-list">';
+    diffData.commits.forEach(function(c) {
+      html += '<li>' + escapeHtml(c.message) + '</li>';
+    });
+    html += '</ul>';
+    html += '</div>';
   }
 
   html += '</div>'; // end card

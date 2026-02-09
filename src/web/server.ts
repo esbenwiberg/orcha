@@ -2438,7 +2438,20 @@ export class WebDashboardServer {
           } catch { /* no stat */ }
         }
 
-        res.json({ diff, stat, filesChanged, insertions, deletions })
+        // Get commit messages for noteworthy changes
+        const commits: Array<{ hash: string; message: string }> = []
+        try {
+          const log = execSync(`git log --oneline ${mergeBase}...HEAD`, execOpts)
+          for (const line of log.trim().split('\n')) {
+            if (!line.trim()) continue
+            const spaceIdx = line.indexOf(' ')
+            if (spaceIdx > 0) {
+              commits.push({ hash: line.slice(0, spaceIdx), message: line.slice(spaceIdx + 1) })
+            }
+          }
+        } catch { /* no commits */ }
+
+        res.json({ diff, stat, filesChanged, insertions, deletions, commits })
       } catch (err) {
         console.error('[API] Pipeline diff error:', err)
         res.status(500).json({ error: (err as Error).message })

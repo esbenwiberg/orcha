@@ -11,6 +11,7 @@
   --text-muted: #555;
   --accent-purple: #9b59b6;
   --accent-blue: #3498db;
+  --accent-green: #50c878;
 
   /* Status colors */
   --status-working: #f1c40f;
@@ -3862,13 +3863,14 @@ body {
   padding: 0;
   margin: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
+  flex-direction: column;
+  gap: 4px;
 }
 .ship-noteworthy-list li {
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   color: var(--text-secondary);
   padding: 2px 0;
+  line-height: 1.4;
 }
 .ship-noteworthy-list li::before {
   content: '•';
