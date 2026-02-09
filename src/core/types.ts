@@ -43,6 +43,7 @@ export interface SessionConfig {
   workingDirectory: string
   repoPath: string
   existingWorktreePath?: string // Reuse an existing worktree instead of creating one
+  ephemeral?: boolean // If true, session and worktree are cleaned up automatically when done
 }
 
 // ============================================================================

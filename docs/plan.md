@@ -1,156 +1,147 @@
-# Blueprint: Session Creation Info Display
+# Blueprint: Ship Review Feedback & Post-Ship Review Points
 
 ## Goal
 
-When a new session is created, display useful git/worktree context information directly in the terminal session so the user immediately knows the state of their branch — whether a worktree was reused, whether the branch exists on origin, and whether local is in sync with remote.
+Add two capabilities to the pipeline:
+1. **Ship checkpoint feedback** — instead of binary approve/reject at `checkpoint:ship`, allow the reviewer to send feedback that cycles the pipeline back through `dev → gate → fix-loop → checkpoint:ship` with the reviewer's notes.
+2. **Post-ship review points** — after a PR is created (`completed` state), allow the reviewer to paste PR review comments back into the pipeline, which re-enters `dev → gate → checkpoint:ship` to address them.
 
 ## Non-Goals
 
-- No new UI dialogs or modals — info goes into the terminal as styled echo output
-- No changes to the "New Session" dialog form itself
-- No changes to worktree creation logic
-- No persistent storage of this info
+- **No GitHub/Azure DevOps API integration yet** — review points are manually copy/pasted (future milestone: a "Fetch from PR" button).
+- **No new AI summarization** of review points — the reviewer's text is passed verbatim as context to the dev agent.
+- **No changes to the architect checkpoint** — that flow already has approve/reject/feedback.
+- **No PR update logic** — after addressing review points, the pipeline pushes to the same branch (the existing PR updates automatically via force-push or new commits).
 
 ## Acceptance Criteria
 
-- [ ] On session create, the terminal shows whether a **new worktree was created** or an **existing worktree was reused**
-- [ ] Shows whether the **branch exists on origin** (remote tracking)
-- [ ] If branch exists on origin, shows whether **local is up-to-date, ahead, behind, or diverged**
-- [ ] Shows the **worktree path** for reference
-- [ ] Shows the **base branch** the new branch was created from (when creating a new branch)
-- [ ] Info is displayed as a compact block of colored echo lines at the top of the terminal, before the AI command runs
-- [ ] Frontend toast still shows for worktree reuse (existing behavior preserved)
-- [ ] No display when `useWorktree=false` (no worktree mode)
+- [ ] Ship review panel shows a "Request Changes" button alongside Approve & Reject
+- [ ] Clicking "Request Changes" reveals a textarea for feedback
+- [ ] Submitting feedback transitions `checkpoint:ship → dev` and re-runs `dev → gate → checkpoint:ship`
+- [ ] The feedback text is injected into the dev agent's prompt as reviewer context
+- [ ] Completed pipelines show a "Address Review Points" section with a textarea
+- [ ] Pasting review comments and submitting transitions `completed → dev` and re-runs the dev→gate→ship cycle
+- [ ] Pipeline progress log shows entries for "Ship feedback" and "Review points received"
+- [ ] State machine allows `checkpoint:ship → dev` and `completed → dev` transitions
+- [ ] `fixLoopCount` resets to 0 when re-entering dev from either path
 
 ## Architecture
 
-### Approach: Echo lines in tmux pane
+### State Machine Changes
 
-The simplest and most useful approach — echo styled info directly into the terminal pane before the AI command starts. This is where the user is looking, requires no new UI components, and the info naturally scrolls away once work begins.
+```
+Current:
+  checkpoint:ship → ship | cancelled
+  completed       → (terminal, no transitions)
+
+New:
+  checkpoint:ship → ship | cancelled | dev         (feedback sends back to dev)
+  completed       → dev                             (review points re-open pipeline)
+```
+
+`completed` moves from `TERMINAL_STATES` to `SOFT_TERMINAL_STATES` (like `escalated`) — the pipeline is done but can be reopened.
 
 ### Data Flow
 
+#### Ship Feedback (checkpoint:ship → dev)
 ```
-POST /api/sessions
-  → WorktreeManager gathers branch/worktree info
-  → Server builds info lines
-  → TmuxRenderer.runInPane() echoes info block
-  → AI command runs after info is displayed
-```
-
-### Info Block Format (example output)
-
-```
-─── Session #3 ──────────────────────────
-  Branch:    orcha/session-3-20260206
-  Worktree:  ~/.orcha/worktrees/orcha/session-1-abc1 (reused)
-  Origin:    branch exists, local is 2 commits behind
-─────────────────────────────────────────
+UI: "Request Changes" button → reveals textarea
+  → POST /api/pipelines/:id/ship-feedback { feedback: string }
+  → feedbackShipCheckpoint(run, feedback)
+    → appendProgress("Ship review feedback — re-running dev")
+    → reset fixLoopCount to 0
+    → transition: checkpoint:ship → dev
+    → server's continueRun loop: dev → gate → fix-loop → checkpoint:ship
 ```
 
-Or for a fresh branch:
-
+#### Post-Ship Review Points (completed → dev)
 ```
-─── Session #1 ──────────────────────────
-  Branch:    orcha/feature-xyz (new, from origin/main)
-  Worktree:  ~/.orcha/worktrees/orcha/session-1-abc1
-  Origin:    branch not on remote
-─────────────────────────────────────────
+UI: "Address Review Points" textarea on completed pipeline detail
+  → POST /api/pipelines/:id/review-points { reviewPoints: string }
+  → submitReviewPoints(run, reviewPoints)
+    → appendProgress("PR review points received — re-running dev")
+    → reset fixLoopCount to 0
+    → transition: completed → dev
+    → server's continueRun loop: dev → gate → checkpoint:ship
 ```
 
-## Key Files
+### Components Modified
 
-| File | Change |
-|------|--------|
-| `src/web/server.ts` | Gather git info, build info lines, echo to pane |
-| `src/core/worktree-manager.ts` | Add `getBranchSyncStatus()` helper |
-| `src/web/public/app.js` | Enhance response handling (pass more info for toast) |
-| `dist/web/public/app.js` | Copy of above |
+| Layer | File | Change |
+|-------|------|--------|
+| Types | `src/pipeline/types.ts` | Move `completed` to SOFT_TERMINAL_STATES; add `reviewRounds?: number` to PipelineRun |
+| Engine | `src/pipeline/pipeline-engine.ts` | Add `dev` to checkpoint:ship transition set; add `completed → dev` entry; update recovery map |
+| Checkpoint | `src/pipeline/checkpoint.ts` | Add `feedbackShipCheckpoint()` and `submitReviewPoints()` |
+| Server | `src/web/server.ts` | Add `/ship-feedback` and `/review-points` API endpoints with continueRun |
+| Frontend | `src/web/public/app.js` | "Request Changes" in ship review; "Address Review Points" for completed pipelines |
+| Styles | `src/web/public/style.css` | Style new buttons and review points section |
 
 ## Milestones
 
-### Milestone 1: Add branch sync status helper to WorktreeManager
+### Milestone 1: State Machine & Backend Logic
 
-**Intent:** Add a method that checks whether a branch exists on origin and reports sync status (ahead/behind/diverged/up-to-date).
+**Intent:** Enable the two new transitions and add checkpoint handler functions.
 
-**Files touched:**
-- `src/core/worktree-manager.ts` — add `getBranchSyncStatus(branch: string, worktreePath?: string)` method
-
-**Method returns:**
-```typescript
-interface BranchSyncInfo {
-  existsOnOrigin: boolean
-  ahead: number        // commits ahead of origin
-  behind: number       // commits behind origin
-  baseBranch?: string  // e.g. "origin/main" (only for new branches)
-}
-```
-
-**Implementation:**
-- Use `git rev-parse --verify origin/{branch}` to check if remote branch exists
-- If exists, use `git rev-list --left-right --count origin/{branch}...{branch}` to get ahead/behind
-- If working in a worktree, use `git -C {worktreePath}` to run commands in the right context
+**Files:**
+- `src/pipeline/types.ts` — Move `completed` from TERMINAL_STATES to SOFT_TERMINAL_STATES
+- `src/pipeline/pipeline-engine.ts` — Add `dev` to checkpoint:ship's transition set (line 58); add new entry `['completed', new Set(['dev'])]` (after line 59); update recovery map entry for dev
+- `src/pipeline/checkpoint.ts` — Add `feedbackShipCheckpoint(run, feedback)` (mirrors `feedbackArchitectCheckpoint` pattern: append progress, reset fixLoopCount, transition to dev, augment description with feedback); Add `submitReviewPoints(run, reviewPoints)` (transition completed → dev with review context)
 
 **Verification:**
 ```bash
 npx tsc --noEmit
 ```
 
-### Milestone 2: Build and echo info block in server.ts
+### Milestone 2: API Endpoints
 
-**Intent:** After session creation, gather info and echo a formatted block into the tmux pane before the AI command runs.
+**Intent:** Wire backend functions to HTTP endpoints the dashboard can call.
 
-**Files touched:**
-- `src/web/server.ts` — in `POST /api/sessions` handler, between pane creation and AI command execution
-
-**Logic:**
-1. After worktree is created/reused (line ~446), gather info:
-   - `reusedWorktree` (already available)
-   - Call `worktreeManager.getBranchSyncStatus(branch, workDir)`
-2. Build info lines array
-3. Echo each line into the pane using `sessionTmux.runInPane()`
-4. Then run the AI command (existing code)
-
-**Also add to response:**
-- `branchInfo.existsOnOrigin`, `branchInfo.ahead`, `branchInfo.behind` in the JSON response so the frontend could use it if needed
+**Files:**
+- `src/web/server.ts` — Add `POST /api/pipelines/:id/ship-feedback` (accepts `{ feedback: string }`, calls `feedbackShipCheckpoint`, responds 202, kicks off `continueRun`); Add `POST /api/pipelines/:id/review-points` (accepts `{ reviewPoints: string }`, calls `submitReviewPoints`, responds 202, kicks off `continueRun`)
 
 **Verification:**
 ```bash
 npx tsc --noEmit
-# Manual: create a session and observe info block in terminal
 ```
 
-### Milestone 3: Frontend toast enhancement (optional)
+### Milestone 3: Ship Review "Request Changes" UI
 
-**Intent:** Show richer toast when session is created — e.g. "Session created on orcha/feature-xyz (2 behind origin)".
+**Intent:** Add the feedback button and textarea to the ship review panel.
 
-**Files touched:**
-- `src/web/public/app.js` — update `createSession()` response handling
-- `dist/web/public/app.js` — copy
+**Files:**
+- `src/web/public/app.js` — Add "Request Changes" button to `renderShipReviewPanel()` (both top and bottom action bars); add `pipelineShipFeedback(pipelineId)` handler (mirrors `pipelineFeedback` pattern: toggle textarea, POST to `/ship-feedback`)
+- `src/web/public/style.css` — Reuse existing `.checkpoint-btn.feedback` style
 
 **Verification:**
 ```bash
-cp src/web/public/app.js dist/web/public/app.js
-# Manual: create session, check toast message
+cp src/web/public/app.js dist/web/public/ && cp src/web/public/style.css dist/web/public/
+# Manual: start server, navigate to checkpoint:ship pipeline, verify button + textarea
+```
+
+### Milestone 4: Post-Ship Review Points UI
+
+**Intent:** Show a review points section on completed pipelines.
+
+**Files:**
+- `src/web/public/app.js` — In `renderPipelineDetail()` (or wherever completed pipelines render), add a "Address Review Points" section with textarea + submit button; add `pipelineReviewPoints(pipelineId)` handler
+- `src/web/public/style.css` — Style the review points card
+
+**Verification:**
+```bash
+cp src/web/public/app.js dist/web/public/ && cp src/web/public/style.css dist/web/public/
+# Manual: find completed pipeline, verify review points section appears
 ```
 
 ## Risks & Unknowns
 
-| Risk | Mitigation |
-|------|-----------|
-| `git rev-list --left-right` may fail if branch is brand new (no common ancestor) | Wrap in try/catch, return `{ existsOnOrigin: false, ahead: 0, behind: 0 }` |
-| Echoing multiple lines via tmux `send-keys` may have timing issues | Use a single `echo -e` with `\n` for the whole block, or chain with `&&` |
-| `git -C` in worktree path — need to ensure the worktree is fully initialized before querying | Query happens after `createSession()` returns, so worktree should be ready |
-| Fetch already happens in `WorktreeManager.create()` | No need to fetch again; sync status will be based on already-fetched refs |
-
-## Summary
-
-This is a ~2 milestone task (M3 is optional polish). The core change is:
-1. A small helper method on WorktreeManager
-2. ~30 lines in server.ts to build and echo the info block
-
-The echo approach is the right call — it's where the user is already looking, it requires no new UI, and it naturally scrolls away.
+| Risk | Impact | Quick Probe |
+|------|--------|-------------|
+| Moving `completed` out of TERMINAL_STATES may break rendering logic | Medium | `grep -rn 'TERMINAL_STATES\|terminalState' src/` to find all consumers |
+| Sidebar pipeline status badges may not handle completed-but-reopened | Low | Check how sidebar renders state — likely just reads `pipeline.state` |
+| Multiple review rounds could bloat `description` | Low | Inject feedback as one-shot augmentation (like architect feedback does), don't persist it into description |
+| Recovery map may need updating for completed → dev path | Medium | The `getRecoveryTarget()` uses stageHistory — verify it handles completed pipelines |
+| Tests may assert completed is terminal | Medium | `grep -rn 'TERMINAL.*completed\|completed.*terminal' test/` |
 
 ---
 
-Next: /probe 'Milestone 1 - add getBranchSyncStatus to WorktreeManager'
+Next: /probe 'Milestone 1 — state machine and backend logic'

@@ -16,6 +16,9 @@ const state = {
   usage: null, // { date, tokens, messages, sessions } or null
   gridLayout: { cols: 1, rows: 1 }, // Current grid layout for 2D navigation
   actions: [], // Custom action buttons
+  pipelines: [], // Pipeline runs
+  selectedPipeline: null, // Currently selected pipeline ID
+  pipelineLogs: {}, // pipelineId -> accumulated log text
 };
 
 // DOM elements
@@ -3693,13 +3696,14 @@ function applyGridLayout(count) {
  * Main render function
  */
 async function render() {
-  // Fetch sessions, instances, usage, and actions in parallel
-  const [{ sessions, summary }, instances, usage, actions, health] = await Promise.all([
+  // Fetch sessions, instances, usage, actions, health, and pipelines in parallel
+  const [{ sessions, summary }, instances, usage, actions, health, pipelines] = await Promise.all([
     fetchSessions(),
     fetchInstances(),
     fetchUsage(),
     fetchActions(),
     fetchHealth(),
+    fetchPipelines(),
   ]);
 
   // Store all sessions (for sidebar)
@@ -3707,6 +3711,7 @@ async function render() {
   state.instances = instances;
   state.usage = usage;
   state.actions = actions;
+  state.pipelines = pipelines;
 
   // Dedupe by tmux session for terminal panels (1 panel per tmux session)
   const tmuxSessions = dedupeByTmuxSession(sessions);
@@ -3714,10 +3719,22 @@ async function render() {
   // Update sidebar (1 entry per tmux session, matching panels)
   // Pass instances to show empty repos too
   updateSidebar(tmuxSessions, instances);
+  updatePipelineSidebar(pipelines);
   updateSummary(summary);
   renderActionBar(actions);
   updateUsageDisplay(usage);
   updateHealthDisplay(health);
+
+  // If a pipeline is selected, only re-render if state actually changed
+  if (state.selectedPipeline) {
+    const cur = pipelines.find(p => p.id === state.selectedPipeline);
+    const prev = state._prevPipelineSnapshot;
+    const snap = cur ? (cur.state + '|' + cur.updatedAt + '|' + (cur.fixLoopCount || 0) + '|' + (cur.gateResults || []).length) : '';
+    if (snap !== prev) {
+      state._prevPipelineSnapshot = snap;
+      renderPipelineDetail(state.selectedPipeline);
+    }
+  }
 
   if (tmuxSessions.length === 0) {
     showEmptyState();
@@ -3790,6 +3807,120 @@ function handleResize() {
 }
 
 /**
+ * Connect a dedicated WebSocket for real-time pipeline state-change events.
+ * Falls back gracefully to 3-second polling if the connection fails.
+ */
+function connectPipelineEvents() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}?mode=pipeline-events`;
+  let ws;
+
+  try {
+    ws = new WebSocket(wsUrl);
+  } catch {
+    return; // WS not available — polling handles updates
+  }
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'pipeline:log' && msg.data) {
+        const { id, stage, stream, text } = msg.data;
+        // Buffer the log data
+        if (!state.pipelineLogs[id]) state.pipelineLogs[id] = '';
+        // For stderr, show as-is (progress info). For stdout, skip (it's the big JSON result).
+        if (stream === 'stderr') {
+          state.pipelineLogs[id] += text;
+          // Cap buffer at ~100KB to avoid memory issues on long stages
+          if (state.pipelineLogs[id].length > 100000) {
+            state.pipelineLogs[id] = '... (earlier output trimmed)\n' + state.pipelineLogs[id].slice(-80000);
+          }
+          // If this pipeline's detail is currently shown, append to the live log
+          const logEl = document.getElementById('pipeline-live-log');
+          if (logEl && logEl.dataset.pipelineId === id) {
+            logEl.textContent = state.pipelineLogs[id];
+            logEl.scrollTop = logEl.scrollHeight;
+          }
+        }
+      }
+
+      if (msg.type === 'pipeline:state-change' && msg.data) {
+        // Update cached pipeline state inline if possible
+        const existing = state.pipelines.find(p => p.id === msg.data.id);
+        if (existing) {
+          existing.state = msg.data.state;
+          existing.updatedAt = msg.data.updatedAt;
+        }
+        // Clear live log buffer on stage transitions so new stage starts fresh
+        const activeStages = ['architect', 'dev', 'gate', 'fix-loop', 'ship'];
+        if (activeStages.includes(msg.data.state)) {
+          state.pipelineLogs[msg.data.id] = '';
+        }
+        // Re-render pipeline sidebar and detail immediately
+        updatePipelineSidebar(state.pipelines);
+        if (state.selectedPipeline) {
+          state._prevPipelineSnapshot = null; // force re-render on real state change
+          // Fetch full data for the detail view
+          fetchPipelines().then(pipelines => {
+            state.pipelines = pipelines;
+            updatePipelineSidebar(pipelines);
+            renderPipelineDetail(state.selectedPipeline);
+          });
+        }
+      }
+
+      // Live-append progress entries to the activity timeline
+      if (msg.type === 'pipeline:progress' && msg.data) {
+        const { pipelineId, entry } = msg.data;
+        // Only update if we are viewing this pipeline's detail
+        if (pipelineId && entry && state.selectedPipeline === pipelineId) {
+          const container = document.getElementById('activity-timeline-' + pipelineId);
+          if (container) {
+            // Clear "No activity yet" / "Loading..." placeholder if present
+            const placeholder = container.querySelector('.timeline-empty, .timeline-loading');
+            if (placeholder) {
+              placeholder.remove();
+            }
+
+            // Update the previous newest entry: remove "last" class and swap hollow dot to filled
+            const prevNewest = container.querySelector('.timeline-entry.last');
+            if (prevNewest) {
+              prevNewest.classList.remove('last');
+              // Change running (hollow) dot to completed (filled)
+              const dot = prevNewest.querySelector('.timeline-dot.running');
+              if (dot) {
+                dot.classList.remove('running');
+                dot.classList.add('completed');
+                dot.innerHTML = '&#9679;';
+              }
+            }
+
+            // Render and prepend the new entry as the newest (top)
+            const wrapper = document.createElement('div');
+            wrapper.innerHTML = renderTimelineEntry(entry, true);
+            const newNode = wrapper.firstElementChild;
+            if (newNode) {
+              container.insertBefore(newNode, container.firstChild);
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore non-JSON or unexpected messages
+    }
+  };
+
+  ws.onclose = () => {
+    // Reconnect after 5 seconds
+    setTimeout(connectPipelineEvents, 5000);
+  };
+
+  ws.onerror = () => {
+    // onclose will fire after this — reconnect handled there
+  };
+}
+
+/**
  * Initialize the app
  */
 async function init() {
@@ -3798,6 +3929,9 @@ async function init() {
 
   // Poll for status updates every 3 seconds
   state.refreshInterval = setInterval(render, 3000);
+
+  // Connect WebSocket for real-time pipeline events (falls back to polling)
+  connectPipelineEvents();
 
   // Handle window resize
   window.addEventListener('resize', handleResize);
@@ -4014,6 +4148,1635 @@ function initCatchphrases() {
   el.style.cursor = 'pointer';
   el.addEventListener('click', rotate);
 }
+
+// =========================================================================
+// Pipeline View
+// =========================================================================
+
+const pipelineListEl = document.getElementById('pipeline-list');
+const pipelineDetailEl = document.getElementById('pipeline-detail');
+
+/**
+ * Fetch pipeline runs from the API
+ */
+async function fetchPipelines() {
+  try {
+    const res = await fetch('/api/pipelines');
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Pipeline stage order for progress bar
+ */
+const PIPELINE_STAGE_ORDER = [
+  'created', 'architect', 'checkpoint:arch', 'dev', 'gate',
+  'fix-loop', 'checkpoint:ship', 'ship', 'completed'
+];
+
+const PIPELINE_STAGE_LABELS = {
+  'created': 'Created',
+  'architect': 'Architect',
+  'checkpoint:arch': 'Review',
+  'dev': 'Dev',
+  'gate': 'Gate',
+  'fix-loop': 'Fix',
+  'checkpoint:ship': 'Ship Review',
+  'ship': 'Ship',
+  'completed': 'Done',
+};
+
+/**
+ * Update the pipeline sidebar section
+ */
+function updatePipelineSidebar(pipelines) {
+  if (!pipelineListEl) return;
+
+  pipelineListEl.innerHTML = '';
+
+  // Always show header with + button
+  const header = document.createElement('div');
+  header.className = 'pipelines-header';
+  header.innerHTML = '<span>Pipelines</span><button class="pipeline-add-btn" title="New Pipeline">+</button>';
+  pipelineListEl.appendChild(header);
+
+  header.querySelector('.pipeline-add-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    showNewPipelineDialog();
+  });
+
+  if (!pipelines || pipelines.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'pipeline-empty';
+    empty.textContent = 'No pipelines yet';
+    pipelineListEl.appendChild(empty);
+    return;
+  }
+
+  for (const pipeline of pipelines) {
+    const item = document.createElement('div');
+    item.className = 'pipeline-item';
+    if (state.selectedPipeline === pipeline.id) {
+      item.classList.add('active');
+    }
+
+    const dot = document.createElement('div');
+    dot.className = `pipeline-state-dot ${pipeline.state}`;
+
+    const info = document.createElement('div');
+    info.className = 'pipeline-item-info';
+
+    const name = document.createElement('div');
+    name.className = 'pipeline-item-name';
+    const displayName = pipeline.title || pipeline.description || pipeline.id;
+    name.textContent = displayName.length > 25 ? displayName.slice(0, 22) + '...' : displayName;
+    name.title = displayName;
+
+    const stateLabel = document.createElement('div');
+    stateLabel.className = 'pipeline-item-state';
+    stateLabel.textContent = pipeline.state;
+
+    info.appendChild(name);
+    info.appendChild(stateLabel);
+
+    item.appendChild(dot);
+    item.appendChild(info);
+
+    item.addEventListener('click', () => selectPipeline(pipeline.id));
+    pipelineListEl.appendChild(item);
+  }
+}
+
+/**
+ * Show dialog to create a new pipeline run
+ */
+function showNewPipelineDialog() {
+  const existingDialog = document.querySelector('.new-session-overlay');
+  if (existingDialog) existingDialog.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;';
+
+  // Build repo options from instances
+  const instances = state.instances || [];
+  const repoOptions = instances.map(inst => {
+    const name = inst.instanceId || inst.repoPath;
+    return `<option value="${escapeHtml(inst.repoPath)}">${escapeHtml(name)}</option>`;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="new-session-dialog" style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:400px;max-width:500px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+      <h3 style="margin:0 0 16px;font-size:1rem;color:#e0e0e0;">New Pipeline</h3>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Repository *</label>
+          <select class="pipeline-repo" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+            ${repoOptions || '<option value="">No repos registered</option>'}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Title</label>
+          <input type="text" class="pipeline-title" placeholder="Short name (e.g. Auth system)" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+        </div>
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Description *</label>
+          <textarea class="pipeline-description" rows="3" placeholder="What should be built or fixed?" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+        </div>
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Acceptance Criteria (one per line)</label>
+          <textarea class="pipeline-ac" rows="4" placeholder="GET /health returns 200&#10;Response includes uptime field&#10;Unit test added" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+        </div>
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Source Branch</label>
+          <input type="text" class="pipeline-source-branch" value="main" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+        </div>
+        <div class="pipeline-dialog-error" style="color:#e74c3c;font-size:0.8rem;display:none;"></div>
+        <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end;">
+          <button class="pipeline-cancel-btn" style="background:transparent;border:1px solid #333;color:#888;font-size:0.85rem;padding:8px 16px;border-radius:4px;cursor:pointer;">Cancel</button>
+          <button class="pipeline-create-btn" style="background:#9b59b6;border:none;color:white;font-size:0.85rem;padding:8px 16px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:8px;">Start Pipeline</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const repoSelect = overlay.querySelector('.pipeline-repo');
+  const titleInput = overlay.querySelector('.pipeline-title');
+  const descInput = overlay.querySelector('.pipeline-description');
+  const acTextarea = overlay.querySelector('.pipeline-ac');
+  const branchInput = overlay.querySelector('.pipeline-source-branch');
+  const errorEl = overlay.querySelector('.pipeline-dialog-error');
+  const createBtn = overlay.querySelector('.pipeline-create-btn');
+  const cancelBtn = overlay.querySelector('.pipeline-cancel-btn');
+
+  const closeDialog = () => overlay.remove();
+
+  cancelBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+
+  createBtn.addEventListener('click', async () => {
+    const worktreePath = repoSelect.value;
+    if (!worktreePath) {
+      errorEl.textContent = 'Please select a repository';
+      errorEl.style.display = '';
+      return;
+    }
+
+    const title = titleInput.value.trim();
+    const description = descInput.value.trim();
+    if (!description) {
+      errorEl.textContent = 'Description is required';
+      errorEl.style.display = '';
+      descInput.focus();
+      return;
+    }
+
+    const acText = acTextarea.value.trim();
+    const acceptanceCriteria = acText ? acText.split('\n').map(l => l.trim()).filter(Boolean) : [];
+    const sourceBranch = branchInput.value.trim() || 'main';
+
+    createBtn.disabled = true;
+    createBtn.textContent = 'Starting...';
+    errorEl.style.display = 'none';
+
+    try {
+      const res = await fetch('/api/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title || undefined, description, acceptanceCriteria, sourceBranch, worktreePath }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to create pipeline');
+      }
+
+      const run = await res.json();
+      showToast('Pipeline started: ' + run.id, 'success');
+      closeDialog();
+
+      // Refresh pipeline list
+      state.pipelines = await fetchPipelines();
+      updatePipelineSidebar(state.pipelines);
+      selectPipeline(run.id);
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.style.display = '';
+      createBtn.disabled = false;
+      createBtn.textContent = 'Start Pipeline';
+    }
+  });
+
+  document.body.appendChild(overlay);
+  descInput.focus();
+}
+
+/**
+ * Select a pipeline to show its detail view
+ */
+function selectPipeline(pipelineId) {
+  if (state.selectedPipeline === pipelineId) {
+    // Deselect: go back to terminal view
+    state.selectedPipeline = null;
+    pipelineDetailEl.style.display = 'none';
+    document.getElementById('terminal-grid').style.display = '';
+    // Re-render sidebar to remove active state
+    updatePipelineSidebar(state.pipelines);
+    return;
+  }
+
+  state.selectedPipeline = pipelineId;
+  state._prevPipelineSnapshot = null; // force re-render
+
+  // Hide terminal grid, show pipeline detail
+  document.getElementById('terminal-grid').style.display = 'none';
+  pipelineDetailEl.style.display = '';
+
+  // Render the detail
+  renderPipelineDetail(pipelineId);
+
+  // Re-render sidebar to show active state
+  updatePipelineSidebar(state.pipelines);
+}
+
+/**
+ * Render the pipeline detail panel — two-column layout with
+ * activity timeline (left) and details side panel (right).
+ */
+function renderPipelineDetail(pipelineId) {
+  const pipeline = state.pipelines.find(p => p.id === pipelineId);
+  if (!pipeline) {
+    pipelineDetailEl.innerHTML = '<div class="empty-state"><p>Pipeline not found</p></div>';
+    return;
+  }
+
+  let html = '';
+
+  // Back button
+  html += '<button class="pipeline-back-btn" onclick="selectPipeline(\'' + pipeline.id + '\')">&larr; Back to terminals</button>';
+
+  // Header
+  html += '<div class="pipeline-detail-header">';
+  html += '<div style="flex:1">';
+  if (pipeline.title) {
+    html += '<div class="pipeline-detail-title">' + escapeHtml(pipeline.title) + '</div>';
+    html += '<div style="color:#aaa;font-size:0.85rem;margin-top:2px;">' + escapeHtml(pipeline.description || '') + '</div>';
+  } else {
+    html += '<div class="pipeline-detail-title">' + escapeHtml(pipeline.description || 'Pipeline') + '</div>';
+  }
+  html += '<div class="pipeline-detail-id">' + pipeline.id + '</div>';
+  html += '</div>';
+  html += '<div class="pipeline-detail-actions">';
+  var runningStages = ['architect', 'dev', 'gate', 'fix-loop', 'ship'];
+  if (runningStages.indexOf(pipeline.state) !== -1) {
+    html += '<button class="pipeline-action-btn stop" onclick="pipelineStop(\'' + pipeline.id + '\')" title="Stop this pipeline">Stop</button>';
+  }
+  if (pipeline.state === 'error') {
+    html += '<button class="pipeline-action-btn retry" onclick="pipelineRecover(\'' + pipeline.id + '\')" title="Retry from failed stage">Retry</button>';
+  }
+  if (pipeline.state === 'escalated') {
+    html += '<button class="pipeline-action-btn retry" onclick="showRetryEscalatedModal(\'' + pipeline.id + '\')" title="Retry with more fix loops">Retry</button>';
+  }
+  html += '<button class="pipeline-action-btn delete" onclick="pipelineDelete(\'' + pipeline.id + '\')" title="Delete this pipeline">Delete</button>';
+  html += '</div>';
+  html += '</div>';
+
+  // Stage progress bar
+  html += renderStageProgressBar(pipeline);
+
+  // Checkpoint controls (above the two-column layout)
+  html += renderCheckpointControls(pipeline);
+
+  // Review points section (shown for completed pipelines)
+  html += renderReviewPointsSection(pipeline);
+
+  // Gate failure details (shown when gate has failed)
+  html += renderGateFailureDetails(pipeline);
+
+  // Two-column layout
+  html += '<div class="pipeline-layout">';
+
+  // --- Left / main column ---
+  html += '<div class="pipeline-main-col">';
+
+  // Collapsible Blueprint section
+  html += renderCollapsibleBlueprint(pipeline);
+
+  // Activity Timeline (populated async)
+  html += '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Activity Timeline</div>';
+  html += '<div id="activity-timeline-' + pipeline.id + '" class="activity-timeline">';
+  html += '<div class="timeline-loading">Loading activity...</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Live Output panel — shows real-time stage logs when a stage is running
+  const activeStages = ['architect', 'dev', 'gate', 'fix-loop', 'ship'];
+  const isActive = activeStages.includes(pipeline.state);
+  if (isActive || state.pipelineLogs[pipeline.id]) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Live Output' + (isActive ? ' <span style="color:var(--accent-green);font-size:0.7rem;">&#9679; streaming</span>' : '') + '</div>';
+    html += '<pre class="pipeline-live-log" id="pipeline-live-log" data-pipeline-id="' + pipeline.id + '">';
+    html += escapeHtml(state.pipelineLogs[pipeline.id] || (isActive ? 'Waiting for output...' : 'Stage output from last run'));
+    html += '</pre>';
+    html += '</div>';
+  }
+
+  html += '</div>'; // end pipeline-main-col
+
+  // --- Right column / side panel ---
+  html += '<div class="side-panel" id="side-panel">';
+  html += '<button class="side-panel-close" onclick="toggleSidePanel()" title="Close panel">&times;</button>';
+
+  // Details
+  html += '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Details</div>';
+  html += '<div class="pipeline-info">';
+  html += '<div class="pipeline-info-label">State</div><div class="pipeline-info-value">' + pipeline.state + '</div>';
+  html += '<div class="pipeline-info-label">Branch</div><div class="pipeline-info-value">' + escapeHtml(pipeline.sourceBranch) + '</div>';
+  html += '<div class="pipeline-info-label">Worktree</div><div class="pipeline-info-value">' + escapeHtml(pipeline.worktreePath) + '</div>';
+  html += '<div class="pipeline-info-label">Fix loops</div><div class="pipeline-info-value">' + pipeline.fixLoopCount + ' / ' + (pipeline.config?.maxFixLoops || 3) + '</div>';
+  html += '<div class="pipeline-info-label">Created</div><div class="pipeline-info-value">' + formatTimestamp(pipeline.createdAt) + '</div>';
+  html += '<div class="pipeline-info-label">Updated</div><div class="pipeline-info-value">' + formatTimestamp(pipeline.updatedAt) + '</div>';
+  if (pipeline.error) {
+    html += '<div class="pipeline-info-label">Error</div><div class="pipeline-info-value" style="color:var(--status-error)">' + escapeHtml(pipeline.error) + '</div>';
+  }
+  html += '</div>';
+  html += '</div>';
+
+  // Usage (in side panel)
+  if (pipeline.usageSnapshot) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Usage</div>';
+    html += '<div class="pipeline-usage">';
+    if (pipeline.usageSnapshot.totalCostUsd !== undefined) {
+      html += '<div class="usage-item"><div class="usage-item-label">Est. Cost</div><div class="usage-item-value">$' + pipeline.usageSnapshot.totalCostUsd.toFixed(2) + '</div></div>';
+    }
+    if (pipeline.usageSnapshot.inputTokens) {
+      html += '<div class="usage-item"><div class="usage-item-label">Input</div><div class="usage-item-value">' + formatTokens(pipeline.usageSnapshot.inputTokens) + '</div></div>';
+    }
+    if (pipeline.usageSnapshot.outputTokens) {
+      html += '<div class="usage-item"><div class="usage-item-label">Output</div><div class="usage-item-value">' + formatTokens(pipeline.usageSnapshot.outputTokens) + '</div></div>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Acceptance criteria (in side panel)
+  if (pipeline.acceptanceCriteria && pipeline.acceptanceCriteria.length > 0) {
+    html += '<div class="pipeline-section">';
+    html += '<div class="pipeline-section-title">Acceptance Criteria</div>';
+    html += '<ul class="acceptance-criteria-list">';
+    for (const ac of pipeline.acceptanceCriteria) {
+      html += '<li>' + escapeHtml(ac) + '</li>';
+    }
+    html += '</ul>';
+    html += '</div>';
+  }
+
+  html += '</div>'; // end side-panel
+
+  html += '</div>'; // end pipeline-layout
+
+  // Side panel toggle button (floating, shows when panel is closed)
+  html += '<button class="side-panel-toggle" id="side-panel-toggle" onclick="toggleSidePanel()" title="Toggle details panel">&#9776; Details</button>';
+
+  pipelineDetailEl.innerHTML = html;
+
+  // Fetch and render the activity timeline asynchronously
+  fetchAndRenderTimeline(pipeline.id);
+}
+
+/**
+ * Render "Address Review Points" section for completed pipelines.
+ * Allows the reviewer to paste PR review comments and re-run the pipeline.
+ */
+function renderReviewPointsSection(pipeline) {
+  if (pipeline.state !== 'completed') {
+    return '';
+  }
+
+  var html = '<div class="pipeline-section review-points-section">';
+  html += '<div class="pipeline-section-title">Address Review Points</div>';
+  html += '<p class="review-points-desc">Paste PR review comments below to re-run the dev &rarr; gate &rarr; ship cycle.</p>';
+  html += '<textarea id="review-points-text" class="feedback-textarea review-points-textarea" placeholder="Paste PR review comments here..."></textarea>';
+  html += '<button class="checkpoint-btn feedback review-points-submit" onclick="pipelineReviewPoints(\'' + pipeline.id + '\')">Submit Review Points</button>';
+  if (pipeline.reviewRounds) {
+    html += '<div class="review-points-rounds">Review rounds: ' + pipeline.reviewRounds + '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Render the stage progress bar (extracted for clarity).
+ */
+function renderStageProgressBar(pipeline) {
+  let html = '<div class="pipeline-stages">';
+  const currentIndex = PIPELINE_STAGE_ORDER.indexOf(pipeline.state);
+  const terminalStates = ['completed', 'cancelled', 'escalated', 'error'];
+
+  for (let i = 0; i < PIPELINE_STAGE_ORDER.length; i++) {
+    const stage = PIPELINE_STAGE_ORDER[i];
+    let stageClass = '';
+
+    if (terminalStates.includes(pipeline.state)) {
+      if (pipeline.state === 'completed') {
+        stageClass = 'completed';
+      } else if (i <= currentIndex) {
+        stageClass = i === currentIndex ? 'failed' : 'completed';
+      }
+    } else if (i < currentIndex) {
+      stageClass = 'completed';
+    } else if (i === currentIndex) {
+      stageClass = pipeline.state.startsWith('checkpoint') ? 'waiting' : 'active';
+    }
+
+    html += '<div class="pipeline-stage ' + stageClass + '">';
+    html += (PIPELINE_STAGE_LABELS[stage] || stage);
+    html += '</div>';
+
+    if (i < PIPELINE_STAGE_ORDER.length - 1) {
+      html += '<span class="pipeline-stage-arrow">&rarr;</span>';
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Render checkpoint controls if pipeline is in a checkpoint state.
+ */
+function renderCheckpointControls(pipeline) {
+  if (pipeline.state !== 'checkpoint:arch' && pipeline.state !== 'checkpoint:ship') {
+    return '';
+  }
+
+  // Ship review gets a full review panel loaded asynchronously
+  if (pipeline.state === 'checkpoint:ship') {
+    let html = '<div id="ship-review-container" data-pipeline-id="' + pipeline.id + '">';
+    html += '<div class="ship-review-loading">Loading ship review...</div>';
+    html += '</div>';
+    // Trigger async load after render
+    setTimeout(function() { loadShipReview(pipeline.id); }, 0);
+    return html;
+  }
+
+  // Architect checkpoint: simple approve/reject/feedback
+  let html = '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Checkpoint: Architect Review</div>';
+  html += '<div class="checkpoint-controls">';
+  html += '<button class="checkpoint-btn approve" onclick="pipelineApprove(\'' + pipeline.id + '\')">Approve</button>';
+  html += '<button class="checkpoint-btn reject" onclick="pipelineReject(\'' + pipeline.id + '\')">Reject</button>';
+  html += '<button class="checkpoint-btn feedback" onclick="pipelineFeedback(\'' + pipeline.id + '\')">Feedback</button>';
+  html += '</div>';
+  html += '<textarea id="pipeline-feedback-text" class="feedback-textarea" placeholder="Enter feedback for the architect..." style="display:none;"></textarea>';
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Render the collapsible blueprint section.
+ * Fetches full blueprint.json from API and renders as structured HTML.
+ */
+function renderCollapsibleBlueprint(pipeline) {
+  // Only show if architect stage has completed
+  const hasArchitect = pipeline.stageHistory && pipeline.stageHistory.some(function(s) { return s.stage === 'architect'; });
+  if (!hasArchitect) {
+    return '';
+  }
+
+  let html = '<div class="collapsible-section">';
+  html += '<button class="collapsible-header" onclick="toggleBlueprintCollapsible(this, \'' + pipeline.id + '\')">';
+  html += '<span class="collapsible-arrow">&#9656;</span> Blueprint';
+  html += '</button>';
+  html += '<div class="collapsible-body" style="display:none;">';
+  html += '<div class="blueprint-content" id="blueprint-content-' + pipeline.id + '">Click to load blueprint...</div>';
+  html += '</div>';
+  html += '</div>';
+
+  return html;
+}
+
+/**
+ * Fetch the full blueprint from API and render as structured HTML.
+ */
+async function fetchAndRenderBlueprint(pipelineId) {
+  const container = document.getElementById('blueprint-content-' + pipelineId);
+  if (!container) return;
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/blueprint');
+    if (!res.ok) {
+      container.textContent = 'Blueprint not available';
+      return;
+    }
+    const bp = await res.json();
+    container.innerHTML = renderBlueprintHtml(bp);
+  } catch (err) {
+    console.error('[Blueprint] Failed to load for pipeline ' + pipelineId + ':', err);
+    container.textContent = 'Failed to load blueprint: ' + (err.message || err);
+  }
+}
+
+/**
+ * Render a blueprint object as structured HTML.
+ */
+function renderBlueprintHtml(bp) {
+  let html = '<div class="pipeline-blueprint">';
+
+  // Approach
+  if (bp.approach) {
+    html += '<div class="blueprint-section">';
+    html += '<h3>Approach</h3>';
+    html += '<p>' + escapeHtml(bp.approach) + '</p>';
+    html += '</div>';
+  }
+
+  // Steps
+  if (bp.steps && bp.steps.length > 0) {
+    html += '<div class="blueprint-section">';
+    html += '<h3>Implementation Steps</h3>';
+    html += '<ol class="blueprint-steps">';
+    for (const step of bp.steps) {
+      html += '<li>';
+      if (typeof step === 'string') {
+        html += escapeHtml(step);
+      } else if (step && typeof step === 'object') {
+        html += '<strong>' + escapeHtml(step.description || step.title || '') + '</strong>';
+        if (step.details) {
+          html += '<div class="blueprint-step-detail">' + escapeHtml(step.details) + '</div>';
+        }
+      }
+      html += '</li>';
+    }
+    html += '</ol>';
+    html += '</div>';
+  }
+
+  // Files to touch
+  if (bp.filesToTouch && bp.filesToTouch.length > 0) {
+    html += '<div class="blueprint-section">';
+    html += '<h3>Files</h3>';
+    html += '<div class="blueprint-files">';
+    for (const f of bp.filesToTouch) {
+      var fname = typeof f === 'string' ? f : (f && (f.path || f.file || JSON.stringify(f)));
+      html += '<code class="blueprint-file">' + escapeHtml(fname || '') + '</code>';
+    }
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Risks
+  if (bp.risks && bp.risks.length > 0) {
+    html += '<div class="blueprint-section">';
+    html += '<h3>Risks</h3>';
+    html += '<ul>';
+    for (const r of bp.risks) {
+      if (typeof r === 'string') {
+        html += '<li>' + escapeHtml(r) + '</li>';
+      } else if (r && typeof r === 'object') {
+        html += '<li><strong>' + escapeHtml(r.risk || r.description || '') + '</strong>';
+        if (r.mitigation) html += '<br><em>Mitigation:</em> ' + escapeHtml(r.mitigation);
+        html += '</li>';
+      }
+    }
+    html += '</ul>';
+    html += '</div>';
+  }
+
+  // Test strategy
+  if (bp.testStrategy) {
+    html += '<div class="blueprint-section">';
+    html += '<h3>Test Strategy</h3>';
+    html += '<p>' + escapeHtml(bp.testStrategy) + '</p>';
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Toggle a collapsible section open/closed.
+ */
+function toggleCollapsible(headerEl) {
+  const body = headerEl.nextElementSibling;
+  const arrow = headerEl.querySelector('.collapsible-arrow');
+  if (body.style.display === 'none') {
+    body.style.display = '';
+    arrow.innerHTML = '&#9662;'; // down arrow
+  } else {
+    body.style.display = 'none';
+    arrow.innerHTML = '&#9656;'; // right arrow
+  }
+}
+
+/**
+ * Toggle the blueprint collapsible and lazy-load on first expand.
+ */
+function toggleBlueprintCollapsible(headerEl, pipelineId) {
+  toggleCollapsible(headerEl);
+  const container = document.getElementById('blueprint-content-' + pipelineId);
+  if (container && !container.dataset.loaded) {
+    container.dataset.loaded = '1';
+    container.textContent = 'Loading blueprint...';
+    fetchAndRenderBlueprint(pipelineId);
+  }
+}
+
+/**
+ * Toggle the side panel open/closed.
+ */
+function toggleSidePanel() {
+  const panel = document.getElementById('side-panel');
+  const toggle = document.getElementById('side-panel-toggle');
+  if (!panel) return;
+
+  panel.classList.toggle('collapsed');
+  if (toggle) {
+    toggle.classList.toggle('visible', panel.classList.contains('collapsed'));
+  }
+}
+
+/**
+ * Fetch progress entries and render the activity timeline.
+ */
+async function fetchAndRenderTimeline(pipelineId) {
+  const container = document.getElementById('activity-timeline-' + pipelineId);
+  if (!container) return;
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/progress');
+    if (!res.ok) {
+      container.innerHTML = '<div class="timeline-empty">Failed to load activity</div>';
+      return;
+    }
+    const entries = await res.json();
+
+    if (!entries || entries.length === 0) {
+      container.innerHTML = '<div class="timeline-empty">No activity yet</div>';
+      return;
+    }
+
+    container.innerHTML = renderTimelineEntries(entries);
+  } catch (err) {
+    container.innerHTML = '<div class="timeline-empty">Failed to load activity</div>';
+  }
+}
+
+/**
+ * Render all timeline entries as HTML.
+ */
+function renderTimelineEntries(entries) {
+  // Newest first — reverse chronological
+  const reversed = entries.slice().reverse();
+  let html = '';
+  for (let i = 0; i < reversed.length; i++) {
+    const entry = reversed[i];
+    const isNewest = (i === 0);
+    html += renderTimelineEntry(entry, isNewest);
+  }
+  return html;
+}
+
+/**
+ * Render a single timeline entry.
+ */
+function renderTimelineEntry(entry, isNewest) {
+  const isActivity = entry.type === 'stage-activity';
+  const isCompleted = entry.type === 'stage-complete' || entry.type === 'checkpoint' || entry.type === 'info';
+  const isError = entry.type === 'stage-error';
+  const isRunning = isNewest && (entry.type === 'stage-start' || entry.type === 'competing-start');
+
+  let dotClass = 'timeline-dot';
+  if (isActivity) dotClass += ' activity';
+  else if (isRunning) dotClass += ' running';
+  else if (isError) dotClass += ' error';
+  else if (isCompleted) dotClass += ' completed';
+
+  const timeStr = formatTimeOnly(entry.timestamp);
+
+  let html = '<div class="timeline-entry' + (isNewest ? ' last' : '') + (isActivity ? ' activity' : '') + (isError ? ' error' : '') + '">';
+
+  // Vertical line + dot (line connects down to the next older entry)
+  html += '<div class="timeline-gutter">';
+  html += '<div class="' + dotClass + '">' + (isActivity ? '&#8226;' : isRunning ? '&#9675;' : '&#9679;') + '</div>';
+  html += '<div class="timeline-line"></div>';
+  html += '</div>';
+
+  // Content
+  html += '<div class="timeline-content">';
+  html += '<div class="timeline-header">';
+  html += '<span class="timeline-time">' + timeStr + '</span>';
+  html += '<span class="timeline-title">' + escapeHtml(entry.title) + '</span>';
+  html += '</div>';
+
+  if (entry.detail) {
+    html += '<div class="timeline-detail">' + escapeHtml(entry.detail) + '</div>';
+  }
+
+  // Special rendering for gate-result entries
+  if (entry.type === 'gate-result' && entry.data && entry.data.checks) {
+    html += renderTimelineGateChecks(entry.data.checks);
+  }
+
+  // Special rendering for competing-result entries
+  if (entry.type === 'competing-result' && entry.data && entry.data.agents) {
+    html += renderTimelineCompetingAgents(entry.data.agents);
+  }
+
+  html += '</div>'; // end timeline-content
+  html += '</div>'; // end timeline-entry
+  return html;
+}
+
+/**
+ * Render gate check cards within a timeline entry.
+ */
+function renderTimelineGateChecks(checks) {
+  if (!Array.isArray(checks) || checks.length === 0) return '';
+
+  let html = '<div class="timeline-gate-checks">';
+  for (const check of checks) {
+    const verdict = check.verdict || 'skip';
+    const icon = verdict === 'pass' ? '&#10003;' : verdict === 'fail' ? '&#10007;' : '&#8212;';
+    html += '<div class="timeline-gate-card ' + verdict + '">';
+    html += '<span class="timeline-gate-icon">' + icon + '</span>';
+    html += '<span class="timeline-gate-name">' + escapeHtml(check.checkName || check.name || '') + '</span>';
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Render competing agent cards within a timeline entry.
+ */
+function renderTimelineCompetingAgents(agents) {
+  if (!Array.isArray(agents) || agents.length === 0) return '';
+
+  let html = '<div class="timeline-competing-agents">';
+  for (const agent of agents) {
+    const isWinner = agent.winner;
+    html += '<div class="timeline-agent-card' + (isWinner ? ' winner' : '') + '">';
+    html += '<span class="timeline-agent-name">Agent #' + (agent.agentIndex != null ? agent.agentIndex : '?') + '</span>';
+    if (agent.gateScore != null && agent.gateScore >= 0) {
+      html += '<span class="timeline-agent-score">Score: ' + agent.gateScore + '</span>';
+    }
+    if (isWinner) {
+      html += '<span class="timeline-agent-badge">Winner</span>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Format a timestamp to time-only (e.g. "19:48").
+ */
+function formatTimeOnly(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Show pipeline stage logs in a dialog
+ */
+async function showPipelineLogs(pipelineId) {
+  const existingDialog = document.querySelector('.new-session-overlay');
+  if (existingDialog) existingDialog.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;';
+
+  overlay.innerHTML = `
+    <div class="new-session-dialog" style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:600px;max-width:80vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3 style="margin:0;font-size:1rem;color:#e0e0e0;">Pipeline Logs</h3>
+        <button class="logs-close-btn" style="background:transparent;border:none;color:#888;font-size:1.2rem;cursor:pointer;">&times;</button>
+      </div>
+      <div class="logs-tabs" style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;"></div>
+      <pre class="logs-content" style="flex:1;overflow:auto;background:#0d0d0d;border:1px solid #333;border-radius:4px;padding:12px;margin:0;font-size:0.75rem;color:#ccc;white-space:pre-wrap;word-break:break-all;max-height:60vh;"></pre>
+    </div>
+  `;
+
+  const closeBtn = overlay.querySelector('.logs-close-btn');
+  const tabsEl = overlay.querySelector('.logs-tabs');
+  const contentEl = overlay.querySelector('.logs-content');
+
+  closeBtn.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  document.body.appendChild(overlay);
+  contentEl.textContent = 'Loading...';
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/logs');
+    if (!res.ok) throw new Error('Failed to fetch logs');
+    const data = await res.json();
+    const logs = data.logs || {};
+    const stages = Object.keys(logs);
+
+    if (stages.length === 0) {
+      contentEl.textContent = 'No logs available yet.';
+      return;
+    }
+
+    function showStage(stage) {
+      contentEl.textContent = logs[stage] || 'Empty log';
+      tabsEl.querySelectorAll('button').forEach(b => b.style.background = 'transparent');
+      const activeBtn = tabsEl.querySelector('[data-stage="' + stage + '"]');
+      if (activeBtn) activeBtn.style.background = '#333';
+    }
+
+    for (const stage of stages) {
+      const btn = document.createElement('button');
+      btn.textContent = stage;
+      btn.dataset.stage = stage;
+      btn.style.cssText = 'background:transparent;border:1px solid #444;color:#ccc;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:0.75rem;';
+      btn.addEventListener('click', () => showStage(stage));
+      tabsEl.appendChild(btn);
+    }
+
+    showStage(stages[0]);
+  } catch (err) {
+    contentEl.textContent = 'Error loading logs: ' + err.message;
+  }
+}
+
+/**
+ * Pipeline checkpoint actions
+ */
+async function pipelineApprove(pipelineId) {
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/approve', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Approve failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Pipeline approved', 'success');
+    // Refresh
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Approve failed: ' + err.message, 'error');
+  }
+}
+
+async function pipelineReject(pipelineId) {
+  if (!confirm('Reject this pipeline? This will cancel it.')) return;
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/reject', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Reject failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Pipeline rejected', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Reject failed: ' + err.message, 'error');
+  }
+}
+
+async function pipelineFeedback(pipelineId) {
+  const textarea = document.getElementById('pipeline-feedback-text');
+  if (!textarea) return;
+
+  // Toggle textarea visibility
+  if (textarea.style.display === 'none') {
+    textarea.style.display = '';
+    textarea.focus();
+    return;
+  }
+
+  const feedback = textarea.value.trim();
+  if (!feedback) {
+    showToast('Please enter feedback', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedback }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Feedback failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Feedback sent, architect re-running', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Feedback failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Send ship review feedback (request changes) — re-runs dev → gate → checkpoint:ship
+ */
+async function pipelineShipFeedback(pipelineId) {
+  const textarea = document.getElementById('ship-feedback-text');
+  if (!textarea) return;
+
+  // Toggle textarea visibility
+  if (textarea.style.display === 'none') {
+    textarea.style.display = '';
+    textarea.focus();
+    return;
+  }
+
+  const feedback = textarea.value.trim();
+  if (!feedback) {
+    showToast('Please describe what changes are needed', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/ship-feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedback }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Ship feedback failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Feedback sent, re-running dev stage', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Ship feedback failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Submit PR review points for a completed pipeline — re-opens and re-runs dev → gate → ship
+ */
+async function pipelineReviewPoints(pipelineId) {
+  const textarea = document.getElementById('review-points-text');
+  if (!textarea) return;
+
+  const reviewPoints = textarea.value.trim();
+  if (!reviewPoints) {
+    showToast('Please paste review comments first', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/review-points', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewPoints }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Review points failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Review points submitted, re-running pipeline', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Review points failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Stop a running pipeline
+ */
+async function pipelineStop(pipelineId) {
+  if (!confirm('Stop this pipeline? You can retry it later.')) return;
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/stop', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Stop failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Pipeline stopped', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Stop failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Recover (retry) a failed pipeline from its last stage
+ */
+async function pipelineRecover(pipelineId) {
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/recover', { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Retry failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    const updated = await res.json();
+    showToast('Pipeline retrying from: ' + updated.state, 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Retry failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Delete a pipeline run
+ */
+async function pipelineDelete(pipelineId) {
+  if (!confirm('Delete this pipeline? This cannot be undone.')) return;
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Delete failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    showToast('Pipeline deleted', 'success');
+    state.selectedPipeline = null;
+    pipelineDetailEl.style.display = 'none';
+    document.getElementById('terminal-grid').style.display = '';
+    state.pipelines = await fetchPipelines();
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Delete failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Helpers
+ */
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function formatTimestamp(iso) {
+  if (!iso) return 'N/A';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return iso;
+  }
+}
+
+function formatTokens(count) {
+  if (!count) return '0';
+  if (count >= 1000000) return (count / 1000000).toFixed(1) + 'M';
+  if (count >= 1000) return (count / 1000).toFixed(0) + 'K';
+  return String(count);
+}
+
+// ============================================================================
+// Gate Failure Details
+// ============================================================================
+
+/**
+ * Render gate failure details panel.
+ * Shows individual check results when gate has failed or pipeline is escalated.
+ */
+function renderGateFailureDetails(pipeline) {
+  var gateResults = pipeline.gateResults;
+  if (!gateResults || gateResults.length === 0) return '';
+
+  var failures = gateResults.filter(function(r) { return r.verdict === 'fail'; });
+  if (failures.length === 0 && pipeline.state !== 'escalated') return '';
+
+  var html = '<div class="gate-failure-panel">';
+  html += '<div class="gate-failure-header">';
+  html += '<span class="gate-failure-title">Gate Results</span>';
+
+  var passCount = gateResults.filter(function(r) { return r.verdict === 'pass'; }).length;
+  var failCount = failures.length;
+  var skipCount = gateResults.filter(function(r) { return r.verdict === 'skip'; }).length;
+  html += '<span class="gate-failure-summary">' + passCount + ' passed, ' + failCount + ' failed, ' + skipCount + ' skipped</span>';
+  html += '</div>';
+
+  html += '<div class="gate-checks-grid">';
+  gateResults.forEach(function(result) {
+    var verdictClass = result.verdict === 'pass' ? 'pass' : result.verdict === 'fail' ? 'fail' : 'skip';
+    var verdictIcon = result.verdict === 'pass' ? '&#10003;' : result.verdict === 'fail' ? '&#10007;' : '&#8212;';
+    html += '<div class="gate-check-item ' + verdictClass + '">';
+    html += '<div class="gate-check-header">';
+    html += '<span class="gate-check-icon">' + verdictIcon + '</span>';
+    html += '<span class="gate-check-name">' + escapeHtml(result.checkName) + '</span>';
+    html += '<span class="gate-check-verdict">' + result.verdict.toUpperCase() + '</span>';
+    html += '</div>';
+    if (result.summary) {
+      html += '<div class="gate-check-summary">' + escapeHtml(result.summary) + '</div>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '</div>';
+
+  return html;
+}
+
+// ============================================================================
+// Retry Escalated Modal
+// ============================================================================
+
+/**
+ * Show the retry-escalated modal with options.
+ */
+function showRetryEscalatedModal(pipelineId) {
+  var pipeline = state.pipelines.find(function(p) { return p.id === pipelineId; });
+  if (!pipeline) return;
+
+  // Get failed check names for the skip checkboxes
+  var failedChecks = (pipeline.gateResults || [])
+    .filter(function(r) { return r.verdict === 'fail'; })
+    .map(function(r) { return r.checkName; });
+
+  var allChecks = ['test', 'lint', 'ac-validator', 'adversary', 'security', 'code-review'];
+
+  var overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'retry-escalated-modal';
+
+  var html = '<div class="retry-escalated-modal">';
+  html += '<div class="retry-modal-header">';
+  html += '<h3>Retry Escalated Pipeline</h3>';
+  html += '<button class="retry-modal-close" onclick="closeRetryEscalatedModal()">&times;</button>';
+  html += '</div>';
+
+  html += '<div class="retry-modal-body">';
+
+  // Additional retries
+  html += '<div class="retry-modal-field">';
+  html += '<label>Additional fix loop attempts</label>';
+  html += '<input type="number" id="retry-additional-count" value="3" min="1" max="10" class="retry-modal-input" />';
+  html += '</div>';
+
+  // Skip checks
+  html += '<div class="retry-modal-field">';
+  html += '<label>Skip gate checks <span class="retry-modal-hint">(failed checks are pre-selected)</span></label>';
+  html += '<div class="retry-modal-checks">';
+  allChecks.forEach(function(check) {
+    var isFailed = failedChecks.indexOf(check) !== -1;
+    html += '<label class="retry-check-label">';
+    html += '<input type="checkbox" class="retry-skip-check" value="' + check + '"' + (isFailed ? ' checked' : '') + ' />';
+    html += '<span class="retry-check-name' + (isFailed ? ' failed' : '') + '">' + check + '</span>';
+    html += '</label>';
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Instructions
+  html += '<div class="retry-modal-field">';
+  html += '<label>Instructions for fix agent <span class="retry-modal-hint">(optional — tell the agent what to do differently)</span></label>';
+  html += '<textarea id="retry-instructions" class="retry-modal-textarea" rows="4" placeholder="e.g., Ignore the lint error about unused imports — they are needed for side effects."></textarea>';
+  html += '</div>';
+
+  html += '</div>'; // end body
+
+  html += '<div class="retry-modal-footer">';
+  html += '<button class="retry-modal-btn cancel" onclick="closeRetryEscalatedModal()">Cancel</button>';
+  html += '<button class="retry-modal-btn confirm" onclick="submitRetryEscalated(\'' + pipelineId + '\')">Retry Pipeline</button>';
+  html += '</div>';
+
+  html += '</div>'; // end modal
+
+  overlay.innerHTML = html;
+  document.body.appendChild(overlay);
+
+  // Close on overlay click
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) closeRetryEscalatedModal();
+  });
+}
+
+function closeRetryEscalatedModal() {
+  var modal = document.getElementById('retry-escalated-modal');
+  if (modal) modal.remove();
+}
+
+async function submitRetryEscalated(pipelineId) {
+  var additionalRetries = parseInt(document.getElementById('retry-additional-count').value) || 3;
+
+  var skipChecks = [];
+  var checkboxes = document.querySelectorAll('.retry-skip-check:checked');
+  checkboxes.forEach(function(cb) { skipChecks.push(cb.value); });
+
+  var instructions = (document.getElementById('retry-instructions').value || '').trim();
+
+  closeRetryEscalatedModal();
+
+  try {
+    var res = await fetch('/api/pipelines/' + pipelineId + '/retry-escalated', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        additionalRetries: additionalRetries,
+        skipChecks: skipChecks.length > 0 ? skipChecks : undefined,
+        instructions: instructions || undefined,
+      }),
+    });
+    if (!res.ok) {
+      var err = await res.json();
+      showToast('Retry failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+    var updated = await res.json();
+    showToast('Pipeline retrying with ' + additionalRetries + ' more fix loops', 'success');
+    state.pipelines = await fetchPipelines();
+    renderPipelineDetail(pipelineId);
+    updatePipelineSidebar(state.pipelines);
+  } catch (err) {
+    showToast('Retry failed: ' + err.message, 'error');
+  }
+}
+
+// ============================================================================
+// Ship Review Panel
+// ============================================================================
+
+/**
+ * Load all data for the ship review panel and render it.
+ */
+async function loadShipReview(pipelineId) {
+  var container = document.getElementById('ship-review-container');
+  if (!container || container.dataset.pipelineId !== pipelineId) return;
+
+  try {
+    // Fetch diff, gate results, and blueprint in parallel
+    var [diffRes, gateRes, bpRes] = await Promise.all([
+      fetch('/api/pipelines/' + pipelineId + '/diff').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+      fetch('/api/pipelines/' + pipelineId + '/gate-results').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+      fetch('/api/pipelines/' + pipelineId + '/blueprint').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    ]);
+
+    var pipeline = state.pipelines.find(function(p) { return p.id === pipelineId; });
+    if (!pipeline) return;
+
+    // Re-check container still exists (user may have navigated away)
+    container = document.getElementById('ship-review-container');
+    if (!container || container.dataset.pipelineId !== pipelineId) return;
+
+    container.innerHTML = renderShipReviewPanel(pipeline, diffRes, gateRes, bpRes);
+
+    // Fetch AI summary in background (may take a few seconds on first load)
+    fetchShipSummary(pipelineId);
+  } catch (err) {
+    console.error('Failed to load ship review:', err);
+    if (container) {
+      container.innerHTML = '<div class="ship-review-error">Failed to load review data. <button onclick="loadShipReview(\'' + pipelineId + '\')">Retry</button></div>';
+    }
+  }
+}
+
+/**
+ * Fetch AI-generated ship summary and inject it into the summary card.
+ */
+async function fetchShipSummary(pipelineId) {
+  var el = document.getElementById('ship-noteworthy-slot');
+  if (!el) return;
+
+  el.innerHTML = '<div class="ship-summary-label" style="color:var(--text-muted);font-size:0.8rem;">Generating summary...</div>';
+
+  try {
+    var res = await fetch('/api/pipelines/' + pipelineId + '/ship-summary');
+    if (!res.ok) throw new Error('Failed');
+    var summary = await res.json();
+
+    // Re-check slot still exists
+    el = document.getElementById('ship-noteworthy-slot');
+    if (!el) return;
+
+    var html = '';
+    if (summary.description) {
+      html += '<div class="ship-summary-label">Summary</div>';
+      html += '<div class="ship-summary-description">' + escapeHtml(summary.description) + '</div>';
+    }
+    if (summary.changes && summary.changes.length > 0) {
+      html += '<div class="ship-summary-label" style="margin-top:10px;">Noteworthy Changes</div>';
+      html += '<ul class="ship-noteworthy-list">';
+      summary.changes.forEach(function(c) {
+        html += '<li>' + escapeHtml(c) + '</li>';
+      });
+      html += '</ul>';
+    }
+    el.innerHTML = html;
+  } catch (err) {
+    console.error('Failed to load ship summary:', err);
+    el = document.getElementById('ship-noteworthy-slot');
+    if (el) el.innerHTML = '';
+  }
+}
+
+/**
+ * Parse file paths from a unified diff string.
+ * Returns array of { path, status } where status is 'A', 'D', or 'M'.
+ */
+function parseDiffFiles(diffText) {
+  if (!diffText) return [];
+  var files = [];
+  var lines = diffText.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (line.startsWith('diff --git')) {
+      // Extract b/ path: "diff --git a/foo/bar.ts b/foo/bar.ts"
+      var match = line.match(/b\/(.+)$/);
+      if (match) {
+        var path = match[1];
+        // Peek at next lines to determine status
+        var status = 'M';
+        for (var j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+          if (lines[j].startsWith('new file')) { status = 'A'; break; }
+          if (lines[j].startsWith('deleted file')) { status = 'D'; break; }
+        }
+        files.push({ path: path, status: status });
+      }
+    }
+  }
+  return files;
+}
+
+/**
+ * Show a file-by-file diff dialog for the ship review panel.
+ * Reuses existing diff-viewer CSS classes.
+ */
+function showShipDiffDialog() {
+  var diffData = window._shipDiffData;
+  if (!diffData || !diffData.diff) return;
+
+  var files = parseDiffFiles(diffData.diff);
+
+  var overlay = document.createElement('div');
+  overlay.className = 'new-session-overlay diff-viewer-overlay';
+
+  overlay.innerHTML =
+    '<div class="diff-viewer-dialog">' +
+      '<div class="diff-viewer-header">' +
+        '<div class="diff-viewer-title">' +
+          '<span class="diff-viewer-icon">&#128196;</span>' +
+          '<span class="diff-viewer-heading">Code Changes</span>' +
+        '</div>' +
+        '<button class="diff-viewer-close">&times;</button>' +
+      '</div>' +
+      '<div class="diff-viewer-content">' +
+        '<div class="diff-viewer-sidebar">' +
+          '<div class="diff-sidebar-section">' +
+            '<div class="diff-sidebar-label">Files</div>' +
+            '<div class="diff-files-list"></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="diff-viewer-main"></div>' +
+      '</div>' +
+      '<div class="diff-viewer-footer">' +
+        '<span class="diff-stats">' +
+          (diffData.filesChanged || 0) + ' file' + ((diffData.filesChanged || 0) !== 1 ? 's' : '') +
+          ' changed · +' + (diffData.insertions || 0) + ' -' + (diffData.deletions || 0) + ' lines' +
+        '</span>' +
+      '</div>' +
+    '</div>';
+
+  var closeBtn = overlay.querySelector('.diff-viewer-close');
+  var filesListEl = overlay.querySelector('.diff-files-list');
+  var mainEl = overlay.querySelector('.diff-viewer-main');
+
+  var closeDialog = function() { overlay.remove(); };
+  closeBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) closeDialog(); });
+  overlay.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeDialog(); });
+
+  // Populate file sidebar
+  if (files.length === 0) {
+    filesListEl.innerHTML = '<div class="diff-empty">No files</div>';
+  } else {
+    filesListEl.innerHTML = files.map(function(f) {
+      var statusClass = f.status === 'A' ? 'added' : f.status === 'D' ? 'deleted' : 'modified';
+      return '<div class="diff-file-item ' + statusClass + '" data-path="' + escapeHtml(f.path) + '">' +
+        '<span class="diff-file-status">' + f.status + '</span>' +
+        '<span class="diff-file-path">' + escapeHtml(f.path) + '</span>' +
+      '</div>';
+    }).join('');
+
+    filesListEl.querySelectorAll('.diff-file-item').forEach(function(item) {
+      item.addEventListener('click', function() {
+        filesListEl.querySelectorAll('.diff-file-item').forEach(function(i) { i.classList.remove('selected'); });
+        item.classList.add('selected');
+        showFileDiff(mainEl, diffData.diff, item.dataset.path);
+      });
+    });
+  }
+
+  // Show full diff initially
+  renderDiff(mainEl, diffData.diff);
+
+  document.body.appendChild(overlay);
+  overlay.focus();
+}
+
+/**
+ * Render the full ship review panel HTML.
+ */
+function renderShipReviewPanel(pipeline, diffData, gateData, blueprint) {
+  var html = '';
+
+  // Section title
+  html += '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Ship Review</div>';
+
+  // Action buttons (top)
+  html += '<div class="ship-review-actions">';
+  html += '<button class="checkpoint-btn approve" onclick="pipelineApprove(\'' + pipeline.id + '\')">Approve & Ship</button>';
+  html += '<button class="checkpoint-btn reject" onclick="pipelineReject(\'' + pipeline.id + '\')">Reject</button>';
+  html += '<button class="checkpoint-btn feedback" onclick="pipelineShipFeedback(\'' + pipeline.id + '\')">Request Changes</button>';
+  html += '</div>';
+  html += '<textarea id="ship-feedback-text" class="feedback-textarea" placeholder="Describe what changes are needed..." style="display:none;"></textarea>';
+
+  // Summary card
+  html += renderShipSummaryCard(pipeline, diffData, blueprint);
+
+  // Gate results
+  html += renderShipGateResults(gateData);
+
+  // View Changes button (opens file-by-file dialog)
+  if (diffData && diffData.diff) {
+    window._shipDiffData = diffData;
+    html += '<button class="ship-view-changes-btn" onclick="showShipDiffDialog()">';
+    html += '<span class="btn-icon">&#128196;</span> View Changes';
+    html += ' <span style="color:var(--text-secondary);font-size:0.8rem;">(' + (diffData.filesChanged || 0) + ' files)</span>';
+    html += '</button>';
+  }
+
+  // Action buttons (bottom, for long reviews)
+  html += '<div class="ship-review-actions ship-review-actions-bottom">';
+  html += '<button class="checkpoint-btn approve" onclick="pipelineApprove(\'' + pipeline.id + '\')">Approve & Ship</button>';
+  html += '<button class="checkpoint-btn reject" onclick="pipelineReject(\'' + pipeline.id + '\')">Reject</button>';
+  html += '<button class="checkpoint-btn feedback" onclick="pipelineShipFeedback(\'' + pipeline.id + '\')">Request Changes</button>';
+  html += '</div>';
+
+  html += '</div>'; // end pipeline-section
+  return html;
+}
+
+/**
+ * Render the summary card with key metrics.
+ */
+function renderShipSummaryCard(pipeline, diffData, blueprint) {
+  var html = '<div class="ship-summary-card">';
+
+  // Blueprint approach
+  var approach = '';
+  if (blueprint) {
+    approach = blueprint.approach || blueprint.content || '';
+  }
+  if (approach) {
+    html += '<div class="ship-summary-approach">';
+    html += '<div class="ship-summary-label">Approach</div>';
+    html += '<div class="ship-summary-value">' + escapeHtml(approach) + '</div>';
+    html += '</div>';
+  }
+
+  // Metrics grid
+  html += '<div class="ship-summary-metrics">';
+
+  // Diff stats
+  if (diffData) {
+    html += '<div class="ship-metric">';
+    html += '<div class="ship-metric-value">' + (diffData.filesChanged || 0) + '</div>';
+    html += '<div class="ship-metric-label">Files changed</div>';
+    html += '</div>';
+    html += '<div class="ship-metric">';
+    html += '<div class="ship-metric-value ship-metric-add">+' + (diffData.insertions || 0) + '</div>';
+    html += '<div class="ship-metric-label">Insertions</div>';
+    html += '</div>';
+    html += '<div class="ship-metric">';
+    html += '<div class="ship-metric-value ship-metric-del">-' + (diffData.deletions || 0) + '</div>';
+    html += '<div class="ship-metric-label">Deletions</div>';
+    html += '</div>';
+  }
+
+  // Fix loops
+  html += '<div class="ship-metric">';
+  html += '<div class="ship-metric-value">' + (pipeline.fixLoopCount || 0) + '</div>';
+  html += '<div class="ship-metric-label">Fix loops</div>';
+  html += '</div>';
+
+  // Cost
+  if (pipeline.usageSnapshot && pipeline.usageSnapshot.totalCostUsd !== undefined) {
+    html += '<div class="ship-metric">';
+    html += '<div class="ship-metric-value">$' + pipeline.usageSnapshot.totalCostUsd.toFixed(2) + '</div>';
+    html += '<div class="ship-metric-label">Est. cost</div>';
+    html += '</div>';
+  }
+
+  // AC count
+  if (pipeline.acceptanceCriteria && pipeline.acceptanceCriteria.length > 0) {
+    html += '<div class="ship-metric">';
+    html += '<div class="ship-metric-value">' + pipeline.acceptanceCriteria.length + '</div>';
+    html += '<div class="ship-metric-label">Acceptance criteria</div>';
+    html += '</div>';
+  }
+
+  html += '</div>'; // end metrics
+
+  // AI-generated summary slot (populated async by fetchShipSummary)
+  html += '<div class="ship-summary-noteworthy" id="ship-noteworthy-slot"></div>';
+
+  html += '</div>'; // end card
+  return html;
+}
+
+/**
+ * Render gate results for ship review — all checks with expandable details.
+ */
+function renderShipGateResults(gateData) {
+  if (!gateData || !gateData.gateResults || gateData.gateResults.length === 0) {
+    return '';
+  }
+
+  var results = gateData.gateResults;
+  var passCount = results.filter(function(r) { return r.verdict === 'pass'; }).length;
+  var failCount = results.filter(function(r) { return r.verdict === 'fail'; }).length;
+  var skipCount = results.filter(function(r) { return r.verdict === 'skip'; }).length;
+
+  var html = '<div class="ship-gate-section">';
+  html += '<div class="ship-gate-header">';
+  html += '<span class="ship-gate-title">Gate Results</span>';
+  html += '<span class="ship-gate-summary">' + passCount + ' passed' +
+    (failCount > 0 ? ', ' + failCount + ' failed' : '') +
+    (skipCount > 0 ? ', ' + skipCount + ' skipped' : '') + '</span>';
+  html += '</div>';
+
+  html += '<div class="ship-gate-grid">';
+  results.forEach(function(result, idx) {
+    var verdictClass = result.verdict === 'pass' ? 'pass' : result.verdict === 'fail' ? 'fail' : 'skip';
+    var verdictIcon = result.verdict === 'pass' ? '&#10003;' : result.verdict === 'fail' ? '&#10007;' : '&#8212;';
+
+    html += '<div class="ship-gate-item ' + verdictClass + '">';
+    html += '<div class="ship-gate-item-header" onclick="toggleShipGateDetail(' + idx + ')">';
+    html += '<span class="gate-check-icon">' + verdictIcon + '</span>';
+    html += '<span class="gate-check-name">' + escapeHtml(result.checkName) + '</span>';
+    html += '<span class="gate-check-verdict">' + result.verdict.toUpperCase() + '</span>';
+    html += '<span class="ship-gate-expand">&#9656;</span>';
+    html += '</div>';
+
+    // Expandable detail
+    if (result.summary) {
+      html += '<div class="ship-gate-detail" id="ship-gate-detail-' + idx + '" style="display:none;">';
+      html += '<pre class="ship-gate-detail-text">' + escapeHtml(result.summary) + '</pre>';
+      html += '</div>';
+    }
+
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '</div>';
+
+  return html;
+}
+
+/**
+ * Toggle a gate result detail panel.
+ */
+function toggleShipGateDetail(idx) {
+  var detail = document.getElementById('ship-gate-detail-' + idx);
+  if (!detail) return;
+  var isHidden = detail.style.display === 'none';
+  detail.style.display = isHidden ? 'block' : 'none';
+  // Rotate arrow
+  var item = detail.parentElement;
+  if (item) {
+    var arrow = item.querySelector('.ship-gate-expand');
+    if (arrow) arrow.innerHTML = isHidden ? '&#9662;' : '&#9656;';
+  }
+}
+
 
 // Start app
 init();

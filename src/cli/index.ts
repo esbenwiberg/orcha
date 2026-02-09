@@ -44,6 +44,27 @@ import { runDashboard } from './dashboard.js'
 import { runBlessedDashboard } from './blessed-dashboard.js'
 import { StatusBar } from './status-bar.js'
 import { WorktreeManager } from '../core/worktree-manager.js'
+import {
+  defaultPipelineConfig,
+  parsePipelineConfig,
+  createPipelineRun,
+  executeArchitectStage,
+  executeDevStage,
+  executeGateStage,
+  executeFixLoopStage,
+  executeShipStage,
+  getPipelineDir,
+} from '../pipeline/index.js'
+import { parseAcceptanceCriteria } from '../pipeline/prompt-builder.js'
+import {
+  approveCheckpoint,
+  rejectCheckpoint,
+  feedbackArchitectCheckpoint,
+  pausePipeline,
+  resumePipeline,
+  recoverPipeline,
+  loadPipelineOrThrow,
+} from '../pipeline/checkpoint.js'
 
 import { rm } from 'fs/promises'
 import { existsSync } from 'fs'
@@ -1660,5 +1681,497 @@ presetCmd
       process.exit(1)
     }
   })
+
+// =============================================================================
+// orcha pipeline (parent command)
+// =============================================================================
+const pipelineCmd = program
+  .command('pipeline')
+  .description('Manage pipeline runs')
+
+// orcha pipeline run
+pipelineCmd
+  .command('run')
+  .description('Run a pipeline (architect stage only for now)')
+  .option('--work-item <id>', 'GitHub issue number or ADO work item ID')
+  .option('--title <text>', 'Short display title for the pipeline')
+  .option('--description <text>', 'Inline description of the work')
+  .option('--ac <criteria>', 'Inline acceptance criteria (comma-separated)')
+  .option('--source-branch <branch>', 'Source branch (default: main)')
+  .option('--worktree-path <path>', 'Path to an existing worktree to use')
+  .option('--model-architect <model>', 'Override model for architect stage')
+  .option('--model-dev <model>', 'Override model for dev stage')
+  .option('--model-gate <model>', 'Override model for gate stage')
+  .option('--model-fix <model>', 'Override model for fix stage')
+  .option('--model-ship <model>', 'Override model for ship stage')
+  .option('--max-budget-usd <amount>', 'Override default budget per stage', parseFloat)
+  .option('--competing <count>', 'Run N competing dev agents in parallel', parseInt)
+  .action(async (options) => {
+    const {
+      workItem,
+      title,
+      description,
+      ac,
+      sourceBranch,
+      worktreePath,
+      modelArchitect,
+      modelDev,
+      modelGate,
+      modelFix,
+      modelShip,
+      maxBudgetUsd,
+      competing,
+    } = options
+
+    // Require at least a description or work item
+    if (!description && !workItem) {
+      console.error('Error: Provide at least --description or --work-item')
+      process.exit(1)
+    }
+
+    // Determine the worktree path (required for now)
+    const resolvedWorktreePath = worktreePath ? resolve(worktreePath) : resolve('.')
+    const resolvedSourceBranch = sourceBranch || 'main'
+    const resolvedDescription = description || `Work item ${workItem}`
+
+    // Parse acceptance criteria
+    let acceptanceCriteria: string[] = []
+    if (ac) {
+      acceptanceCriteria = ac.split(',').map((c: string) => c.trim()).filter(Boolean)
+    }
+
+    // Build pipeline config with overrides
+    const configOverrides: Record<string, unknown> = {}
+    const modelOverrides: Record<string, string> = {}
+    const budgetOverrides: Record<string, number> = {}
+
+    if (modelArchitect) modelOverrides.architect = modelArchitect
+    if (modelDev) modelOverrides.dev = modelDev
+    if (modelGate) modelOverrides.gate = modelGate
+    if (modelFix) modelOverrides.fix = modelFix
+    if (modelShip) modelOverrides.ship = modelShip
+
+    if (Object.keys(modelOverrides).length > 0) {
+      configOverrides.models = modelOverrides
+    }
+
+    if (maxBudgetUsd !== undefined) {
+      budgetOverrides.default = maxBudgetUsd
+      configOverrides.budgets = budgetOverrides
+    }
+
+    if (competing !== undefined) {
+      if (isNaN(competing) || competing < 1 || competing > 10) {
+        console.error('Error: --competing must be between 1 and 10')
+        process.exit(1)
+      }
+      if (competing > 1) {
+        configOverrides.competingAgents = competing
+      }
+    }
+
+    if (maxBudgetUsd !== undefined && isNaN(maxBudgetUsd)) {
+      console.error('Error: --max-budget-usd must be a number')
+      process.exit(1)
+    }
+
+    let config
+    try {
+      const defaults = defaultPipelineConfig()
+      if (Object.keys(configOverrides).length > 0) {
+        // Deep-merge overrides onto defaults so unspecified fields keep their defaults
+        const merged = {
+          ...defaults,
+          models: { ...defaults.models, ...((configOverrides.models as object) || {}) },
+          budgets: { ...defaults.budgets, ...((configOverrides.budgets as object) || {}) },
+          ...(configOverrides.competingAgents !== undefined
+            ? { competingAgents: configOverrides.competingAgents }
+            : {}),
+        }
+        config = parsePipelineConfig(merged)
+      } else {
+        config = defaults
+      }
+    } catch (err) {
+      console.error('Error parsing pipeline config:', (err as Error).message)
+      process.exit(1)
+    }
+
+    console.log('Creating pipeline run...')
+    console.log(`  Description: ${resolvedDescription}`)
+    console.log(`  Source branch: ${resolvedSourceBranch}`)
+    console.log(`  Worktree: ${resolvedWorktreePath}`)
+    if (workItem) console.log(`  Work item: ${workItem}`)
+    if (acceptanceCriteria.length > 0) {
+      console.log(`  Acceptance criteria: ${acceptanceCriteria.length} item(s)`)
+    }
+
+    try {
+      // Create the pipeline run
+      let run = await createPipelineRun({
+        config,
+        description: resolvedDescription,
+        acceptanceCriteria,
+        sourceBranch: resolvedSourceBranch,
+        worktreePath: resolvedWorktreePath,
+        workItemId: workItem,
+        title: title || undefined,
+      })
+
+      console.log(`\nPipeline created: ${run.id}`)
+      console.log(`  State dir: ${getPipelineDir(run.id)}`)
+      console.log(`\nStarting architect stage...`)
+
+      // Execute the architect stage
+      run = await executeArchitectStage(run, {
+        modelOverride: modelArchitect,
+      })
+
+      if (run.state === 'error') {
+        console.error(`\nArchitect stage failed: ${run.error}`)
+        process.exit(1)
+      }
+
+      console.log(`\nArchitect stage completed successfully.`)
+      console.log(`  State: ${run.state}`)
+      if (run.blueprintPath) {
+        console.log(`  Blueprint: ${run.blueprintPath}`)
+      }
+      console.log(`  Pipeline dir: ${getPipelineDir(run.id)}`)
+      console.log(`\nPipeline is now at checkpoint:arch.`)
+      console.log(`Review the blueprint and proceed with: orcha pipeline approve ${run.id}`)
+    } catch (err) {
+      console.error('Pipeline error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// orcha pipeline status
+pipelineCmd
+  .command('status [id]')
+  .description('Show pipeline status')
+  .action(async (id?: string) => {
+    const { listPipelineRuns, loadPipelineRun } = await import('../pipeline/index.js')
+
+    if (id) {
+      const run = await loadPipelineRun(id)
+      if (!run) {
+        console.error(`Pipeline not found: ${id}`)
+        process.exit(1)
+      }
+      console.log(`Pipeline: ${run.id}`)
+      console.log(`  State: ${run.state}`)
+      console.log(`  Description: ${run.description}`)
+      console.log(`  Source branch: ${run.sourceBranch}`)
+      console.log(`  Worktree: ${run.worktreePath}`)
+      console.log(`  Created: ${run.createdAt}`)
+      console.log(`  Updated: ${run.updatedAt}`)
+      if (run.blueprintPath) console.log(`  Blueprint: ${run.blueprintPath}`)
+      if (run.error) console.log(`  Error: ${run.error}`)
+      if (run.competingResults && run.competingResults.length > 0) {
+        console.log(`  Competing agents: ${run.competingResults.length}`)
+        for (const c of run.competingResults) {
+          const status = c.winner ? ' (WINNER)' : c.gateScore >= 0 ? '' : ' (pending)'
+          console.log(`    Agent #${c.agentIndex}: score=${c.gateScore}${status}`)
+        }
+      }
+      if (run.stageHistory.length > 0) {
+        console.log(`  Stage history:`)
+        for (const stage of run.stageHistory) {
+          console.log(`    - ${stage.stage}: ${stage.startedAt} -> ${stage.completedAt} (model: ${stage.model || 'N/A'})`)
+        }
+      }
+    } else {
+      const runs = await listPipelineRuns()
+      if (runs.length === 0) {
+        console.log('No pipeline runs found.')
+        console.log('\nStart a pipeline with: orcha pipeline run --description "..."')
+        return
+      }
+      console.log('PIPELINE'.padEnd(25) + 'STATE'.padEnd(20) + 'DESCRIPTION'.padEnd(40) + 'UPDATED')
+      console.log('-'.repeat(95))
+      for (const run of runs) {
+        const shortDesc = run.description.length > 38
+          ? run.description.slice(0, 35) + '...'
+          : run.description
+        console.log(
+          run.id.padEnd(25) +
+          run.state.padEnd(20) +
+          shortDesc.padEnd(40) +
+          run.updatedAt
+        )
+      }
+    }
+  })
+
+// orcha pipeline list
+pipelineCmd
+  .command('list')
+  .alias('ls')
+  .description('List all pipeline runs')
+  .action(async () => {
+    const { listPipelineRuns } = await import('../pipeline/index.js')
+    const runs = await listPipelineRuns()
+
+    if (runs.length === 0) {
+      console.log('No pipeline runs found.')
+      return
+    }
+
+    console.log('PIPELINE'.padEnd(25) + 'STATE'.padEnd(20) + 'DESCRIPTION')
+    console.log('-'.repeat(75))
+    for (const run of runs) {
+      const shortDesc = run.description.length > 38
+        ? run.description.slice(0, 35) + '...'
+        : run.description
+      console.log(
+        run.id.padEnd(25) +
+        run.state.padEnd(20) +
+        shortDesc
+      )
+    }
+  })
+
+// orcha pipeline approve <id>
+pipelineCmd
+  .command('approve <id>')
+  .description('Approve the current checkpoint (architect or ship)')
+  .option('--continue', 'Continue executing the pipeline after approval')
+  .action(async (id: string, options: { continue?: boolean }) => {
+    try {
+      let run = await loadPipelineOrThrow(id)
+
+      console.log(`Approving checkpoint for pipeline ${run.id} (state: ${run.state})...`)
+      run = await approveCheckpoint(run)
+      console.log(`  New state: ${run.state}`)
+
+      if (options.continue) {
+        // Auto-continue: run the next stage(s)
+        run = await continuePipeline(run)
+      } else if (run.state === 'dev') {
+        console.log(`\nTo continue the pipeline, run:`)
+        console.log(`  orcha pipeline approve ${run.id} --continue`)
+        console.log(`  (or manually: the pipeline is now in 'dev' state)`)
+      } else if (run.state === 'ship') {
+        console.log(`\nExecuting ship stage...`)
+        run = await executeShipStage(run)
+        if (run.state === 'completed') {
+          console.log(`  Pipeline completed successfully!`)
+          // Show PR info if available
+          const { readFile } = await import('fs/promises')
+          const { join } = await import('path')
+          try {
+            const prJson = await readFile(join(getPipelineDir(run.id), 'ship', 'pr.json'), 'utf-8')
+            const pr = JSON.parse(prJson)
+            if (pr.url) {
+              console.log(`  PR: ${pr.url}`)
+            }
+          } catch { /* no PR info available */ }
+        } else if (run.state === 'error') {
+          console.error(`  Ship stage failed: ${run.error}`)
+        }
+      }
+    } catch (err) {
+      console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// orcha pipeline reject <id>
+pipelineCmd
+  .command('reject <id>')
+  .description('Reject the current checkpoint and cancel the pipeline')
+  .action(async (id: string) => {
+    try {
+      let run = await loadPipelineOrThrow(id)
+
+      console.log(`Rejecting checkpoint for pipeline ${run.id} (state: ${run.state})...`)
+      run = await rejectCheckpoint(run)
+      console.log(`  Pipeline cancelled.`)
+    } catch (err) {
+      console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// orcha pipeline feedback <id> <text>
+pipelineCmd
+  .command('feedback <id> <text>')
+  .description('Provide feedback on the architect blueprint and re-run architect')
+  .action(async (id: string, text: string) => {
+    try {
+      let run = await loadPipelineOrThrow(id)
+
+      console.log(`Sending feedback for pipeline ${run.id}...`)
+      console.log(`  Feedback: ${text}`)
+      console.log(`  Re-running architect stage with feedback...`)
+
+      run = await feedbackArchitectCheckpoint(run, text)
+
+      if (run.state === 'error') {
+        console.error(`\nArchitect re-run failed: ${run.error}`)
+        process.exit(1)
+      }
+
+      console.log(`\nArchitect re-run completed.`)
+      console.log(`  State: ${run.state}`)
+      if (run.blueprintPath) {
+        console.log(`  Updated blueprint: ${run.blueprintPath}`)
+      }
+      console.log(`\nReview the updated blueprint and proceed with: orcha pipeline approve ${run.id}`)
+    } catch (err) {
+      console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// orcha pipeline resume <id>
+pipelineCmd
+  .command('resume <id>')
+  .description('Resume a paused pipeline')
+  .option('--continue', 'Continue executing the resumed stage')
+  .action(async (id: string, options: { continue?: boolean }) => {
+    try {
+      let run = await loadPipelineOrThrow(id)
+
+      console.log(`Resuming pipeline ${run.id} (paused at: ${run.pausedStage})...`)
+      run = await resumePipeline(run)
+      console.log(`  Resumed to state: ${run.state}`)
+
+      if (options.continue) {
+        run = await continuePipeline(run)
+      } else {
+        console.log(`\nPipeline resumed. Use --continue to auto-execute the current stage.`)
+      }
+    } catch (err) {
+      console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// orcha pipeline recover <id>
+pipelineCmd
+  .command('recover <id>')
+  .description('Recover a pipeline stuck in error state')
+  .option('--continue', 'Continue executing the recovered stage')
+  .action(async (id: string, options: { continue?: boolean }) => {
+    try {
+      let run = await loadPipelineOrThrow(id)
+
+      if (run.state !== 'error') {
+        console.error(`Pipeline ${run.id} is in '${run.state}' state, not 'error'. Nothing to recover.`)
+        process.exit(1)
+      }
+
+      console.log(`Recovering pipeline ${run.id} from error state...`)
+      if (run.error) {
+        console.log(`  Previous error: ${run.error}`)
+      }
+
+      run = await recoverPipeline(run)
+      console.log(`  Recovered to state: ${run.state}`)
+
+      if (options.continue) {
+        run = await continuePipeline(run)
+      } else {
+        console.log(`\nPipeline recovered to '${run.state}'. Re-run with --continue to auto-execute:`)
+        console.log(`  orcha pipeline recover ${run.id} --continue`)
+      }
+    } catch (err) {
+      console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+/**
+ * Continue executing a pipeline from its current state.
+ * Drives through dev → gate → fix-loop cycles automatically,
+ * pausing at checkpoints.
+ */
+async function continuePipeline(run: import('../pipeline/index.js').PipelineRun): Promise<import('../pipeline/index.js').PipelineRun> {
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (run.state === 'created') {
+      console.log(`\nExecuting architect stage...`)
+      run = await executeArchitectStage(run)
+      if (run.state === 'error') {
+        console.error(`Architect stage failed: ${run.error}`)
+        return run
+      }
+      console.log(`  Architect stage complete. State: ${run.state}`)
+      if (run.state === 'checkpoint:arch') {
+        console.log(`\nPipeline is at checkpoint:arch.`)
+        console.log(`Review the blueprint and approve with: orcha pipeline approve ${run.id}`)
+        return run
+      }
+    }
+
+    if (run.state === 'checkpoint:arch') {
+      console.log(`\nPipeline is at checkpoint:arch.`)
+      console.log(`Review the blueprint and approve with: orcha pipeline approve ${run.id}`)
+      return run
+    }
+
+    if (run.state === 'dev') {
+      console.log(`\nExecuting dev stage...`)
+      run = await executeDevStage(run)
+      if (run.state === 'error') {
+        console.error(`Dev stage failed: ${run.error}`)
+        return run
+      }
+      console.log(`  Dev stage complete. State: ${run.state}`)
+    }
+
+    if (run.state === 'gate') {
+      console.log(`\nExecuting gate stage...`)
+      run = await executeGateStage(run)
+      if (run.state === 'error') {
+        console.error(`Gate stage failed: ${run.error}`)
+        return run
+      }
+      console.log(`  Gate stage complete. State: ${run.state}`)
+    }
+
+    if (run.state === 'fix-loop') {
+      console.log(`\nGate failed. Executing fix loop (attempt ${run.fixLoopCount + 1})...`)
+      run = await executeFixLoopStage(run)
+      if (run.state === 'error') {
+        console.error(`Fix loop failed: ${run.error}`)
+        return run
+      }
+      if (run.state === 'escalated') {
+        console.log(`\nMax fix attempts reached. Pipeline escalated for human intervention.`)
+        return run
+      }
+      console.log(`  Fix loop complete. State: ${run.state}`)
+      // Loop continues: if state is 'gate' from fix, re-run gate
+      continue
+    }
+
+    if (run.state === 'checkpoint:ship') {
+      console.log(`\nGate passed! Pipeline is at checkpoint:ship.`)
+      console.log(`Review the changes and approve with: orcha pipeline approve ${run.id}`)
+      return run
+    }
+
+    if (run.state === 'ship') {
+      console.log(`\nExecuting ship stage...`)
+      run = await executeShipStage(run)
+      if (run.state === 'error') {
+        console.error(`Ship stage failed: ${run.error}`)
+        return run
+      }
+      console.log(`  Ship stage complete. State: ${run.state}`)
+      if (run.state === 'completed') {
+        console.log(`\nPipeline completed successfully!`)
+        return run
+      }
+    }
+
+    // Any other terminal or checkpoint state: stop
+    console.log(`\nPipeline at state: ${run.state}`)
+    return run
+  }
+}
 
 program.parse()
