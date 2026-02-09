@@ -5369,6 +5369,7 @@ async function fetchShipSummary(pipelineId) {
 
     var html = '';
     if (summary.description) {
+      html += '<div class="ship-summary-label">Summary</div>';
       html += '<div class="ship-summary-description">' + escapeHtml(summary.description) + '</div>';
     }
     if (summary.changes && summary.changes.length > 0) {
