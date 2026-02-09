@@ -375,10 +375,11 @@ export async function retryEscalatedPipeline(
 
   // Store skip checks and user instructions on the run
   const now = new Date().toISOString()
+  // Preserve gateResults so the fix agent knows what failed.
+  // Clearing them would leave the fix agent blind to gate failures.
   let updated: PipelineRun = {
     ...run,
     config: updatedConfig,
-    gateResults: [],
     skipChecks: opts?.skipChecks?.length ? opts.skipChecks : run.skipChecks,
     userInstructions: opts?.instructions || run.userInstructions,
     updatedAt: now,

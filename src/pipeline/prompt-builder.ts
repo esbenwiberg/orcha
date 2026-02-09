@@ -453,7 +453,10 @@ export function buildAcValidatorPrompt(
     '- If an AC is partially met or unclear, explain what is missing.',
     '- Do NOT nitpick style or minor issues — focus on whether ACs are satisfied.',
     '',
-    'Output your verdict as JSON with this structure:',
+    'IMPORTANT: You MUST output ONLY a JSON object — no prose, no markdown, no explanation.',
+    'Do not use tools. The diff is provided below — analyze it directly.',
+    '',
+    'Output exactly this JSON structure and nothing else:',
     '{',
     '  "pass": true/false,',
     '  "summary": "Brief overall summary",',
@@ -481,7 +484,7 @@ export function buildAcValidatorPrompt(
     '',
     '# Instructions',
     'Evaluate whether the code changes above satisfy each acceptance criterion.',
-    'Output your verdict as the JSON structure described in your instructions.',
+    'Output ONLY the JSON verdict. No other text before or after.',
   ].join('\n')
 
   return { systemPrompt, userPrompt }

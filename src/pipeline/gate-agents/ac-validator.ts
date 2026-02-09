@@ -81,7 +81,7 @@ export async function runAcValidator(
       cwd: run.worktreePath,
       prompt: userPrompt,
       systemPrompt,
-      allowedTools: 'Read,Grep,Glob',
+      allowedTools: '',
       modelOverride: opts?.modelOverride ?? resolveModel(run.config, 'gate'),
       budgetOverride: opts?.budgetOverride ?? resolveBudget(run.config, 'gate'),
     })

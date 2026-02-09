@@ -20,6 +20,18 @@ function assertSafeBranch(branch: string): void {
 }
 
 // ============================================================================
+// Commit SHA Validation
+// ============================================================================
+
+const SAFE_SHA_RE = /^[a-f0-9]{7,40}$/i
+
+function assertSafeCommitSha(sha: string): void {
+  if (!SAFE_SHA_RE.test(sha)) {
+    throw new Error(`Invalid commit SHA: ${sha}`)
+  }
+}
+
+// ============================================================================
 // HEAD SHA Retrieval
 // ============================================================================
 
@@ -59,6 +71,7 @@ export function getDiff(worktreePath: string, sourceBranch: string, baseCommit?:
 
   // Best strategy: diff from the exact base commit captured at pipeline start
   if (baseCommit) {
+    assertSafeCommitSha(baseCommit)
     try {
       const diff = execSync(`git diff ${baseCommit}..HEAD`, execOpts).trim()
       if (diff) return diff
@@ -100,6 +113,7 @@ export function getChangedLintableFiles(worktreePath: string, sourceBranch: stri
 
   // Best strategy: diff from exact base commit
   if (baseCommit) {
+    assertSafeCommitSha(baseCommit)
     try {
       const output = execSync(
         `git diff --name-only ${baseCommit}..HEAD -- '*.ts' '*.js' '*.tsx' '*.jsx'`,

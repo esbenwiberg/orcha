@@ -195,6 +195,7 @@ export async function runFixLoopStage(
  */
 function buildFailureReport(gateResults: GateResult[]): string {
   const failures = gateResults.filter((r) => r.verdict === 'fail')
+  const passing = gateResults.filter((r) => r.verdict === 'pass')
 
   if (failures.length === 0) {
     return 'No failures reported (this should not happen in fix-loop).'
@@ -219,10 +220,20 @@ function buildFailureReport(gateResults: GateResult[]): string {
     return lines.join('\n')
   })
 
+  const passingWarning = passing.length > 0
+    ? [
+        '',
+        `# Passing Checks (DO NOT REGRESS)`,
+        `The following checks are currently PASSING. Do NOT make changes that would break them:`,
+        ...passing.map((p) => `- **${p.checkName}**: ${p.summary}`),
+      ]
+    : []
+
   return [
     `# Gate Failures (${failures.length} check(s) failed)`,
     '',
     ...sections,
+    ...passingWarning,
   ].join('\n\n')
 }
 
