@@ -3074,6 +3074,9 @@ body {
 
 .activity-timeline {
   position: relative;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .timeline-loading,

@@ -3901,6 +3901,7 @@ function connectPipelineEvents() {
             const newNode = wrapper.firstElementChild;
             if (newNode) {
               container.insertBefore(newNode, container.firstChild);
+              container.scrollTop = 0;
             }
           }
         }

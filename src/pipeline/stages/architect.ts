@@ -45,6 +45,14 @@ import { parseStructuredOutput } from '../output-parser.js'
 export const BLUEPRINT_SCHEMA = {
   type: 'object' as const,
   properties: {
+    headline: {
+      type: 'string' as const,
+      description: 'Short title for the plan (e.g. "Add User Authentication")',
+    },
+    shortDescription: {
+      type: 'string' as const,
+      description: '1-2 sentence summary of what this blueprint accomplishes',
+    },
     approach: {
       type: 'string' as const,
       description: 'High-level description of the implementation approach',
@@ -76,7 +84,7 @@ export const BLUEPRINT_SCHEMA = {
       description: 'Ordered implementation steps (alias for milestones, for backward compatibility)',
     },
   },
-  required: ['approach', 'filesToTouch', 'risks', 'testStrategy', 'steps'],
+  required: ['headline', 'shortDescription', 'approach', 'filesToTouch', 'risks', 'testStrategy', 'steps'],
 }
 
 // Re-export BlueprintOutput from types.ts for backward compatibility
@@ -169,12 +177,13 @@ export async function runArchitectStage(
 
     // Record the stage result
     const completedAt = new Date().toISOString()
+    const milestoneCount = getBlueprintMilestones(blueprint).length
     const stageResult: StageResult = {
       stage: 'architect',
       startedAt,
       completedAt,
       model: result.model,
-      output: `${blueprint.approach} (${getBlueprintMilestones(blueprint).length} steps, ${blueprint.filesToTouch.length} files)`,
+      output: `${blueprint.headline} (${milestoneCount} milestones, ${blueprint.filesToTouch.length} files)`,
     }
     run = await recordStageResult(run, stageResult)
 
@@ -211,6 +220,8 @@ function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
   // Support both 'milestones' (preferred) and 'steps' (backward compat)
   const hasMilestones = Array.isArray(bp.milestones) || Array.isArray(bp.steps)
   return (
+    typeof bp.headline === 'string' &&
+    typeof bp.shortDescription === 'string' &&
     typeof bp.approach === 'string' &&
     Array.isArray(bp.filesToTouch) &&
     Array.isArray(bp.risks) &&
