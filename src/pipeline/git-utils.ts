@@ -251,15 +251,18 @@ function isValidRangeArg(arg: string): boolean {
   if (arg.length > 200) return false // Prevent DoS from very long args
   if (arg === '--') return false // Standalone -- would confuse arg parsing
   if (!SAFE_RANGE_RE.test(arg)) return false
-  // Reject path traversal patterns: any '../' sequence is suspicious.
+  // Reject path traversal patterns comprehensively.
   // Note: '..' is valid in git range syntax (e.g., 'a..b' for two-dot range),
-  // but '../' always indicates path traversal.
+  // but path traversal sequences must be blocked.
   // Check for:
-  // - '/../' (traversal in middle)
-  // - '../' at start (traversal at beginning)
-  // - '/..' at end (traversal at end)
+  // - '../' anywhere (traversal forward)
+  // - '/..' anywhere (traversal backward, including at end)
+  // - './..' (relative path traversal like './../')
+  // - Starting with '../' (traversal at beginning)
   if (arg.includes('../')) return false
-  if (arg.endsWith('/..')) return false
+  if (arg.includes('/..')) return false  // Catches both '/..' in middle and at end
+  if (arg.includes('./.')) return false  // Catches './..' and similar patterns
+  if (arg.startsWith('..')) return false // Catches '../' at start without slash
   // Reject patterns that look like absolute paths embedded in the range
   if (arg.includes('//')) return false
   return true

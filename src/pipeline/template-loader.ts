@@ -404,11 +404,16 @@ export async function loadTemplate(templateName: string): Promise<TemplateData> 
   // Defense-in-depth: verify resolved paths are within expected directories
   // This catches any edge cases the name validation might miss.
   //
-  // Security: Use path.resolve() to get absolute paths, then verify they start
-  // with the expected directory. This handles symlinks, junction points, and
-  // normalization edge cases better than relative() alone.
+  // Security: Use path.resolve() to get absolute paths, then verify they don't
+  // escape the expected directory using relative() checks.
   //
-  // The resolve() call fully resolves the path including:
+  // NOTE: resolve() does NOT follow symlinks — it only normalizes the path string.
+  // Symlink attacks are mitigated by:
+  // 1. assertSafeTemplateName rejecting '..' and absolute paths
+  // 2. The relative() check below catching any escape attempts
+  // 3. The user controlling ~/.orcha/prompts/ directory contents
+  //
+  // The resolve() call normalizes the path including:
   // - Normalizing slashes
   // - Resolving . and .. segments
   // - Converting to absolute path

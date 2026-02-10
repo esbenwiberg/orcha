@@ -367,6 +367,10 @@ function isSafeTestPath(testPath: string): boolean {
   // Reject shell metacharacters - defense-in-depth even though execFileSync prevents shell injection
   // These could cause issues in log parsing, error messages, or other downstream processing
   if (/[;|&`$]/.test(testPath)) return false
+  // Reject paths starting with '-' to prevent flag injection attacks.
+  // A crafted filename like '--version.test.ts' could be interpreted as a flag by test runners.
+  // This is rejected here rather than handled via './' prefix for defense-in-depth.
+  if (testPath.startsWith('-')) return false
   return true
 }
 
@@ -388,19 +392,16 @@ function getTestRunner(
   techType?: TechStack['type'],
 ): { cmd: string; args: string[] } | null {
   // Security: Validate the ORIGINAL test path FIRST.
-  // This catches control characters, newlines, and other dangerous patterns
-  // before any transformation. Paths starting with '-' are allowed here
-  // (they pass isSafeTestPath) but will be prefixed below to prevent flag injection.
+  // This catches control characters, newlines, flag-injection attempts (paths starting with '-'),
+  // and other dangerous patterns before any transformation.
   if (!isSafeTestPath(testPath)) {
     console.warn(`[adversary] Rejecting unsafe test path: ${JSON.stringify(testPath).slice(0, 100)}`)
     return null
   }
 
-  // Security: Prefix testPath with './' if it starts with '-' to prevent flag injection.
-  // Even though execFileSync with args array prevents shell injection, a path like
-  // '--some-flag' could be interpreted as a CLI flag by the test runner.
-  // This transformation is safe because we've already validated testPath above.
-  const safePath = testPath.startsWith('-') ? `./${testPath}` : testPath
+  // Note: testPath is now validated — paths starting with '-' are already rejected by isSafeTestPath.
+  // No './' prefix needed since flag-like paths are blocked at validation.
+  const safePath = testPath
 
   // Use '--' separator for pytest BEFORE the path to ensure paths are never interpreted as flags.
   // The '--' tells the argument parser that everything after it is a positional argument.

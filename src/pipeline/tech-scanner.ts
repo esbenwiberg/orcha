@@ -356,14 +356,9 @@ function hasPythonDep(content: string, dep: string): boolean {
       continue
     }
 
-    // Defense against consecutive boundary characters causing iteration DoS:
-    // If the character TWO positions before is also a boundary, and the one before
-    // the match is also a boundary, we might be in a long chain of special chars.
-    // Skip ahead to avoid O(n) iterations over '====pytest====' type patterns.
-    if (pos > 1 && isWordBoundaryChar(lowerContent.charCodeAt(pos - 2))) {
-      // We're after consecutive boundaries — this is a valid match position,
-      // just continue checking the after boundary
-    }
+    // Note: Consecutive boundary characters (e.g., '====pytest====') are handled
+    // by the MAX_SEARCH_ITERATIONS limit above. We found a valid boundary before
+    // the match, so proceed to check the after boundary.
 
     // Check character after (must be word boundary)
     const afterPos = pos + lowerDep.length

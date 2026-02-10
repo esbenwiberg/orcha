@@ -256,14 +256,13 @@ function parseArchitectOutput(stdout: string): BlueprintOutput | null {
 function isValidMilestoneObject(obj: unknown): boolean {
   if (typeof obj !== 'object' || obj === null) return false
   const m = obj as Record<string, unknown>
-  // Require non-empty strings for both description and details
-  // Empty strings would pass 'typeof === string' but cause issues downstream
-  return (
-    typeof m.description === 'string' &&
-    m.description.length > 0 &&
-    typeof m.details === 'string' &&
-    m.details.length > 0
-  )
+  // Require non-empty, non-whitespace strings for both description and details.
+  // Empty strings or whitespace-only strings (e.g., ' ') would pass length > 0
+  // but are semantically empty and would cause issues downstream.
+  if (typeof m.description !== 'string' || typeof m.details !== 'string') return false
+  const trimmedDesc = m.description.trim()
+  const trimmedDetails = m.details.trim()
+  return trimmedDesc.length > 0 && trimmedDetails.length > 0
 }
 
 function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
