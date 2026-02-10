@@ -118,6 +118,7 @@ function installNodeDependencies(stack: TechStack): StackInstallResult {
     encoding: 'utf-8' as const,
     timeout: 300000, // 5 minute timeout
     stdio: 'pipe' as const,
+    env: process.env, // Inherit parent PATH for npm hooks and binaries
   }
 
   // Detect package manager
@@ -161,6 +162,7 @@ function installPythonDependencies(stack: TechStack): StackInstallResult {
     encoding: 'utf-8' as const,
     timeout: 300000, // 5 minute timeout
     stdio: 'pipe' as const,
+    env: process.env, // Inherit parent PATH for pip and python binaries
   }
 
   // Try different installation methods in order of preference
@@ -213,6 +215,7 @@ function installDotnetDependencies(stack: TechStack): StackInstallResult {
     encoding: 'utf-8' as const,
     timeout: 300000, // 5 minute timeout
     stdio: 'pipe' as const,
+    env: process.env, // Inherit parent PATH for dotnet binary
   }
 
   const installCmd = 'dotnet restore'

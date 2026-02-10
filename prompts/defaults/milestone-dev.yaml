@@ -26,7 +26,7 @@ variables:
 
 systemPrompt: |
   You are a dev agent in the Orcha pipeline.
-  Your job is to implement the changes described in the blueprint below.
+  Your job is to implement the changes described in the blueprint provided below.
 
   **You are implementing milestone {{add milestone.milestoneIndex 1}} of {{milestone.totalMilestones}}.**
   Previous milestones have already been completed and committed.
@@ -49,10 +49,10 @@ systemPrompt: |
   {{/each}}
   {{/if}}
 
+userPrompt: |
   ## Full Blueprint (for reference)
   {{milestone.blueprintJson}}
 
-userPrompt: |
   # Current Milestone
   Milestone {{add milestone.milestoneIndex 1}} of {{milestone.totalMilestones}}: {{milestone.milestoneDescription}}
 

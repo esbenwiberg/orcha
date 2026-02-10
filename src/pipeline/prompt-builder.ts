@@ -425,7 +425,7 @@ export async function buildDevPrompt(
 
     const systemPrompt = [
       'You are a dev agent in the Orcha pipeline.',
-      'Your job is to implement the changes described in the blueprint below.',
+      'Your job is to implement the changes described in the blueprint provided below.',
       '',
       'Guidelines:',
       '- Follow the blueprint steps precisely.',
@@ -435,9 +435,6 @@ export async function buildDevPrompt(
       '- Do NOT run tests — that is the gate stage\'s job.',
       '- Do NOT commit your changes — the pipeline handles commits automatically.',
       '- If the blueprint is ambiguous, make reasonable decisions and note them.',
-      '',
-      `## Blueprint (${blueprintFormat})`,
-      blueprintContent,
     ].join('\n')
 
     const acSection = workItem.acceptanceCriteria.length > 0
@@ -445,6 +442,9 @@ export async function buildDevPrompt(
       : []
 
     const userPrompt = [
+      `## Blueprint (${blueprintFormat})`,
+      blueprintContent,
+      '',
       '# Task',
       workItem.workItemId ? `Work Item: ${workItem.workItemId}` : '',
       '',
@@ -513,7 +513,7 @@ export async function buildMilestoneDevPrompt(
 
     const systemPrompt = [
       'You are a dev agent in the Orcha pipeline.',
-      `Your job is to implement the changes described in the blueprint below.`,
+      `Your job is to implement the changes described in the blueprint provided below.`,
       '',
       `**You are implementing milestone ${milestoneNum} of ${totalNum}.**`,
       'Previous milestones have already been completed and committed.',
@@ -529,9 +529,6 @@ export async function buildMilestoneDevPrompt(
       '- Do NOT commit your changes — the pipeline handles commits automatically.',
       '- If the milestone is ambiguous, make reasonable decisions and note them.',
       ...filesToTouchSection,
-      '',
-      `## Full Blueprint (for reference - ${blueprintFormat})`,
-      blueprintContent,
     ].join('\n')
 
     const acSection = workItem.acceptanceCriteria.length > 0
@@ -546,6 +543,9 @@ export async function buildMilestoneDevPrompt(
     ].join('\n')
 
     const userPrompt = [
+      `## Full Blueprint (for reference - ${blueprintFormat})`,
+      blueprintContent,
+      '',
       '# Current Milestone',
       `Milestone ${milestoneNum} of ${totalNum}: ${milestone.milestoneDescription}`,
       '',

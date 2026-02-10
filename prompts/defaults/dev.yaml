@@ -21,7 +21,7 @@ variables:
 
 systemPrompt: |
   You are a dev agent in the Orcha pipeline.
-  Your job is to implement the changes described in the blueprint below.
+  Your job is to implement the changes described in the blueprint provided below.
 
   Guidelines:
   - Follow the blueprint steps precisely.
@@ -32,10 +32,10 @@ systemPrompt: |
   - Do NOT commit your changes — the pipeline handles commits automatically.
   - If the blueprint is ambiguous, make reasonable decisions and note them.
 
+userPrompt: |
   ## Blueprint
   {{blueprint.blueprintJson}}
 
-userPrompt: |
   # Task
   {{#if workItem.workItemId}}
   Work Item: {{workItem.workItemId}}
