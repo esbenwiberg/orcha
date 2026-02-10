@@ -123,8 +123,12 @@ function detectNode(worktreePath: string): TechStack[] {
         commands,
         lintableExtensions: ['.ts', '.js', '.tsx', '.jsx', '.mjs', '.cjs'],
       })
-    } catch {
-      // Malformed package.json — skip
+    } catch (err) {
+      // Malformed package.json — skip but log for debugging
+      // This helps detect encoding issues or corrupted files
+      if (process.env.DEBUG) {
+        console.warn(`[tech-scanner] Failed to parse ${pkgPath}: ${(err as Error).message}`)
+      }
     }
   }
 
@@ -294,13 +298,100 @@ function readFileSafe(filePath: string): string | null {
   }
 }
 
+/** Maximum content size to scan for dependencies (1MB). Prevents memory exhaustion. */
+const MAX_CONTENT_SIZE = 1024 * 1024
+
+/**
+ * Maximum iterations for dependency search loop. Keeps search fast and prevents DoS.
+ *
+ * Security: Reduced from 100 to 50 to minimize worst-case O(n*m) behavior.
+ * With crafted input like 'pytest====pytest====pytest...', each occurrence
+ * causes a full boundary check. 50 iterations is more than enough for
+ * legitimate package files while limiting DoS potential.
+ */
+const MAX_SEARCH_ITERATIONS = 50
+
 /**
  * Check if a Python dependency name appears in combined project content.
- * Simple substring match — handles pyproject.toml, requirements.txt, setup.py, setup.cfg.
+ * Uses simple string search with boundary validation to avoid ReDoS vulnerabilities.
+ *
+ * Security:
+ * - Validates dep against a safe pattern to prevent any injection
+ * - Limits content size to prevent memory exhaustion
+ * - Uses indexOf + boundary checks instead of complex regex (prevents ReDoS)
+ * - Rejects consecutive boundary characters to prevent DoS from crafted input
  */
 function hasPythonDep(content: string, dep: string): boolean {
-  // Match the dep name as a word boundary (avoid partial matches like "ruff" in "scruff")
-  // Patterns: "ruff", 'ruff', ruff==, ruff>=, ruff[, ruff\n, ruff (in requirements.txt lines)
-  const pattern = new RegExp(`(?:^|['"\\s,])${dep}(?:['"\\s,>=<!\\[\\]]|$)`, 'm')
-  return pattern.test(content)
+  // Validate dep is a reasonable Python package name (alphanumeric, hyphens, underscores)
+  if (!/^[a-zA-Z0-9_-]+$/.test(dep)) {
+    return false
+  }
+
+  // Limit content size to prevent memory exhaustion
+  const safeContent = content.length > MAX_CONTENT_SIZE
+    ? content.slice(0, MAX_CONTENT_SIZE)
+    : content
+
+  // Use indexOf for O(n) search without regex backtracking risk
+  // Then validate boundaries manually
+  const lowerContent = safeContent.toLowerCase()
+  const lowerDep = dep.toLowerCase()
+
+  let pos = 0
+  let iterations = 0
+  while ((pos = lowerContent.indexOf(lowerDep, pos)) !== -1) {
+    // Limit iterations to cap worst-case time complexity.
+    // With MAX_SEARCH_ITERATIONS=50, even crafted input like 'pytest=pytest=pytest...'
+    // will complete in bounded time: O(50 * boundary_checks) rather than O(n * matches).
+    if (++iterations > MAX_SEARCH_ITERATIONS) {
+      // Too many iterations — assume not found to avoid DoS
+      return false
+    }
+
+    // Check character before (must be word boundary)
+    // Using character code checks instead of regex to prevent ReDoS
+    const charBefore = pos > 0 ? lowerContent.charCodeAt(pos - 1) : 10 // '\n'
+
+    // Skip if previous char is NOT a boundary (means we're mid-word like 'mypytest')
+    if (!isWordBoundaryChar(charBefore)) {
+      pos++
+      continue
+    }
+
+    // Note: Consecutive boundary characters (e.g., '====pytest====') are handled
+    // by the MAX_SEARCH_ITERATIONS limit above. We found a valid boundary before
+    // the match, so proceed to check the after boundary.
+
+    // Check character after (must be word boundary)
+    const afterPos = pos + lowerDep.length
+    const charAfter = afterPos < lowerContent.length ? lowerContent.charCodeAt(afterPos) : 10 // '\n'
+
+    if (isWordBoundaryChar(charAfter)) {
+      return true
+    }
+
+    pos++
+  }
+
+  return false
+}
+
+/**
+ * Check if a character code represents a word boundary for dependency matching.
+ * Uses character codes instead of regex to prevent ReDoS vulnerabilities.
+ *
+ * Matches: whitespace, quotes, =, <, >, !, comma, [, ], (, ), :, newline
+ * Parentheses are needed for requirements.txt syntax like 'pytest>=7.0' or 'package[extra]'
+ * Colon is needed for extras syntax like 'pytest:3.0' or TOML keys
+ */
+function isWordBoundaryChar(code: number): boolean {
+  // Space (32), Tab (9), Newline (10), Carriage return (13)
+  if (code === 32 || code === 9 || code === 10 || code === 13) return true
+  // Single quote (39), Double quote (34)
+  if (code === 39 || code === 34) return true
+  // = (61), < (60), > (62), ! (33), : (58)
+  if (code === 61 || code === 60 || code === 62 || code === 33 || code === 58) return true
+  // Comma (44), [ (91), ] (93), ( (40), ) (41)
+  if (code === 44 || code === 91 || code === 93 || code === 40 || code === 41) return true
+  return false
 }

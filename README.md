@@ -245,6 +245,74 @@ In the sidebar, click **"+ Add Action"** to create:
 
 Actions are stored in `~/.orcha/actions.json` and persist across sessions.
 
+## Customizable Prompts
+
+Orcha uses Handlebars-powered YAML templates for all pipeline phases, allowing you to customize AI behavior for your codebase and workflow.
+
+### Quick Start
+
+```bash
+# View all available templates
+orcha prompts list
+
+# See a template's content
+orcha prompts show architect
+
+# Customize a template
+orcha prompts edit architect
+
+# Reset to default
+orcha prompts reset architect
+```
+
+### Template Types
+
+- **architect** - Designs feature architecture from milestone specs
+- **dev** - Implements features with tests and documentation
+- **gate/** - Adversarial review, code quality, security checks, test validation
+- **fix-loop** - Fixes issues found during gate phase
+
+### Example Customization
+
+Tailor the architect template for your team's standards:
+
+```yaml
+systemPrompt: |
+  You are a senior architect at {{companyName}}.
+
+  Follow our architecture principles:
+  - Microservices with API-first design
+  - PostgreSQL for persistent data
+  - Redis for caching
+  - Event-driven patterns for async work
+
+userPrompt: |
+  Design architecture for: {{milestoneName}}
+
+  Requirements:
+  {{milestoneDetails}}
+
+  Deliverables:
+  1. Component diagram
+  2. API contracts
+  3. Database schema
+  4. Deployment strategy
+```
+
+### Sharing Templates
+
+Export and share templates with your team:
+
+```bash
+# Export custom templates
+orcha prompts export my-templates.tar.gz
+
+# Import on another machine
+orcha prompts import my-templates.tar.gz
+```
+
+Full documentation: [docs/prompt-templates.md](docs/prompt-templates.md)
+
 ## Configuration
 
 Orcha stores data in:
@@ -255,6 +323,8 @@ Orcha stores data in:
 | `~/.orcha/worktrees/` | Git worktrees for sessions |
 | `~/.orcha/registry.json` | Running instance registry |
 | `~/.orcha/actions.json` | Custom action buttons |
+| `~/.orcha/prompts/custom/` | Custom prompt templates |
+| `~/.orcha/prompts/defaults/` | Default prompt templates |
 | `/tmp/orcha/agents/` | Session status files |
 
 ## Architecture

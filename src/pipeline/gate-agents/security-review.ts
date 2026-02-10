@@ -72,7 +72,7 @@ export async function runSecurityReview(
     acceptanceCriteria: run.acceptanceCriteria,
   }
   const diffCtx: DiffContext = { diff }
-  const { systemPrompt, userPrompt } = buildSecurityReviewPrompt(workItem, diffCtx)
+  const { systemPrompt, userPrompt } = await buildSecurityReviewPrompt(workItem, diffCtx)
 
   try {
     const result = await runStage({

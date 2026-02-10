@@ -16,11 +16,94 @@
 
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import type { GateResult, StackRunnerResult } from '../types.js'
 import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
 import { getChangedLintableFiles, getChangedFilesByExtensions } from '../git-utils.js'
+
+// ============================================================================
+// Filename Validation
+// ============================================================================
+
+/**
+ * Validate that a filename is safe for use with lint commands.
+ * Uses a whitelist approach: only allows characters that are safe in all contexts.
+ *
+ * Security: While execFileSync prevents shell injection, we validate filenames
+ * to prevent issues with:
+ * - Control characters
+ * - Quotes and backticks (could cause issues in log parsing or other contexts)
+ * - Semicolons (shell command separators in some edge cases)
+ * - Other potentially problematic characters
+ *
+ * Allowed: alphanumeric, hyphen, underscore, period, forward slash
+ * This covers normal file paths like 'src/components/Button.tsx'
+ *
+ * SECURITY NOTE: The '@' character is intentionally NOT allowed even though it's
+ * used in npm scopes (e.g., '@types/node'). In dotnet tooling, '@file.rsp'
+ * references response files that can contain arbitrary commands. Since we pass
+ * files to dotnet format --include, allowing '@' could enable command injection.
+ * npm scope directories work fine without special handling since we're passing
+ * file paths, not package names.
+ *
+ * Note: Characters like '+', ';', '|', '&', '`', '$', '@', quotes are implicitly
+ * rejected because they are NOT in the whitelist regex pattern.
+ */
+const SAFE_FILENAME_RE = /^[a-zA-Z0-9_.\-/]+$/
+
+function isValidFilename(filename: string): boolean {
+  // Reject empty filenames
+  if (!filename) return false
+  // Reject filenames that are too long (prevent DoS)
+  if (filename.length > 500) return false
+  // Reject path traversal
+  if (filename.includes('..')) return false
+  // Reject absolute paths
+  if (filename.startsWith('/')) return false
+  // Reject consecutive slashes (could bypass security checks)
+  if (filename.includes('//')) return false
+  // Reject flag-like filenames (e.g., '-v.ts' or '--verify-no-changes.ts')
+  // These could be interpreted as CLI flags even with execFileSync
+  // Reject both single-dash (-v) and double-dash (--flag) patterns
+  if (filename.startsWith('-')) return false
+  // Only allow whitelisted characters
+  return SAFE_FILENAME_RE.test(filename)
+}
+
+/**
+ * Defense-in-depth check for flag-like filenames.
+ *
+ * This function is a safety net that should rarely trigger in practice because
+ * isValidFilename() already rejects filenames starting with '-'. However, if
+ * somehow a flag-like filename bypasses validation, this provides a second layer.
+ *
+ * Returns true if the filename is safe (not flag-like), false otherwise.
+ *
+ * @param filename - Already-validated filename from filterValidFilenames()
+ * @returns true if safe to use, false if it looks like a flag
+ */
+function isNotFlagLike(filename: string): boolean {
+  if (filename.startsWith('-')) {
+    console.warn(`[lint-runner] Security: Rejecting flag-like filename that bypassed validation: ${filename}`)
+    return false
+  }
+  return true
+}
+
+/**
+ * Filter file list to only include valid filenames.
+ * Logs a warning for any rejected filenames.
+ */
+function filterValidFilenames(files: string[]): string[] {
+  return files.filter((f) => {
+    if (!isValidFilename(f)) {
+      console.warn(`Skipping invalid filename in lint: ${JSON.stringify(f)}`)
+      return false
+    }
+    return true
+  })
+}
 
 // ============================================================================
 // Lint-specific result (extends StackRunnerResult with lint fields)
@@ -107,12 +190,15 @@ function runMultiStackLint(
     }
 
     // For all stacks, scope to changed files matching stack extensions
-    const changedFiles = getChangedFilesByExtensions(
+    const rawChangedFiles = getChangedFilesByExtensions(
       worktreePath,
       sourceBranch,
       stack.lintableExtensions,
       baseCommit,
     )
+
+    // Filter out any filenames with control characters for security
+    const changedFiles = filterValidFilenames(rawChangedFiles)
 
     if (changedFiles.length === 0) {
       stackResults.push({
@@ -167,21 +253,47 @@ function runMultiStackLint(
 /**
  * Run Node.js lint (eslint-based). Uses `npm run lint -- {files}` or `npx eslint {files}`
  * depending on the detected command. Parses output with the eslint parser.
+ *
+ * Uses execFileSync with args array to avoid shell injection vulnerabilities.
  */
 function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
-  const fileList = changedFiles.map((f) => `"${f.replace(/["\\$`]/g, '\\$&')}"`).join(' ')
+  // Build args array for execFileSync (avoids shell injection)
+  let cmd: string
+  let args: string[]
 
-  // Determine if this is npm run lint or npx eslint
-  let lintCommand: string
-  if (stack.commands.lint === 'npm run lint') {
-    lintCommand = `npm run lint -- ${fileList} --max-warnings 0`
-  } else {
-    // npx eslint or other — append file list and strict mode
-    lintCommand = `${stack.commands.lint} ${fileList} --max-warnings 0`
+  // Defense-in-depth: filter out any flag-like filenames that somehow bypassed validation.
+  // isValidFilename() already rejects '-' prefixes, but this is an extra safety layer.
+  const safeFiles = changedFiles.filter(isNotFlagLike)
+
+  if (safeFiles.length === 0) {
+    return {
+      type: stack.type,
+      path: relPath,
+      status: 'skip',
+      filesChecked: 0,
+      output: 'All files were filtered out as invalid',
+    }
   }
 
+  if (stack.commands.lint === 'npm run lint') {
+    // npm run lint -- ./file1.ts ./file2.ts --max-warnings 0
+    cmd = 'npm'
+    args = ['run', 'lint', '--', ...safeFiles, '--max-warnings', '0']
+  } else if (stack.commands.lint === 'npx eslint .') {
+    // npx eslint ./file1.ts ./file2.ts --max-warnings 0
+    cmd = 'npx'
+    args = ['eslint', ...safeFiles, '--max-warnings', '0']
+  } else {
+    // Generic fallback: try to parse the lint command
+    // For safety, only support known patterns
+    cmd = 'npx'
+    args = ['eslint', ...safeFiles, '--max-warnings', '0']
+  }
+
+  const lintCommand = `${cmd} ${args.join(' ')}` // For display only
+
   try {
-    const output = execSync(lintCommand, {
+    const output = execFileSync(cmd, args, {
       cwd: stack.absolutePath,
       encoding: 'utf-8',
       timeout: 120000,
@@ -223,14 +335,36 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
 /**
  * Run .NET lint via `dotnet format --verify-no-changes`.
  * Scoped to changed files using `--include` flags.
+ *
+ * Uses execFileSync with args array to avoid shell injection vulnerabilities.
+ * Each --include flag is passed as a separate argument.
+ *
+ * Security:
+ * - Files starting with '-' are already rejected by isValidFilename() in the caller.
+ * - The '@' character is rejected by SAFE_FILENAME_RE to prevent response file injection
+ *   (dotnet uses @file.rsp syntax to read commands from files).
+ * - The '--include' flags take option arguments (the filenames), not positional args.
+ *   No '--' separator is needed since there are no positional arguments to separate.
+ *
+ * Note: A theoretical TOCTOU race exists where a file could be renamed after validation
+ * but before execution. However, this requires filesystem write access to the worktree
+ * AND precise timing (milliseconds window), making it impractical to exploit.
  */
 function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
-  // Build --include flags for each changed file to scope dotnet format
-  const includeArgs = changedFiles.map((f) => `--include "${f.replace(/["\\$`]/g, '\\$&')}"`).join(' ')
-  const lintCommand = `${stack.commands.lint!} ${includeArgs}`
+  // Build args array for execFileSync (avoids shell injection)
+  // Note: Files starting with '-' and '@' are already rejected by isValidFilename() in the caller.
+  // Format: dotnet format --verify-no-changes --include file1.cs --include file2.cs
+  // The '--include' flags take option arguments (filenames), not positional arguments,
+  // so no '--' separator is needed.
+  const args: string[] = ['format', '--verify-no-changes']
+  for (const file of changedFiles) {
+    args.push('--include', file)
+  }
+
+  const lintCommand = `dotnet ${args.join(' ')}` // For display only
 
   try {
-    const output = execSync(lintCommand, {
+    const output = execFileSync('dotnet', args, {
       cwd: stack.absolutePath,
       encoding: 'utf-8',
       timeout: 120000,
@@ -272,23 +406,47 @@ function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]
 /**
  * Run Python lint (ruff or flake8). Scoped to changed files.
  * Uses generic output parsing.
+ *
+ * Uses execFileSync with args array to avoid shell injection vulnerabilities.
  */
 function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
-  const fileList = changedFiles.map((f) => `"${f.replace(/["\\$`]/g, '\\$&')}"`).join(' ')
+  // Build args array for execFileSync (avoids shell injection)
+  let cmd: string
+  let args: string[]
 
-  // Replace the trailing '.' in commands like 'ruff check .' or 'flake8' with the file list
-  let lintCommand: string
-  const baseLint = stack.commands.lint!
-  if (baseLint.endsWith(' .')) {
-    // e.g. 'ruff check .' → 'ruff check {files}'
-    lintCommand = `${baseLint.slice(0, -2)} ${fileList}`
-  } else {
-    // e.g. 'flake8' → 'flake8 {files}'
-    lintCommand = `${baseLint} ${fileList}`
+  // Defense-in-depth: filter out any flag-like filenames that somehow bypassed validation.
+  // isValidFilename() already rejects '-' prefixes, but this is an extra safety layer.
+  const safeFiles = changedFiles.filter(isNotFlagLike)
+
+  if (safeFiles.length === 0) {
+    return {
+      type: stack.type,
+      path: relPath,
+      status: 'skip',
+      filesChecked: 0,
+      output: 'All files were filtered out as invalid',
+    }
   }
 
+  const baseLint = stack.commands.lint!
+  if (baseLint === 'ruff check .') {
+    // ruff check ./file1.py ./file2.py
+    cmd = 'ruff'
+    args = ['check', ...safeFiles]
+  } else if (baseLint === 'flake8') {
+    // flake8 ./file1.py ./file2.py
+    cmd = 'flake8'
+    args = [...safeFiles]
+  } else {
+    // Generic fallback: assume ruff-like pattern
+    cmd = 'ruff'
+    args = ['check', ...safeFiles]
+  }
+
+  const lintCommand = `${cmd} ${args.join(' ')}` // For display only
+
   try {
-    const output = execSync(lintCommand, {
+    const output = execFileSync(cmd, args, {
       cwd: stack.absolutePath,
       encoding: 'utf-8',
       timeout: 120000,
@@ -342,7 +500,10 @@ async function runLegacyLint(
   const timestamp = new Date().toISOString()
 
   // Get changed files (only lintable extensions)
-  const changedFiles = getChangedLintableFiles(worktreePath, sourceBranch, baseCommit)
+  const rawChangedFiles = getChangedLintableFiles(worktreePath, sourceBranch, baseCommit)
+
+  // Filter out any filenames with control characters for security
+  const changedFiles = filterValidFilenames(rawChangedFiles)
 
   if (changedFiles.length === 0) {
     return {

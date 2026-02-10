@@ -25,6 +25,7 @@ import { TmuxRenderer } from '../cli/tmux-renderer.js'
 import { getProvider, parseRemoteUrl, detectProvider } from '../core/vcs-provider.js'
 import type { RepoInfo, BranchSyncInfo } from '../core/types.js'
 import { getActions, getAction, createAction, updateAction, deleteAction, executeAction } from '../core/actions-manager.js'
+import { listTemplates, loadTemplate, saveTemplate, resetTemplate, validateTemplate } from '../pipeline/template-loader.js'
 import oidcPkg from 'express-openid-connect'
 const { auth, requiresAuth } = oidcPkg
 import { randomBytes } from 'crypto'
@@ -175,6 +176,7 @@ export class WebDashboardServer {
     this.app.use('/api/upload-image', authMiddleware)
     this.app.use('/api/server', authMiddleware)
     this.app.use('/api/pipelines', authMiddleware)
+    this.app.use('/api/prompts', authMiddleware)
 
     // Protect HTML pages (root dashboard and mobile view)
     this.app.get('/', authMiddleware)
@@ -3054,6 +3056,124 @@ Rules:
         }, 500)
       } catch (err) {
         console.error('[API] Restart error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // ========================================================================
+    // Prompt Template API Routes
+    // ========================================================================
+
+    // API: List all templates
+    this.app.get('/api/prompts', async (_req, res) => {
+      try {
+        const templates = await listTemplates()
+        res.json(templates)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Validate template without saving (must come before wildcard routes)
+    this.app.post('/api/prompts/:name/validate', async (req, res) => {
+      try {
+        const { content } = req.body as { content?: string }
+
+        if (!content) {
+          res.status(400).json({ error: 'content is required' })
+          return
+        }
+
+        // Parse YAML and validate structure (reuse logic from saveTemplate)
+        const yaml = await import('js-yaml')
+        let rawData: unknown
+        try {
+          rawData = yaml.load(content, { schema: yaml.FAILSAFE_SCHEMA })
+        } catch (err) {
+          res.status(400).json({ error: `YAML parse error: ${(err as Error).message}` })
+          return
+        }
+
+        // Validate that the parsed data is an object
+        if (typeof rawData !== 'object' || rawData === null || Array.isArray(rawData)) {
+          res.status(400).json({ error: 'Invalid template: expected an object at root level' })
+          return
+        }
+
+        const data = rawData as Record<string, unknown>
+
+        // Validate required fields
+        if (typeof data.name !== 'string' || !data.name) {
+          res.status(400).json({ error: 'Missing or invalid required field "name"' })
+          return
+        }
+        if (typeof data.systemPrompt !== 'string' || !data.systemPrompt) {
+          res.status(400).json({ error: 'Missing or invalid required field "systemPrompt"' })
+          return
+        }
+        if (typeof data.userPrompt !== 'string' || !data.userPrompt) {
+          res.status(400).json({ error: 'Missing or invalid required field "userPrompt"' })
+          return
+        }
+
+        // Build template data object for validation
+        const template = {
+          name: data.name,
+          version: (data.version as string) ?? '',
+          description: (data.description as string) ?? '',
+          variables: (data.variables as Record<string, unknown>) ?? {},
+          systemPrompt: data.systemPrompt,
+          userPrompt: data.userPrompt,
+        }
+
+        // Validate using existing validateTemplate function
+        validateTemplate(template)
+
+        res.json({ success: true, valid: true })
+      } catch (err) {
+        res.status(400).json({ error: (err as Error).message, valid: false })
+      }
+    })
+
+    // API: Get a specific template (supports nested paths like gate/adversary)
+    this.app.get(/^\/api\/prompts\/(.+)/, async (req, res) => {
+      try {
+        // Extract template name from regex capture group
+        const name = req.params[0]
+        const template = await loadTemplate(name)
+        res.json(template)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Save/update a template (supports nested paths like gate/adversary)
+    this.app.put(/^\/api\/prompts\/(.+)/, async (req, res) => {
+      try {
+        // Extract template name from regex capture group
+        const name = req.params[0]
+        const { content } = req.body as { content?: string }
+
+        if (!content) {
+          res.status(400).json({ error: 'content is required' })
+          return
+        }
+
+        await saveTemplate(name, content)
+        res.json({ success: true })
+      } catch (err) {
+        res.status(400).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Reset template to default (supports nested paths like gate/adversary)
+    this.app.delete(/^\/api\/prompts\/(.+)/, async (req, res) => {
+      try {
+        // Extract template name from regex capture group
+        const name = req.params[0]
+        await resetTemplate(name)
+        res.json({ success: true })
+      } catch (err) {
         res.status(500).json({ error: (err as Error).message })
       }
     })

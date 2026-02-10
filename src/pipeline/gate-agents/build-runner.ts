@@ -11,10 +11,29 @@
 
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import type { GateResult, StackRunnerResult } from '../types.js'
 import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
+
+// ============================================================================
+// Allowed Build Commands (whitelist for security)
+// ============================================================================
+
+/**
+ * Map of allowed build commands to their execFileSync arguments.
+ * Only commands in this whitelist can be executed, preventing arbitrary
+ * command injection from malicious package.json or project files.
+ *
+ * Security: Object.freeze() makes this immutable at runtime, preventing
+ * prototype pollution attacks that could add malicious commands.
+ * Deep freeze is applied to nested args arrays as well.
+ */
+const ALLOWED_BUILD_COMMANDS: Readonly<Record<string, Readonly<{ cmd: string; args: readonly string[] }>>> = Object.freeze({
+  'npm run build': Object.freeze({ cmd: 'npm', args: Object.freeze(['run', 'build']) }),
+  'dotnet build': Object.freeze({ cmd: 'dotnet', args: Object.freeze(['build']) }),
+  'python -m build': Object.freeze({ cmd: 'python', args: Object.freeze(['-m', 'build']) }),
+})
 
 // ============================================================================
 // Build Runner
@@ -52,6 +71,8 @@ export async function runBuildRunner(
  * aggregates the verdict: any fail → 'fail', all skip → 'skip', else 'pass'.
  *
  * Skips stacks that failed dependency installation.
+ * Uses a whitelist of allowed build commands and execFileSync to prevent
+ * command injection from malicious project files.
  */
 function runMultiStackBuilds(
   worktreePath: string,
@@ -85,8 +106,21 @@ function runMultiStackBuilds(
       continue
     }
 
+    // Validate build command against whitelist to prevent command injection
+    const allowedCmd = ALLOWED_BUILD_COMMANDS[stack.commands.build]
+    if (!allowedCmd) {
+      stackResults.push({
+        type: stack.type,
+        path: relPath,
+        status: 'skip',
+        output: `Build command "${stack.commands.build}" not in whitelist — skipping for security`,
+      })
+      continue
+    }
+
     try {
-      const output = execSync(stack.commands.build, {
+      // Copy args array since execFileSync may modify it and ours is frozen
+      const output = execFileSync(allowedCmd.cmd, [...allowedCmd.args], {
         cwd: stack.absolutePath,
         encoding: 'utf-8',
         timeout: 300000, // 5 minute timeout per stack
@@ -153,6 +187,7 @@ function runMultiStackBuilds(
 
 /**
  * Original single-project build runner. Used when no techStacks are provided.
+ * Uses execFileSync with whitelisted command to prevent command injection.
  */
 async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
   const timestamp = new Date().toISOString()
@@ -169,8 +204,21 @@ async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
     }
   }
 
+  // Validate against whitelist to prevent command injection
+  const allowedCmd = ALLOWED_BUILD_COMMANDS[buildCommand]
+  if (!allowedCmd) {
+    return {
+      verdict: 'skip',
+      checkName: 'build',
+      summary: `Build command "${buildCommand}" not in whitelist — skipping for security`,
+      details: { reason: 'command-not-whitelisted', command: buildCommand },
+      timestamp,
+    }
+  }
+
   try {
-    const output = execSync(buildCommand, {
+    // Copy args array since execFileSync may modify it and ours is frozen
+    const output = execFileSync(allowedCmd.cmd, [...allowedCmd.args], {
       cwd: worktreePath,
       encoding: 'utf-8',
       timeout: 300000, // 5 minute timeout for builds

@@ -68,7 +68,7 @@ export async function runAcValidator(
   }
 
   // Build the AC validator prompt
-  const { systemPrompt, userPrompt } = buildAcValidatorPrompt(workItem, { diff })
+  const { systemPrompt, userPrompt } = await buildAcValidatorPrompt(workItem, { diff })
 
   try {
     // Run Claude to evaluate ACs

@@ -19,6 +19,9 @@ const state = {
   pipelines: [], // Pipeline runs
   selectedPipeline: null, // Currently selected pipeline ID
   pipelineLogs: {}, // pipelineId -> accumulated log text
+  selectedTemplate: null, // Currently selected template name
+  monacoEditor: null, // Monaco editor instance
+  originalTemplateContent: null, // Original content for dirty checking
 };
 
 // DOM elements
@@ -1298,6 +1301,470 @@ async function showPresetActions(name) {
   });
 
   document.body.appendChild(overlay);
+}
+
+/**
+ * Render the settings section in the sidebar
+ */
+function renderSettings() {
+  const settingsListEl = document.getElementById('settings-list');
+  if (!settingsListEl) return;
+
+  let html = '<div class="settings-header"><span>Settings</span></div>';
+  html += '<div class="settings-item" onclick="showPromptsEditor()">';
+  html += '<div class="settings-item-name">Prompts</div>';
+  html += '</div>';
+
+  settingsListEl.innerHTML = html;
+}
+
+/**
+ * Show prompts editor with template list
+ */
+async function showPromptsEditor() {
+  console.log('Opening prompts editor');
+
+  // Clear terminal grid and show loading state
+  const terminalGrid = document.getElementById('terminal-grid');
+  if (terminalGrid) {
+    terminalGrid.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);font-size:1rem;">Loading templates...</div>';
+  }
+
+  // Hide pipeline detail if shown
+  const pipelineDetail = document.getElementById('pipeline-detail');
+  if (pipelineDetail) {
+    pipelineDetail.style.display = 'none';
+  }
+
+  try {
+    // Fetch template list from API
+    const response = await fetch('/api/prompts');
+    if (!response.ok) {
+      throw new Error(`Failed to fetch templates: ${response.statusText}`);
+    }
+    const templates = await response.json();
+
+    // Render template list
+    let html = '<div class="template-list-container">';
+    html += '<div class="template-list-header">Prompt Templates</div>';
+    html += '<div class="template-list">';
+
+    // Sort templates by name
+    templates.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const template of templates) {
+      html += '<div class="template-item" onclick="openTemplateEditor(\'' + escapeHtml(template.name) + '\')">';
+      html += '<div class="template-item-header">';
+      if (template.hasCustom) {
+        html += '<span class="template-custom-indicator" title="Custom override exists">✓</span>';
+      }
+      html += '<span class="template-item-name">' + escapeHtml(template.name) + '</span>';
+      html += '</div>';
+      html += '<div class="template-item-description">' + escapeHtml(template.description) + '</div>';
+      html += '</div>';
+    }
+
+    html += '</div>'; // template-list
+    html += '</div>'; // template-list-container
+
+    if (terminalGrid) {
+      terminalGrid.innerHTML = html;
+    }
+  } catch (err) {
+    console.error('Failed to load templates:', err);
+    if (terminalGrid) {
+      terminalGrid.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-danger);font-size:1rem;">Failed to load templates: ' + escapeHtml(err.message) + '</div>';
+    }
+  }
+}
+
+/**
+ * Initialize Monaco editor
+ */
+function initMonaco(container, content, language = 'yaml') {
+  require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
+  require(['vs/editor/editor.main'], function() {
+    state.monacoEditor = monaco.editor.create(container, {
+      value: content,
+      language: language,
+      theme: 'vs-dark',
+      automaticLayout: true,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false
+    });
+
+    // Add keyboard shortcuts
+    // Cmd/Ctrl+S to save
+    state.monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
+      if (state.selectedTemplate) {
+        saveTemplate(state.selectedTemplate);
+      }
+    });
+
+    // Esc to close (with confirmation if dirty)
+    state.monacoEditor.addCommand(monaco.KeyCode.Escape, function() {
+      closeTemplateEditor();
+    });
+  });
+}
+
+/**
+ * Dispose Monaco editor if exists
+ */
+function disposeMonaco() {
+  if (state.monacoEditor) {
+    state.monacoEditor.dispose();
+    state.monacoEditor = null;
+  }
+}
+
+/**
+ * Open template editor for a specific template
+ */
+async function openTemplateEditor(templateName) {
+  console.log('Opening editor for template:', templateName);
+
+  // Store selected template in state
+  state.selectedTemplate = templateName;
+
+  // Dispose any existing editor
+  disposeMonaco();
+
+  const terminalGrid = document.getElementById('terminal-grid');
+  if (!terminalGrid) return;
+
+  // Show loading state
+  terminalGrid.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);font-size:1rem;">Loading template...</div>';
+
+  try {
+    // Fetch template content
+    const response = await fetch(`/api/prompts/${encodeURIComponent(templateName)}`);
+    if (!response.ok) {
+      throw new Error(`Failed to load template: ${response.statusText}`);
+    }
+
+    const template = await response.json();
+
+    // Build YAML content from template object
+    let yamlContent = '';
+    if (template.name) yamlContent += `name: ${template.name}\n`;
+    if (template.version) yamlContent += `version: "${template.version}"\n`;
+    if (template.description) yamlContent += `description: "${template.description}"\n`;
+    yamlContent += '\n';
+    if (template.systemPrompt) yamlContent += `systemPrompt: |\n${indentText(template.systemPrompt, 2)}\n\n`;
+    if (template.userPrompt) yamlContent += `userPrompt: |\n${indentText(template.userPrompt, 2)}\n\n`;
+    if (template.systemPromptSuffix) yamlContent += `systemPromptSuffix: |\n${indentText(template.systemPromptSuffix, 2)}\n\n`;
+    if (template.maxTokens) yamlContent += `maxTokens: ${template.maxTokens}\n`;
+    if (template.temperature !== undefined) yamlContent += `temperature: ${template.temperature}\n`;
+
+    // Create editor UI
+    terminalGrid.innerHTML = `
+      <div class="template-editor-container">
+        <div class="template-editor-header">
+          <div class="template-editor-title">
+            <span class="template-editor-name">${escapeHtml(templateName)}</span>
+            ${template.hasCustom ? '<span class="template-custom-badge">Custom</span>' : '<span class="template-default-badge">Default</span>'}
+          </div>
+          <div class="template-editor-actions">
+            <button class="template-editor-btn template-editor-btn-secondary" onclick="closeTemplateEditor()">Close</button>
+            <button class="template-editor-btn template-editor-btn-secondary" onclick="resetTemplate('${escapeHtml(templateName)}')">Reset to Default</button>
+            <button class="template-editor-btn template-editor-btn-primary" onclick="saveTemplate('${escapeHtml(templateName)}')">Save</button>
+          </div>
+        </div>
+        <div id="monaco-editor-container" class="monaco-editor-container"></div>
+      </div>
+    `;
+
+    // Initialize Monaco editor
+    const editorContainer = document.getElementById('monaco-editor-container');
+    if (editorContainer) {
+      initMonaco(editorContainer, yamlContent, 'yaml');
+      // Store original content for dirty checking
+      state.originalTemplateContent = yamlContent;
+    }
+  } catch (err) {
+    console.error('Failed to load template:', err);
+    terminalGrid.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-danger);font-size:1rem;">Failed to load template: ' + escapeHtml(err.message) + '</div>';
+    showToast('Failed to load template: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Close template editor and return to template list
+ */
+function closeTemplateEditor() {
+  // Check for unsaved changes
+  if (state.monacoEditor && state.originalTemplateContent !== null) {
+    const currentContent = state.monacoEditor.getValue();
+    if (currentContent !== state.originalTemplateContent) {
+      if (!confirm('You have unsaved changes. Discard them?')) {
+        return; // User cancelled
+      }
+    }
+  }
+
+  disposeMonaco();
+  state.selectedTemplate = null;
+  state.originalTemplateContent = null;
+  showPromptsEditor(); // Return to template list
+}
+
+/**
+ * Clear error panel and Monaco error markers
+ */
+function clearValidationErrors() {
+  // Remove error panel
+  const errorPanel = document.querySelector('.template-error-panel');
+  if (errorPanel) {
+    errorPanel.remove();
+  }
+
+  // Clear Monaco error markers
+  if (state.monacoEditor && typeof monaco !== 'undefined') {
+    const model = state.monacoEditor.getModel();
+    if (model) {
+      monaco.editor.setModelMarkers(model, 'validation', []);
+    }
+  }
+}
+
+/**
+ * Display validation errors in UI with Monaco markers
+ */
+function displayValidationErrors(errorMessage) {
+  // Clear any existing errors
+  clearValidationErrors();
+
+  // Parse error message to extract line numbers if present
+  const lineNumberMatch = errorMessage.match(/line (\d+)/i);
+  const lineNumber = lineNumberMatch ? parseInt(lineNumberMatch[1], 10) : null;
+
+  // Create error panel HTML
+  const errorPanel = document.createElement('div');
+  errorPanel.className = 'template-error-panel';
+  errorPanel.innerHTML = `
+    <div class="template-error-header">
+      <span class="template-error-icon">❌</span>
+      <span class="template-error-title">Validation Errors</span>
+      <button class="template-error-dismiss" onclick="clearValidationErrors()">×</button>
+    </div>
+    <div class="template-error-list">
+      <div class="template-error-item">${escapeHtml(errorMessage)}</div>
+    </div>
+  `;
+
+  // Insert error panel between header and Monaco editor
+  const editorContainer = document.getElementById('monaco-editor-container');
+  if (editorContainer) {
+    editorContainer.parentNode.insertBefore(errorPanel, editorContainer);
+  }
+
+  // Add Monaco error marker if line number detected
+  if (state.monacoEditor && lineNumber && typeof monaco !== 'undefined') {
+    const model = state.monacoEditor.getModel();
+    if (model) {
+      monaco.editor.setModelMarkers(model, 'validation', [
+        {
+          startLineNumber: lineNumber,
+          startColumn: 1,
+          endLineNumber: lineNumber,
+          endColumn: model.getLineMaxColumn(lineNumber),
+          message: errorMessage,
+          severity: monaco.MarkerSeverity.Error
+        }
+      ]);
+    }
+  }
+}
+
+/**
+ * Validate template content and display errors
+ */
+async function validateAndDisplayErrors(templateName, content) {
+  try {
+    const response = await fetch(`/api/prompts/${encodeURIComponent(templateName)}/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content })
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      const errorMessage = data.error || 'Validation failed';
+      displayValidationErrors(errorMessage);
+      return false;
+    }
+
+    // Validation passed - clear any existing errors
+    clearValidationErrors();
+    return true;
+  } catch (err) {
+    console.error('Validation request failed:', err);
+    displayValidationErrors('Unable to connect to server. Please check your connection and try again.');
+    return false;
+  }
+}
+
+/**
+ * Save template changes
+ */
+async function saveTemplate(templateName) {
+  if (!state.monacoEditor) {
+    showToast('No editor instance found', 'error');
+    return;
+  }
+
+  const content = state.monacoEditor.getValue();
+
+  // Show loading state on Save button
+  const saveBtn = document.querySelector('.template-editor-btn-primary');
+  const originalText = saveBtn ? saveBtn.textContent : 'Save';
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Validating...';
+  }
+
+  try {
+    // Validate before saving
+    const isValid = await validateAndDisplayErrors(templateName, content);
+    if (!isValid) {
+      showToast('Please fix validation errors before saving', 'error');
+      return;
+    }
+
+    // Update button state for saving
+    if (saveBtn) {
+      saveBtn.textContent = 'Saving...';
+    }
+
+    const response = await fetch(`/api/prompts/${encodeURIComponent(templateName)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: content
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(error || response.statusText);
+    }
+
+    // Show success with animation
+    showSaveSuccessIndicator();
+    showToast('Template saved successfully', 'success');
+
+    // Update original content to reflect saved state
+    state.originalTemplateContent = content;
+
+    // Refresh the template list to update custom indicator
+    // This happens in the background while keeping editor open
+    fetch('/api/prompts')
+      .then(res => res.json())
+      .then(templates => {
+        // Update the badge in the editor header
+        const template = templates.find(t => t.name === templateName);
+        if (template) {
+          const badgeContainer = document.querySelector('.template-editor-title');
+          if (badgeContainer) {
+            const badge = template.hasCustom
+              ? '<span class="template-custom-badge">Custom</span>'
+              : '<span class="template-default-badge">Default</span>';
+            // Update badge only
+            const nameSpan = badgeContainer.querySelector('.template-editor-name');
+            if (nameSpan) {
+              badgeContainer.innerHTML = '';
+              badgeContainer.appendChild(nameSpan);
+              badgeContainer.insertAdjacentHTML('beforeend', badge);
+            }
+          }
+        }
+      })
+      .catch(err => console.error('Failed to refresh template list:', err));
+  } catch (err) {
+    console.error('Failed to save template:', err);
+    displayValidationErrors(err.message);
+    showToast('Save failed: ' + err.message, 'error');
+  } finally {
+    // Restore button state
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = originalText;
+    }
+  }
+}
+
+/**
+ * Show green checkmark animation on successful save
+ */
+function showSaveSuccessIndicator() {
+  const saveBtn = document.querySelector('.template-editor-btn-primary');
+  if (!saveBtn) return;
+
+  // Add success class for animation
+  saveBtn.classList.add('save-success');
+
+  // Remove after animation completes
+  setTimeout(() => {
+    saveBtn.classList.remove('save-success');
+  }, 2000);
+}
+
+/**
+ * Reset template to default
+ */
+async function resetTemplate(templateName) {
+  if (!confirm(`Reset "${templateName}" to default? This will delete your custom version.`)) {
+    return;
+  }
+
+  // Show loading state on Reset button
+  const resetBtn = document.querySelector('.template-editor-btn-secondary:nth-child(2)');
+  const originalText = resetBtn ? resetBtn.textContent : 'Reset to Default';
+  if (resetBtn) {
+    resetBtn.disabled = true;
+    resetBtn.textContent = 'Resetting...';
+  }
+
+  try {
+    const response = await fetch(`/api/prompts/${encodeURIComponent(templateName)}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(error || response.statusText);
+    }
+
+    showToast('Template reset to default', 'success');
+    // Reload the editor with default content
+    openTemplateEditor(templateName);
+  } catch (err) {
+    console.error('Failed to reset template:', err);
+    showToast('Reset failed: ' + err.message, 'error');
+  } finally {
+    // Restore button state (if still exists)
+    if (resetBtn && resetBtn.parentNode) {
+      resetBtn.disabled = false;
+      resetBtn.textContent = originalText;
+    }
+  }
+}
+
+/**
+ * Helper function to indent text for YAML multiline strings
+ */
+function indentText(text, spaces) {
+  if (!text) return '';
+  const indent = ' '.repeat(spaces);
+  return text.split('\n').map(line => indent + line).join('\n');
+}
+
+/**
+ * Escape HTML special characters
+ */
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 /**
@@ -3925,6 +4392,7 @@ async function render() {
   updateSidebar(tmuxSessions, instances);
   updatePipelineSidebar(pipelines);
   updatePresetSidebar(presets);
+  renderSettings();
   updateSummary(summary);
   renderActionBar(actions);
   updateUsageDisplay(usage);

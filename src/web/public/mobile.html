@@ -26,6 +26,15 @@
       <button id="refresh-btn" class="header-btn" title="Refresh">&#8635;</button>
     </header>
 
+    <!-- Tab navigation -->
+    <nav id="top-nav">
+      <div id="nav-tabs">
+        <button class="nav-tab active" data-tab="sessions">Sessions</button>
+        <button class="nav-tab" data-tab="pipelines">Pipelines</button>
+      </div>
+      <button id="create-btn" class="create-btn" title="Create">+</button>
+    </nav>
+
     <!-- Session info bar (sessions tab only) -->
     <div id="session-info"></div>
 
@@ -46,16 +55,6 @@
 
     <!-- Pipeline list container (pipelines tab, hidden by default) -->
     <div id="pipeline-list-container" class="hidden"></div>
-
-    <!-- Bottom navigation -->
-    <nav id="bottom-nav">
-      <div id="nav-tabs">
-        <button class="nav-tab active" data-tab="sessions">Sessions</button>
-        <button class="nav-tab" data-tab="pipelines">Pipelines</button>
-      </div>
-      <div id="session-dots"></div>
-      <button id="create-btn" class="fab" title="Create">+</button>
-    </nav>
 
     <!-- Create session bottom sheet -->
     <div id="create-sheet" class="bottom-sheet hidden">
@@ -107,6 +106,15 @@
           <button id="pl-create-cancel" class="btn-secondary">Cancel</button>
           <button id="pl-create-submit" class="btn-primary">Start Pipeline</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Session selector bottom sheet -->
+    <div id="session-selector-sheet" class="bottom-sheet hidden">
+      <div class="sheet-backdrop"></div>
+      <div class="sheet-content">
+        <h3>Switch Session</h3>
+        <div class="session-list" id="session-list"></div>
       </div>
     </div>
   </div>

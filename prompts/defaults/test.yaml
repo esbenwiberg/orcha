@@ -1,0 +1,17 @@
+name: "Test Template"
+version: "1.0.0"
+description: "A simple test template"
+
+variables:
+  role: string
+  task: string
+
+systemPrompt: |
+  You are {{role}}.
+  Your job is to help with tasks.
+
+userPrompt: |
+  # Task
+  {{task}}
+
+  Please complete this task.

@@ -76,6 +76,7 @@ export const BLUEPRINT_SCHEMA = {
     },
     milestones: {
       type: 'array' as const,
+      minItems: 1,
       items: {
         type: 'object' as const,
         properties: {
@@ -89,10 +90,11 @@ export const BLUEPRINT_SCHEMA = {
         },
         required: ['description', 'details'],
       },
-      description: 'Ordered implementation milestones. Each milestone should be independently implementable with a focused scope (single responsibility). For large tasks, create discrete milestones that run with fresh context.',
+      description: 'Ordered implementation milestones. Each milestone should be independently implementable with a focused scope (single responsibility). For large tasks, create discrete milestones that run with fresh context. MUST contain at least one milestone.',
     },
     steps: {
       type: 'array' as const,
+      minItems: 1,
       items: {
         type: 'object' as const,
         properties: {
@@ -101,12 +103,17 @@ export const BLUEPRINT_SCHEMA = {
         },
         required: ['description', 'details'],
       },
-      description: '(Deprecated - use milestones instead) Backward compatibility alias for milestones',
+      description: '(Deprecated - use milestones instead) Backward compatibility alias for milestones. MUST contain at least one step.',
     },
   },
-  // Note: milestones/steps not in required array because JSON schema can't express "one of".
-  // The isValidBlueprint type guard enforces that at least one is present.
+  // Schema requires the core fields. For milestones vs steps, we use anyOf to express
+  // "at least one must be present with at least one item". The minItems: 1 on both arrays
+  // ensures the schema enforces non-empty arrays, matching isValidBlueprint's validation.
   required: ['headline', 'shortDescription', 'approach', 'filesToTouch', 'risks', 'testStrategy'],
+  anyOf: [
+    { required: ['milestones'] },
+    { required: ['steps'] },
+  ],
 }
 
 // Re-export BlueprintOutput from types.ts for backward compatibility
@@ -160,7 +167,7 @@ export async function runArchitectStage(
   }
 
   // Build the prompt (with learning hints if available)
-  const { systemPrompt, userPrompt } = buildArchitectPrompt(workItem, codebase, learningHints)
+  const { systemPrompt, userPrompt } = await buildArchitectPrompt(workItem, codebase, learningHints)
 
   try {
     // Run the architect stage
@@ -200,6 +207,8 @@ export async function runArchitectStage(
     // Record the stage result
     const completedAt = new Date().toISOString()
     const milestoneCount = getBlueprintMilestones(blueprint).length
+    // Handle singular/plural: "1 milestone" vs "2 milestones"
+    // (Zero milestones cannot occur here — isValidBlueprint requires at least one)
     const milestoneSuffix = milestoneCount === 1 ? 'milestone' : 'milestones'
     const stageResult: StageResult = {
       stage: 'architect',
@@ -237,19 +246,72 @@ function parseArchitectOutput(stdout: string): BlueprintOutput | null {
   return parseStructuredOutput(stdout, isValidBlueprint)
 }
 
+/**
+ * Validate that a milestone/step object has the required fields.
+ *
+ * Validates that description and details are non-empty, non-whitespace strings.
+ * Empty strings would pass type checks but cause downstream failures in the
+ * dev stage which depends on these fields for milestone execution.
+ *
+ * Note: The typeof checks MUST come before trim() calls because:
+ * 1. Non-strings would throw on trim() — so we check typeof first
+ * 2. Once we know they're strings, we check they're not whitespace-only
+ */
+function isValidMilestoneObject(obj: unknown): boolean {
+  if (typeof obj !== 'object' || obj === null) return false
+  const m = obj as Record<string, unknown>
+  // First check typeof to ensure we can safely call trim()
+  if (typeof m.description !== 'string' || typeof m.details !== 'string') return false
+  // Then check for non-empty, non-whitespace content
+  const trimmedDesc = m.description.trim()
+  const trimmedDetails = m.details.trim()
+  return trimmedDesc.length > 0 && trimmedDetails.length > 0
+}
+
 function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
   if (typeof obj !== 'object' || obj === null) return false
   const bp = obj as Record<string, unknown>
-  // Support both 'milestones' (preferred) and 'steps' (backward compat)
-  // At least one must be present
-  const hasMilestones = Array.isArray(bp.milestones) || Array.isArray(bp.steps)
-  return (
+
+  // Validate core required fields
+  const hasRequiredFields =
     typeof bp.headline === 'string' &&
     typeof bp.shortDescription === 'string' &&
     typeof bp.approach === 'string' &&
     Array.isArray(bp.filesToTouch) &&
     Array.isArray(bp.risks) &&
-    typeof bp.testStrategy === 'string' &&
-    hasMilestones
-  )
+    typeof bp.testStrategy === 'string'
+
+  if (!hasRequiredFields) return false
+
+  // Check if milestones field is valid (preferred field name)
+  const milestonesValid = Array.isArray(bp.milestones) &&
+    bp.milestones.length > 0 &&
+    bp.milestones.every(isValidMilestoneObject)
+
+  // Check if steps field is valid (backward compat alias for milestones)
+  const stepsValid = Array.isArray(bp.steps) &&
+    bp.steps.length > 0 &&
+    bp.steps.every(isValidMilestoneObject)
+
+  // Schema semantics: anyOf requires at least one of milestones OR steps to be valid.
+  // This matches JSON Schema anyOf: if at least one option is satisfied, validation passes.
+  //
+  // Logic:
+  // - At least one of milestones or steps must be present AND valid
+  // - A "valid" array means: is an Array, has length > 0, all items pass isValidMilestoneObject
+  // - If a field is present but invalid (empty array or bad items), we still pass if the OTHER field is valid
+  //   (this is standard anyOf behavior - we only need one to match)
+  //
+  // Edge cases:
+  // - milestones=[] and steps=[...valid...] → PASS (steps satisfies anyOf)
+  // - milestones=[...valid...] and steps=[] → PASS (milestones satisfies anyOf)
+  // - milestones=[] and steps=[] → FAIL (neither satisfies)
+  // - neither present → FAIL
+  if (milestonesValid || stepsValid) {
+    // At least one valid array present — anyOf satisfied
+    return true
+  }
+
+  // Neither field is valid (either not present, empty, or has invalid items) — fail
+  return false
 }

@@ -68,6 +68,9 @@ import {
 
 import { rm } from 'fs/promises'
 import { existsSync } from 'fs'
+import { listPrompts, showPrompt, editPrompt, resetPrompt, diffPrompt } from './prompts.js'
+import { exportTemplates, importTemplates } from '../pipeline/template-loader.js'
+import chalk from 'chalk'
 
 const program = new Command()
 
@@ -1678,6 +1681,104 @@ presetCmd
       }
     } catch (err) {
       console.error('Error:', (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// =============================================================================
+// orcha prompts (parent command)
+// =============================================================================
+const promptsCmd = program
+  .command('prompts')
+  .description('View and manage pipeline prompt templates')
+
+// orcha prompts list
+promptsCmd
+  .command('list')
+  .description('List all available prompt templates')
+  .action(async () => {
+    await listPrompts()
+  })
+
+// orcha prompts show
+promptsCmd
+  .command('show <name>')
+  .description('Show details of a prompt template')
+  .action(async (name: string) => {
+    await showPrompt(name)
+  })
+
+// orcha prompts edit
+promptsCmd
+  .command('edit <name>')
+  .description('Edit a prompt template in your editor')
+  .action(async (name: string) => {
+    await editPrompt(name)
+  })
+
+// orcha prompts reset
+promptsCmd
+  .command('reset <name>')
+  .description('Reset a prompt template to default')
+  .action(async (name: string) => {
+    await resetPrompt(name)
+  })
+
+// orcha prompts diff
+promptsCmd
+  .command('diff <name>')
+  .description('Show differences between default and custom template')
+  .action(async (name: string) => {
+    await diffPrompt(name)
+  })
+
+// orcha prompts export
+promptsCmd
+  .command('export [output-file]')
+  .description('Export custom templates to a tarball')
+  .action(async (outputFile?: string) => {
+    try {
+      const outputPath = outputFile || './orcha-prompts-export.tar.gz'
+      await exportTemplates(outputPath)
+      console.log(chalk.green(`✓ Custom templates exported to: ${outputPath}`))
+    } catch (err) {
+      console.error(chalk.red('Export failed:'), (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// orcha prompts import
+promptsCmd
+  .command('import <file>')
+  .description('Import custom templates from a tarball')
+  .action(async (file: string) => {
+    try {
+      // Prompt for confirmation if custom templates exist
+      const confirmOverwrite = async (): Promise<boolean> => {
+        const { createInterface } = await import('node:readline')
+        const rl = createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        })
+
+        return new Promise((resolve) => {
+          rl.question(
+            chalk.yellow(
+              'Warning: This will overwrite existing custom templates.\n' +
+              'Continue? (y/N): '
+            ),
+            (answer) => {
+              rl.close()
+              resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes')
+            }
+          )
+        })
+      }
+
+      await importTemplates(file, confirmOverwrite)
+      console.log(chalk.green('✓ Custom templates imported successfully'))
+    } catch (err) {
+      console.error(chalk.red('Import failed:'), (err as Error).message)
       process.exit(1)
     }
   })

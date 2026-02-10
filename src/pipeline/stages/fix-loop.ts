@@ -183,7 +183,7 @@ export async function runFixLoopStage(
     }
 
     // Build the fix prompt with enhanced context
-    const { systemPrompt, userPrompt: baseUserPrompt } = buildFixLoopPrompt(workItem, codebase, {
+    const { systemPrompt, userPrompt: baseUserPrompt } = await buildFixLoopPrompt(workItem, codebase, {
       blueprintJson,
       diff,
       failureReport,

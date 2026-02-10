@@ -148,6 +148,9 @@ html, body {
 
 /* Special key toolbar */
 #key-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -240,18 +243,16 @@ html, body {
 }
 
 /* =========================================================================
-   Bottom Navigation with Tabs
+   Top Navigation with Tabs
    ========================================================================= */
 
-#bottom-nav {
+#top-nav {
   display: flex;
   align-items: center;
-  padding: 0 12px 0 0;
+  justify-content: space-between;
   background: var(--bg-secondary);
-  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
-  gap: 8px;
-  position: relative;
 }
 
 #nav-tabs {
@@ -283,40 +284,10 @@ html, body {
   background: var(--bg-tertiary);
 }
 
-#session-dots {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-  padding: 6px 0;
-}
-
-.nav-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  opacity: 0.4;
-  transition: opacity 0.2s, transform 0.2s;
-}
-
-.nav-dot.active {
-  opacity: 1;
-  transform: scale(1.3);
-}
-
-.nav-dot.working { background: var(--state-working); }
-.nav-dot.waiting { background: var(--state-waiting); }
-.nav-dot.idle, .nav-dot.initializing { background: var(--state-idle); }
-.nav-dot.done { background: var(--state-done); }
-.nav-dot.error { background: var(--state-error); }
-
-/* FAB */
-.fab {
-  width: 40px;
-  height: 40px;
+/* Create button in tab bar */
+.create-btn {
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   background: var(--accent-purple);
   color: white;
@@ -328,10 +299,12 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
+  margin-right: 8px;
   box-shadow: 0 2px 8px rgba(155, 89, 182, 0.4);
+  -webkit-tap-highlight-color: transparent;
 }
 
-.fab:active {
+.create-btn:active {
   transform: scale(0.95);
 }
 
@@ -458,6 +431,85 @@ html, body {
   color: var(--accent-purple);
 }
 
+/* Session selector button */
+.info-selector-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 18px;
+  padding: 0 4px;
+  cursor: pointer;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.info-selector-btn:active {
+  color: var(--accent-purple);
+}
+
+/* Session list in bottom sheet */
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.session-list-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+  transition: background 0.2s;
+}
+
+.session-list-item:active {
+  background: var(--bg-primary);
+}
+
+.session-list-item.active {
+  border-color: var(--accent-purple);
+  background: rgba(155, 89, 182, 0.1);
+}
+
+.session-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-item-name {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-item-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.session-item-check {
+  color: var(--accent-purple);
+  font-size: 18px;
+  flex-shrink: 0;
+  opacity: 0;
+}
+
+.session-list-item.active .session-item-check {
+  opacity: 1;
+}
+
 /* Session action menu overlay */
 .session-menu-overlay {
   position: fixed;
@@ -525,7 +577,7 @@ html, body {
 /* Toast notification */
 .mobile-toast {
   position: fixed;
-  bottom: 80px;
+  bottom: 20px;
   left: 50%;
   transform: translateX(-50%) translateY(20px);
   background: var(--bg-tertiary);
@@ -1396,9 +1448,6 @@ html, body {
 
 /* Safe area for notched phones */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
-  #bottom-nav {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
   .sheet-content {
     padding-bottom: calc(24px + env(safe-area-inset-bottom));
   }

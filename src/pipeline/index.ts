@@ -95,6 +95,10 @@ export {
 } from './prompt-builder.js'
 export type { WorkItemContext, CodebaseContext, BlueprintContext, MilestoneContext, DiffContext, FixLoopContext, PromptParts } from './prompt-builder.js'
 
+// Template Loader
+export { loadTemplate, compileTemplate, validateTemplate, CUSTOM_PROMPTS_DIR, DEFAULT_PROMPTS_DIR } from './template-loader.js'
+export type { TemplateData, CompiledPrompt } from './template-loader.js'
+
 // Stages — Architect
 export { runArchitectStage, BLUEPRINT_SCHEMA } from './stages/architect.js'
 export type { BlueprintOutput, ArchitectOptions } from './stages/architect.js'
