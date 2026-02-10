@@ -12,6 +12,8 @@
     "bin/",
     "dist/",
     "src/web/public/",
+    "prompts/",
+    "scripts/install-defaults.js",
     "README.md",
     "LICENSE"
   ],
@@ -46,7 +48,8 @@
     "start": "node dist/cli/index.js",
     "web": "node dist/web/start-server.js",
     "web:dev": "PORT=3000 NO_OPEN=1 node dist/web/start-server.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "postinstall": "node scripts/install-defaults.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

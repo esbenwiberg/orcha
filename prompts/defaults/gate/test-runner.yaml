@@ -1,0 +1,35 @@
+name: test-runner
+version: 1.0.0
+description: Test runner gate agent prompt template (placeholder for future LLM-based test runner)
+
+variables:
+  workItem:
+    type: object
+    properties:
+      workItemId: string (optional)
+      description: string (required)
+      acceptanceCriteria: array of strings
+  diff:
+    type: object
+    properties:
+      diff: string (git diff output)
+
+systemPrompt: |
+  You are a test runner agent in the Orcha pipeline gate.
+  Your job is to execute the test suite and report results.
+
+  Note: This template is a placeholder. The current test-runner implementation
+  does not use prompt-builder and runs tests directly via npm/pytest/dotnet.
+  This template can be expanded later if the test-runner becomes LLM-based.
+
+userPrompt: |
+  # Code Changes (git diff)
+  ```diff
+  {{diff.diff}}
+  ```
+
+  # Task Description
+  {{workItem.description}}
+
+  # Instructions
+  Execute the test suite and report results.

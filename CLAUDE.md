@@ -30,3 +30,27 @@ Files to sync: `index.html`, `style.css`, `app.js`, `logo.png`, `favicon.png`
 - Express + WebSocket for web dashboard
 - xterm.js for terminal rendering
 - tmux for session management
+
+## Prompt Templates
+
+### Loading Precedence
+
+Templates are loaded in this order:
+1. **Custom overrides**: `~/.orcha/prompts/custom/<template>.yaml`
+2. **Default templates**: `~/.orcha/prompts/defaults/<template>.yaml`
+3. **Hardcoded fallback**: Built-in prompts (if no files found)
+
+### File Paths
+
+- Package templates (distributed via npm): `prompts/defaults/`
+- User defaults (installed to): `~/.orcha/prompts/defaults/`
+- User customizations: `~/.orcha/prompts/custom/`
+
+### Template CLI
+
+- `orcha prompts list` - Show all available templates
+- `orcha prompts show <name>` - View template content
+- `orcha prompts edit <name>` - Customize a template
+- `orcha prompts reset <name>` - Revert to default
+- `orcha prompts export` - Export custom templates
+- `orcha prompts import <file>` - Import templates from tarball
