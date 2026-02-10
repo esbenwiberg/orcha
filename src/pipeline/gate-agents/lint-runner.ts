@@ -72,26 +72,23 @@ function isValidFilename(filename: string): boolean {
 }
 
 /**
- * Defense-in-depth filter for flag-like filenames.
+ * Defense-in-depth check for flag-like filenames.
  *
- * This function is a safety net that should rarely trigger in practice because:
- * - isValidFilename() already rejects filenames starting with '-'
- * - filterValidFilenames() is called before this function
+ * This function is a safety net that should rarely trigger in practice because
+ * isValidFilename() already rejects filenames starting with '-'. However, if
+ * somehow a flag-like filename bypasses validation, this provides a second layer.
  *
- * However, if somehow a flag-like filename bypasses validation, this catches it.
- * Returns empty string for flag-like filenames (which is then filtered out).
+ * Returns true if the filename is safe (not flag-like), false otherwise.
  *
  * @param filename - Already-validated filename from filterValidFilenames()
- * @returns The filename unchanged, or empty string if it looks like a flag
+ * @returns true if safe to use, false if it looks like a flag
  */
-function prefixIfFlag(filename: string): string {
-  // Defense-in-depth: catch any flag-like filename that somehow bypassed validation
-  // This should never happen if isValidFilename() is working correctly
+function isNotFlagLike(filename: string): boolean {
   if (filename.startsWith('-')) {
     console.warn(`[lint-runner] Security: Rejecting flag-like filename that bypassed validation: ${filename}`)
-    return '' // Empty string will be filtered out by .filter(Boolean)
+    return false
   }
-  return filename
+  return true
 }
 
 /**
@@ -246,9 +243,9 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
   let cmd: string
   let args: string[]
 
-  // Prefix filenames with './' if they start with '-' to prevent flag injection
-  // Filter out any empty strings (rejected flag-like filenames)
-  const safeFiles = changedFiles.map(prefixIfFlag).filter(Boolean)
+  // Defense-in-depth: filter out any flag-like filenames that somehow bypassed validation.
+  // isValidFilename() already rejects '-' prefixes, but this is an extra safety layer.
+  const safeFiles = changedFiles.filter(isNotFlagLike)
 
   if (safeFiles.length === 0) {
     return {
@@ -328,21 +325,19 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
  * - Files starting with '-' are already rejected by isValidFilename() in the caller.
  * - The '@' character is now rejected by SAFE_FILENAME_RE to prevent response file injection
  *   (dotnet uses @file.rsp syntax to read commands from files).
- * - The '--include' flags are dotnet format OPTIONS, not file arguments. The '--' separator
- *   is placed AFTER all options to separate them from any positional arguments.
+ * - The '--include' flags take option arguments (the filenames), not positional args.
+ *   No '--' separator is needed since there are no positional arguments to separate.
  */
 function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
   // Build args array for execFileSync (avoids shell injection)
   // Note: Files starting with '-' and '@' are already rejected by isValidFilename() in the caller.
   // Format: dotnet format --verify-no-changes --include file1.cs --include file2.cs
-  // The '--include' flags are OPTIONS to dotnet format, not positional file arguments.
+  // The '--include' flags take option arguments (filenames), not positional arguments,
+  // so no '--' separator is needed.
   const args: string[] = ['format', '--verify-no-changes']
   for (const file of changedFiles) {
     args.push('--include', file)
   }
-
-  // Add '--' separator at the end to clearly mark end of options (defense-in-depth)
-  args.push('--')
 
   const lintCommand = `dotnet ${args.join(' ')}` // For display only
 
@@ -397,9 +392,9 @@ function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]
   let cmd: string
   let args: string[]
 
-  // Prefix filenames with './' if they start with '-' to prevent flag injection
-  // Filter out any empty strings (rejected flag-like filenames)
-  const safeFiles = changedFiles.map(prefixIfFlag).filter(Boolean)
+  // Defense-in-depth: filter out any flag-like filenames that somehow bypassed validation.
+  // isValidFilename() already rejects '-' prefixes, but this is an extra safety layer.
+  const safeFiles = changedFiles.filter(isNotFlagLike)
 
   if (safeFiles.length === 0) {
     return {

@@ -26,11 +26,17 @@ const PIPELINE_WARNINGS_LOG = join(ORCHA_HOME, 'pipeline-warnings.log')
  *
  * Logs are appended to ~/.orcha/pipeline-warnings.log for debugging
  * template loading failures and other non-fatal issues.
+ *
+ * Security: Sanitizes message to prevent log injection attacks by removing
+ * control characters and newlines that could confuse log parsing.
  */
 async function logWarning(message: string): Promise<void> {
   try {
     const timestamp = new Date().toISOString()
-    const logLine = `[${timestamp}] ${message}\n`
+    // Sanitize message: remove control characters and replace newlines with escaped representation
+    // eslint-disable-next-line no-control-regex
+    const sanitizedMessage = message.replace(/[\x00-\x1f]/g, '').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
+    const logLine = `[${timestamp}] ${sanitizedMessage}\n`
     await appendFile(PIPELINE_WARNINGS_LOG, logLine, 'utf-8')
   } catch {
     // Silently fail if we can't write to log file

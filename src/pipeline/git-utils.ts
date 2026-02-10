@@ -241,8 +241,10 @@ function isValidPathspec(pathspec: string): boolean {
  * but we double-check here.
  *
  * Security: Allows only alphanumeric, '.', '/', '-', and '_' characters.
- * Rejects shell metacharacters, newlines, and null bytes.
- * Additional checks reject path traversal patterns (e.g., 'origin/../../malicious').
+ * Rejects shell metacharacters, newlines, null bytes, and backslashes.
+ * The regex implicitly rejects backslash traversal (e.g., 'foo\\..\\bar') since
+ * backslash is not in the allowed character set [a-zA-Z0-9._/-].
+ * Additional checks reject forward-slash path traversal patterns.
  */
 const SAFE_RANGE_RE = /^[a-zA-Z0-9._/-]+$/
 

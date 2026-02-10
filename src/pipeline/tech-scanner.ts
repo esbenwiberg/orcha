@@ -340,7 +340,9 @@ function hasPythonDep(content: string, dep: string): boolean {
   let pos = 0
   let iterations = 0
   while ((pos = lowerContent.indexOf(lowerDep, pos)) !== -1) {
-    // Limit iterations to prevent O(n²) worst case with crafted input
+    // Limit iterations to cap worst-case time complexity.
+    // With MAX_SEARCH_ITERATIONS=50, even crafted input like 'pytest=pytest=pytest...'
+    // will complete in bounded time: O(50 * boundary_checks) rather than O(n * matches).
     if (++iterations > MAX_SEARCH_ITERATIONS) {
       // Too many iterations — assume not found to avoid DoS
       return false

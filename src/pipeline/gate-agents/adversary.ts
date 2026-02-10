@@ -403,10 +403,9 @@ function getTestRunner(
   // No './' prefix needed since flag-like paths are blocked at validation.
   const safePath = testPath
 
-  // Use '--' separator for pytest BEFORE the path to ensure paths are never interpreted as flags.
-  // The '--' tells the argument parser that everything after it is a positional argument.
-  // Format: pytest -x --tb=short -- ./path/to/test.py
-  // The flags (-x, --tb=short) must come BEFORE '--', the path AFTER.
+  // For pytest: Use '--' separator between options and test path. This is standard pytest
+  // convention where '--' separates pytest options from test file paths. While isSafeTestPath()
+  // already rejects '-' prefixed paths, the '--' provides additional clarity for the parser.
   switch (techType) {
     case 'python':
       return { cmd: 'pytest', args: ['-x', '--tb=short', '--', safePath] }

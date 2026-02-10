@@ -410,8 +410,13 @@ export async function loadTemplate(templateName: string): Promise<TemplateData> 
   // NOTE: resolve() does NOT follow symlinks — it only normalizes the path string.
   // Symlink attacks are mitigated by:
   // 1. assertSafeTemplateName rejecting '..' and absolute paths
-  // 2. The relative() check below catching any escape attempts
+  // 2. The relative() check below catching any escape attempts via normalized paths
   // 3. The user controlling ~/.orcha/prompts/ directory contents
+  //
+  // We don't use realpath() here because:
+  // - It would fail on non-existent paths (we need to check both custom and default)
+  // - Symlinks within the prompts directory are a user configuration choice
+  // - The user has write access to ~/.orcha/ anyway, so symlinks don't escalate privilege
   //
   // The resolve() call normalizes the path including:
   // - Normalizing slashes
