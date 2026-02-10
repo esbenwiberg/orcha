@@ -313,15 +313,17 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
  * Uses execFileSync with args array to avoid shell injection vulnerabilities.
  * Each --include flag is passed as a separate argument.
  *
- * Security: File arguments are prefixed with './' to prevent flag injection
- * (e.g., a file named '--verify-no-changes' would be passed as './' + name).
+ * Security: Files starting with '-' are already rejected by isValidFilename() in the caller.
+ * The '@' character is allowed for npm scopes but is safe in dotnet format --include context
+ * as it doesn't have special meaning there (unlike dotnet response files which use @file.rsp).
  */
 function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
   // Build args array for execFileSync (avoids shell injection)
   // Note: Files starting with '-' are already rejected by isValidFilename() in the caller.
-  // We use '--' separator after options to ensure any edge cases are handled safely.
-  // Format: dotnet format --verify-no-changes --include file1.cs --include file2.cs
-  const args: string[] = ['format', '--verify-no-changes']
+  // The '--' separator is placed after --verify-no-changes to ensure file arguments
+  // can never be interpreted as options, even in edge cases.
+  // Format: dotnet format --verify-no-changes -- --include file1.cs --include file2.cs
+  const args: string[] = ['format', '--verify-no-changes', '--']
   for (const file of changedFiles) {
     args.push('--include', file)
   }

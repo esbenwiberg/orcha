@@ -299,9 +299,14 @@ function assertSafeTemplateName(templateName: string): void {
   if (templateName.includes('..')) {
     throw new Error(`Invalid template name (path traversal): ${templateName}`)
   }
-  // Reject absolute paths
+  // Reject absolute paths (including UNC paths on Windows which start with //)
   if (templateName.startsWith('/')) {
     throw new Error(`Invalid template name (absolute path): ${templateName}`)
+  }
+  // Reject UNC paths that might be encoded or use backslashes
+  // UNC paths like '//server/share' or '\\server\share' could escape the directory
+  if (templateName.startsWith('\\') || templateName.includes('\\\\')) {
+    throw new Error(`Invalid template name (UNC path): ${templateName}`)
   }
   // Only allow safe characters
   if (!SAFE_TEMPLATE_NAME_RE.test(templateName)) {

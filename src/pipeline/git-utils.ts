@@ -242,6 +242,7 @@ function isValidPathspec(pathspec: string): boolean {
  *
  * Security: Allows only alphanumeric, '.', '/', '-', and '_' characters.
  * Rejects shell metacharacters, newlines, and null bytes.
+ * Additional checks reject path traversal patterns (e.g., 'origin/../../malicious').
  */
 const SAFE_RANGE_RE = /^[a-zA-Z0-9._/-]+$/
 
@@ -250,6 +251,12 @@ function isValidRangeArg(arg: string): boolean {
   if (arg.length > 200) return false // Prevent DoS from very long args
   if (arg === '--') return false // Standalone -- would confuse arg parsing
   if (!SAFE_RANGE_RE.test(arg)) return false
+  // Reject path traversal patterns: consecutive dots could be traversal attempts
+  // e.g., 'origin/../../etc/passwd' or 'foo..bar/../baz'
+  // Note: '..' is valid in git range syntax (e.g., 'a..b'), but '/../' is suspicious
+  if (arg.includes('/../') || arg.includes('/..') && arg.indexOf('/..') === arg.length - 3) return false
+  // Reject patterns that look like absolute paths embedded in the range
+  if (arg.includes('//')) return false
   return true
 }
 
@@ -314,11 +321,15 @@ export function getChangedFilesByExtensions(
 
   const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
 
-  // Validate extensions and build pathspecs (e.g., ['*.ts', '*.js'])
-  const pathspecs = extensions.map((ext) => {
+  // Validate ALL extensions FIRST before building pathspecs.
+  // This ensures we don't partially build the pathspecs array if validation
+  // throws midway through (which could leave us in an inconsistent state).
+  for (const ext of extensions) {
     assertSafeExtension(ext)
-    return `*${ext}`
-  })
+  }
+
+  // Build pathspecs (e.g., ['*.ts', '*.js']) - validation already passed above
+  const pathspecs = extensions.map((ext) => `*${ext}`)
 
   // Best strategy: diff from exact base commit
   if (baseCommit) {

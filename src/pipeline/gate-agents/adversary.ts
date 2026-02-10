@@ -375,28 +375,37 @@ function isSafeTestPath(testPath: string): boolean {
  *
  * Returns null if execution should be skipped (e.g. .NET tests need project context
  * or the path fails validation).
+ *
+ * Security flow:
+ * 1. Validate the ORIGINAL path first with isSafeTestPath
+ * 2. If path starts with '-', prefix with './' to prevent flag injection
+ * 3. Use the prefixed path in the command args
+ *
+ * This order ensures we validate what we receive, then transform for safety.
  */
 function getTestRunner(
   testPath: string,
   techType?: TechStack['type'],
 ): { cmd: string; args: string[] } | null {
-  // Security: Prefix testPath with './' FIRST if it starts with '-' to prevent flag injection.
-  // This must happen BEFORE isSafeTestPath check so that paths like '--help' become
-  // './' + '--help' which is then validated as a path, not interpreted as a flag.
-  // Even though execFileSync with args array prevents shell injection, a path like
-  // '--some-flag' could be interpreted as a CLI flag by the test runner.
-  const prefixedPath = testPath.startsWith('-') ? `./${testPath}` : testPath
-
-  // Security: Validate test path after prefixing
-  if (!isSafeTestPath(prefixedPath)) {
+  // Security: Validate the ORIGINAL test path FIRST.
+  // This catches control characters, newlines, and other dangerous patterns
+  // before any transformation. Paths starting with '-' are allowed here
+  // (they pass isSafeTestPath) but will be prefixed below to prevent flag injection.
+  if (!isSafeTestPath(testPath)) {
     console.warn(`[adversary] Rejecting unsafe test path: ${JSON.stringify(testPath).slice(0, 100)}`)
     return null
   }
 
+  // Security: Prefix testPath with './' if it starts with '-' to prevent flag injection.
+  // Even though execFileSync with args array prevents shell injection, a path like
+  // '--some-flag' could be interpreted as a CLI flag by the test runner.
+  // This transformation is safe because we've already validated testPath above.
+  const safePath = testPath.startsWith('-') ? `./${testPath}` : testPath
+
   // Use '--' separator for pytest to ensure paths are never interpreted as flags
   switch (techType) {
     case 'python':
-      return { cmd: 'pytest', args: ['--', prefixedPath, '-x', '--tb=short'] }
+      return { cmd: 'pytest', args: ['--', safePath, '-x', '--tb=short'] }
     case 'dotnet':
       // .NET adversary tests cannot be executed standalone — they need a project
       // context to compile. This is a known limitation; the tests are still
@@ -404,7 +413,7 @@ function getTestRunner(
       return null
     case 'node':
     default:
-      return { cmd: 'npx', args: ['tsx', prefixedPath] }
+      return { cmd: 'npx', args: ['tsx', safePath] }
   }
 }
 

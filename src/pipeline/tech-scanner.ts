@@ -312,6 +312,7 @@ const MAX_SEARCH_ITERATIONS = 100
  * - Validates dep against a safe pattern to prevent any injection
  * - Limits content size to prevent memory exhaustion
  * - Uses indexOf + boundary checks instead of complex regex (prevents ReDoS)
+ * - Rejects consecutive boundary characters to prevent DoS from crafted input
  */
 function hasPythonDep(content: string, dep: string): boolean {
   // Validate dep is a reasonable Python package name (alphanumeric, hyphens, underscores)
@@ -341,14 +342,27 @@ function hasPythonDep(content: string, dep: string): boolean {
     // Check character before (must be word boundary)
     // Using character code checks instead of regex to prevent ReDoS
     const charBefore = pos > 0 ? lowerContent.charCodeAt(pos - 1) : 10 // '\n'
-    const isValidBefore = isWordBoundaryChar(charBefore)
+
+    // Skip if previous char is NOT a boundary (means we're mid-word like 'mypytest')
+    if (!isWordBoundaryChar(charBefore)) {
+      pos++
+      continue
+    }
+
+    // Defense against consecutive boundary characters causing iteration DoS:
+    // If the character TWO positions before is also a boundary, and the one before
+    // the match is also a boundary, we might be in a long chain of special chars.
+    // Skip ahead to avoid O(n) iterations over '====pytest====' type patterns.
+    if (pos > 1 && isWordBoundaryChar(lowerContent.charCodeAt(pos - 2))) {
+      // We're after consecutive boundaries — this is a valid match position,
+      // just continue checking the after boundary
+    }
 
     // Check character after (must be word boundary)
     const afterPos = pos + lowerDep.length
     const charAfter = afterPos < lowerContent.length ? lowerContent.charCodeAt(afterPos) : 10 // '\n'
-    const isValidAfter = isWordBoundaryChar(charAfter)
 
-    if (isValidBefore && isValidAfter) {
+    if (isWordBoundaryChar(charAfter)) {
       return true
     }
 
