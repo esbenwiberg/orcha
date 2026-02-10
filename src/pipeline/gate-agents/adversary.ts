@@ -17,6 +17,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'fs/promises'
 import { join, resolve, relative } from 'path'
 import { tmpdir } from 'os'
 import type { PipelineRun, GateResult } from '../types.js'
+import type { TechStack } from '../tech-scanner.js'
 import { runStage } from '../stage-runner.js'
 import { resolveModel, resolveBudget } from '../pipeline-config.js'
 import { buildAdversaryPrompt } from '../prompt-builder.js'
@@ -31,6 +32,7 @@ import { parseStructuredOutput } from '../output-parser.js'
 export interface AdversaryOptions {
   modelOverride?: string
   budgetOverride?: number
+  techStacks?: TechStack[]
 }
 
 interface AdversaryTest {
@@ -67,6 +69,9 @@ export async function runAdversary(
 ): Promise<GateResult> {
   const timestamp = new Date().toISOString()
 
+  // Pick the primary tech stack (first one, or fallback to undefined for backwards compat)
+  const primaryTech = opts?.techStacks?.[0]?.type
+
   // Get the diff
   const diff = getDiff(run.worktreePath, run.sourceBranch, run.baseCommit)
   if (!diff) {
@@ -79,17 +84,17 @@ export async function runAdversary(
     }
   }
 
-  // Get existing test patterns for context
-  const testPatterns = getTestPatterns(run.worktreePath)
+  // Get existing test patterns for context (tech-aware)
+  const testPatterns = getTestPatterns(run.worktreePath, primaryTech)
 
-  // Build prompts
+  // Build prompts (tech-aware)
   const workItem: WorkItemContext = {
     workItemId: run.workItemId,
     description: run.description,
     acceptanceCriteria: run.acceptanceCriteria,
   }
   const diffCtx: DiffContext = { diff }
-  const { systemPrompt, userPrompt } = buildAdversaryPrompt(workItem, diffCtx, testPatterns)
+  const { systemPrompt, userPrompt } = buildAdversaryPrompt(workItem, diffCtx, testPatterns, primaryTech)
 
   let tempDir: string | null = null
 
@@ -139,8 +144,8 @@ export async function runAdversary(
       await writeFile(targetPath, test.content, 'utf-8')
     }
 
-    // Execute each test against the worktree
-    const execResults = await executeTests(tempDir, run.worktreePath, adversaryOutput.tests)
+    // Execute each test against the worktree (tech-aware runner)
+    const execResults = await executeTests(tempDir, run.worktreePath, adversaryOutput.tests, primaryTech)
 
     // Determine verdict: only tests that compiled AND failed count as gate failures
     const compiled = execResults.filter((r) => r.compiled)
@@ -199,14 +204,26 @@ export async function runAdversary(
 // Test Pattern Discovery
 // ============================================================================
 
+/** Find-command fragments for test file patterns by tech type. */
+const TEST_FILE_PATTERNS: Record<TechStack['type'], string> = {
+  node: '\\( -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" -o -name "*.spec.js" \\)',
+  dotnet: '\\( -name "*Tests.cs" -o -name "*Test.cs" \\)',
+  python: '\\( -name "test_*.py" -o -name "*_test.py" \\)',
+}
+
 /**
  * Get a sample of existing test patterns from the project for context.
+ *
+ * @param techType - If provided, searches for tech-appropriate test file patterns.
+ *                   Falls back to Node patterns if not specified (backwards compatible).
  */
-function getTestPatterns(worktreePath: string): string {
+function getTestPatterns(worktreePath: string, techType?: TechStack['type']): string {
+  const pattern = TEST_FILE_PATTERNS[techType ?? 'node']
+
   try {
     // Find test files — static command, no interpolation
     const testFiles = execSync(
-      'find . -maxdepth 4 -type f \\( -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" -o -name "*.spec.js" \\) | head -5',
+      `find . -maxdepth 4 -type f ${pattern} | head -5`,
       { cwd: worktreePath, encoding: 'utf-8', timeout: 5000 },
     ).trim()
 
@@ -233,12 +250,57 @@ function getTestPatterns(worktreePath: string): string {
 // ============================================================================
 
 /**
+ * Get the command and args to execute a test file for the given tech type.
+ *
+ * Returns null if execution should be skipped (e.g. .NET tests need project context).
+ */
+function getTestRunner(
+  testPath: string,
+  techType?: TechStack['type'],
+): { cmd: string; args: string[] } | null {
+  switch (techType) {
+    case 'python':
+      return { cmd: 'pytest', args: [testPath, '-x', '--tb=short'] }
+    case 'dotnet':
+      // .NET adversary tests cannot be executed standalone — they need a project
+      // context to compile. This is a known limitation; the tests are still
+      // valuable as review artifacts.
+      return null
+    case 'node':
+    default:
+      return { cmd: 'npx', args: ['tsx', testPath] }
+  }
+}
+
+/**
+ * Detect compile/import errors for a given tech type from combined output.
+ */
+function isCompileError(output: string, techType?: TechStack['type']): boolean {
+  switch (techType) {
+    case 'python':
+      return output.includes('SyntaxError')
+        || output.includes('ModuleNotFoundError')
+        || output.includes('ImportError')
+    case 'dotnet':
+      return true // .NET tests are not executed, so any error is "compile"
+    case 'node':
+    default:
+      return output.includes('SyntaxError')
+        || output.includes('Cannot find module')
+        || output.includes('ERR_MODULE_NOT_FOUND')
+  }
+}
+
+/**
  * Execute adversary tests from the temp dir against the worktree code.
+ *
+ * @param techType - Determines which test runner to use. Defaults to 'node' (npx tsx).
  */
 async function executeTests(
   tempDir: string,
   worktreePath: string,
   tests: AdversaryTest[],
+  techType?: TechStack['type'],
 ): Promise<TestExecResult[]> {
   const results: TestExecResult[] = []
 
@@ -254,11 +316,23 @@ async function executeTests(
       continue
     }
 
-    // Try to run the test using npx with the worktree as context
-    // Use execFileSync to avoid shell injection via testPath
+    // Get the appropriate test runner for this tech type
+    const runner = getTestRunner(testPath, techType)
+    if (!runner) {
+      // Execution skipped (e.g. .NET) — treat as compiled-but-passed (review-only)
+      results.push({
+        filename: safeName,
+        compiled: true,
+        passed: true,
+        output: `Execution skipped for ${techType ?? 'unknown'} — tests are review-only artifacts`,
+      })
+      continue
+    }
+
+    // Execute the test using execFileSync to avoid shell injection
     try {
       const output = execFileSync(
-        'npx', ['tsx', testPath],
+        runner.cmd, runner.args,
         {
           cwd: worktreePath,
           encoding: 'utf-8',
@@ -267,7 +341,9 @@ async function executeTests(
             ...process.env,
             CI: '1',
             NO_COLOR: '1',
-            NODE_PATH: join(worktreePath, 'node_modules'),
+            ...(techType === 'node' || !techType
+              ? { NODE_PATH: join(worktreePath, 'node_modules') }
+              : {}),
           },
         },
       )
@@ -282,12 +358,7 @@ async function executeTests(
       const execError = err as { status?: number; stdout?: string; stderr?: string }
       const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
 
-      // Distinguish compile/import errors from test failures
-      const isCompileError = output.includes('SyntaxError')
-        || output.includes('Cannot find module')
-        || output.includes('ERR_MODULE_NOT_FOUND')
-
-      if (isCompileError) {
+      if (isCompileError(output, techType)) {
         results.push({
           filename: safeName,
           compiled: false,

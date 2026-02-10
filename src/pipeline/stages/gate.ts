@@ -106,6 +106,7 @@ async function runSingleGateStage(
     const agentOpts = {
       modelOverride: opts?.modelOverride,
       budgetOverride: opts?.budgetOverride,
+      techStacks,
     }
     const skip = new Set(run.skipChecks ?? [])
 
@@ -388,6 +389,7 @@ async function evaluateCompetitor(
   const agentOpts = {
     modelOverride: opts?.modelOverride,
     budgetOverride: opts?.budgetOverride,
+    techStacks,
   }
 
   // Create a temporary PipelineRun pointing to competitor's worktree

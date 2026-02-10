@@ -534,21 +534,33 @@ export function buildAcValidatorPrompt(
  *
  * The adversary writes tests designed to expose bugs in the dev agent's code.
  * Tests are written to a temp directory and executed against the worktree.
+ *
+ * @param techType - Optional tech type to guide the adversary on which language/framework to use for tests.
  */
 export function buildAdversaryPrompt(
   workItem: WorkItemContext,
   diff: DiffContext,
   testPatterns: string,
+  techType?: 'node' | 'dotnet' | 'python',
 ): PromptParts {
+  // Tech-specific guidance for the adversary
+  const techGuidance = getTechGuidance(techType)
+
   const systemPrompt = [
     'You are an adversary agent in the Orcha pipeline gate.',
     'Your job is to write tests that EXPOSE BUGS in the code changes.',
     '',
+    ...(techGuidance ? [`Detected project technology: ${techGuidance.label}`, ''] : []),
     'Guidelines:',
     '- Study the diff carefully for edge cases, off-by-one errors, missing validation, race conditions, and incorrect assumptions.',
     '- Write focused test files that target the weakest parts of the implementation.',
     '- Each test should be self-contained and clearly named.',
-    '- Use the same test framework and patterns as the existing project tests.',
+    ...(techGuidance ? [
+      `- Write tests in ${techGuidance.language} using ${techGuidance.framework}.`,
+      `- Use file naming convention: ${techGuidance.fileNaming}`,
+    ] : [
+      '- Use the same test framework and patterns as the existing project tests.',
+    ]),
     '- Only write tests — do NOT modify any source code.',
     '- If the code looks solid, still try creative edge cases.',
     '',
@@ -556,9 +568,9 @@ export function buildAdversaryPrompt(
     '{',
     '  "tests": [',
     '    {',
-    '      "filename": "adversary-test-1.test.ts",',
+    `      "filename": "${techGuidance?.exampleFilename ?? 'adversary-test-1.test.ts'}",`,
     '      "description": "Tests edge case X in module Y",',
-    '      "content": "import { ... } from \'../src/...\'; ..."',
+    '      "content": "..."',
     '    }',
     '  ],',
     '  "reasoning": "Brief explanation of what bugs you are targeting"',
@@ -581,10 +593,51 @@ export function buildAdversaryPrompt(
     '',
     '# Instructions',
     'Write adversarial tests that expose bugs or edge cases in the code changes above.',
+    ...(techGuidance ? [`Write tests in ${techGuidance.language} using ${techGuidance.framework}.`] : []),
     'Output your tests as the JSON structure described in your instructions.',
   ].join('\n')
 
   return { systemPrompt, userPrompt }
+}
+
+/**
+ * Get tech-specific guidance for adversary test generation.
+ */
+function getTechGuidance(techType?: 'node' | 'dotnet' | 'python'): {
+  label: string
+  language: string
+  framework: string
+  fileNaming: string
+  exampleFilename: string
+} | null {
+  switch (techType) {
+    case 'node':
+      return {
+        label: 'Node.js / TypeScript',
+        language: 'TypeScript',
+        framework: 'plain assertions (no test runner needed — the file is executed directly with tsx)',
+        fileNaming: 'adversary-*.test.ts',
+        exampleFilename: 'adversary-test-1.test.ts',
+      }
+    case 'python':
+      return {
+        label: 'Python',
+        language: 'Python',
+        framework: 'pytest (use assert statements and test_ function naming)',
+        fileNaming: 'test_adversary_*.py',
+        exampleFilename: 'test_adversary_1.py',
+      }
+    case 'dotnet':
+      return {
+        label: '.NET / C#',
+        language: 'C#',
+        framework: 'xUnit or NUnit (note: adversary tests for .NET are review-only and will not be executed)',
+        fileNaming: 'Adversary*Tests.cs',
+        exampleFilename: 'AdversaryTest1Tests.cs',
+      }
+    default:
+      return null
+  }
 }
 
 // ============================================================================
