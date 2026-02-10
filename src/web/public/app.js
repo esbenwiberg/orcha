@@ -19,6 +19,7 @@ const state = {
   pipelines: [], // Pipeline runs
   selectedPipeline: null, // Currently selected pipeline ID
   pipelineLogs: {}, // pipelineId -> accumulated log text
+  selectedTemplate: null, // Currently selected template name
 };
 
 // DOM elements
@@ -1316,15 +1317,15 @@ function renderSettings() {
 }
 
 /**
- * Show prompts editor (placeholder for now)
+ * Show prompts editor with template list
  */
-function showPromptsEditor() {
+async function showPromptsEditor() {
   console.log('Opening prompts editor');
 
-  // Clear terminal grid
+  // Clear terminal grid and show loading state
   const terminalGrid = document.getElementById('terminal-grid');
   if (terminalGrid) {
-    terminalGrid.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);font-size:1rem;">Prompts editor will go here</div>';
+    terminalGrid.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);font-size:1rem;">Loading templates...</div>';
   }
 
   // Hide pipeline detail if shown
@@ -1332,6 +1333,67 @@ function showPromptsEditor() {
   if (pipelineDetail) {
     pipelineDetail.style.display = 'none';
   }
+
+  try {
+    // Fetch template list from API
+    const response = await fetch('/api/prompts');
+    if (!response.ok) {
+      throw new Error(`Failed to fetch templates: ${response.statusText}`);
+    }
+    const templates = await response.json();
+
+    // Render template list
+    let html = '<div class="template-list-container">';
+    html += '<div class="template-list-header">Prompt Templates</div>';
+    html += '<div class="template-list">';
+
+    // Sort templates by name
+    templates.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const template of templates) {
+      html += '<div class="template-item" onclick="openTemplateEditor(\'' + escapeHtml(template.name) + '\')">';
+      html += '<div class="template-item-header">';
+      if (template.hasCustom) {
+        html += '<span class="template-custom-indicator" title="Custom override exists">✓</span>';
+      }
+      html += '<span class="template-item-name">' + escapeHtml(template.name) + '</span>';
+      html += '</div>';
+      html += '<div class="template-item-description">' + escapeHtml(template.description) + '</div>';
+      html += '</div>';
+    }
+
+    html += '</div>'; // template-list
+    html += '</div>'; // template-list-container
+
+    if (terminalGrid) {
+      terminalGrid.innerHTML = html;
+    }
+  } catch (err) {
+    console.error('Failed to load templates:', err);
+    if (terminalGrid) {
+      terminalGrid.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-danger);font-size:1rem;">Failed to load templates: ' + escapeHtml(err.message) + '</div>';
+    }
+  }
+}
+
+/**
+ * Open template editor for a specific template
+ */
+function openTemplateEditor(templateName) {
+  console.log('Opening editor for template:', templateName);
+  // Store selected template in state
+  state.selectedTemplate = templateName;
+  // TODO: Implement editor UI (milestone 4)
+  showToast('Template editor coming soon', 'info');
+}
+
+/**
+ * Escape HTML special characters
+ */
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 /**
