@@ -220,7 +220,7 @@ export async function parseMarkdownBlueprint(markdown: string): Promise<Blueprin
   // KEY: We preserve the FULL raw text for each milestone (rawText field)
   // This includes everything: intent, details, verification, key files, etc.
   // Agents get the complete context, not just extracted fields.
-  const milestones: BlueprintMilestone[] = []
+  let milestones: BlueprintMilestone[] = []
 
   // Try format 1: ### M1:, ### M2:, etc. (common from /blueprint skill)
   const m1Regex = /###\s+M\d+:\s+(.+?)\s*\n+([\s\S]*?)(?=\n###\s+M\d+:|\n##\s+(?!#)|$)/gi
@@ -296,6 +296,29 @@ export async function parseMarkdownBlueprint(markdown: string): Promise<Blueprin
         details: body,
         rawText: fullMatch, // FULL milestone section with ALL context
       })
+    }
+  }
+
+  // Try format 4: ### Phase A:, ### Phase B:, etc. (phases as milestones)
+  if (milestones.length === 0 || milestones.length === 1) {
+    const phaseRegex = /###\s+Phase\s+[A-Z\d]+:\s+(.+?)\s*(?:\([\d\s\-]+hours?\))?\s*\n+([\s\S]*?)(?=\n###\s+Phase\s+[A-Z\d]+:|\n##\s+|$)/gi
+    let phaseMatch
+    const phases: BlueprintMilestone[] = []
+    while ((phaseMatch = phaseRegex.exec(markdown)) !== null) {
+      const title = phaseMatch[1].trim()
+      const body = phaseMatch[2].trim()
+      const fullMatch = phaseMatch[0] // PRESERVE FULL TEXT
+
+      phases.push({
+        description: title,
+        details: body,
+        rawText: fullMatch, // FULL phase section with ALL context
+      })
+    }
+
+    // If we found phases, use them instead of (or in addition to) the outer milestone
+    if (phases.length > 1) {
+      milestones = phases
     }
   }
 
