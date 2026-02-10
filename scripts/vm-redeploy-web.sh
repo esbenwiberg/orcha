@@ -18,7 +18,6 @@ warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[x]${NC} $1"; exit 1; }
 
 # Security: Use hardcoded path to prevent path traversal attacks
-# Do not allow ORCHA_DIR override from environment
 ORCHA_DIR="$HOME/repos/orcha-clones/orcha"
 cd "$ORCHA_DIR" || err "Cannot cd to $ORCHA_DIR"
 
@@ -46,8 +45,9 @@ if [[ "${1:-}" == "--pull" ]]; then
     git pull origin main
 fi
 
-# Build
-log "Building TypeScript..."
+# Clean stale dist and rebuild
+log "Cleaning dist/ and rebuilding..."
+rm -rf dist
 npm run build || err "Build failed"
 
 # Kill any leftover tmux-based web server

@@ -1,10 +1,11 @@
 /**
  * Cleanup - Detect and remove dead tmux sessions and orphaned resources
  *
- * A "dead" session is:
- * - A tmux session starting with "orcha-" that's not in the instance registry
- * - A tmux session where the Orcha process (PID) is no longer running
- * - A tmux session containing only bash shells (no active AI agents)
+ * A "dead" session is one where NO active process (claude, node, python, etc.)
+ * is running in ANY pane — only bare shells remain with no child processes.
+ *
+ * IMPORTANT: We must be conservative. Killing an active session loses work.
+ * It's better to leave a dead session around than to kill a live one.
  */
 
 import { execSync } from 'child_process'
@@ -51,18 +52,6 @@ function listOrchaTmuxSessions(): Array<{ name: string; created: string }> {
 }
 
 /**
- * Check if a process is running
- */
-function isProcessRunning(pid: number): boolean {
-  try {
-    execSync(`ps -p ${pid}`, { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
-}
-
-/**
  * Check if a tmux session exists
  */
 function tmuxSessionExists(sessionName: string): boolean {
@@ -75,90 +64,112 @@ function tmuxSessionExists(sessionName: string): boolean {
 }
 
 /**
- * Get the PID of the first pane in a tmux session
+ * Check if a tmux session has any active (non-shell) processes running.
+ *
+ * Walks the full process tree of every pane in the session.
+ * Returns true if ANY descendant process is something other than a bare shell.
+ * This catches: claude, node, python, npm, git, gh, etc.
  */
-function getTmuxSessionPanePid(sessionName: string): number | null {
+function hasActiveProcesses(sessionName: string): boolean {
   try {
-    const output = execSync(
-      `tmux list-panes -t "${sessionName}" -F "#{pane_pid}" | head -1`,
+    // Get all pane PIDs in the session
+    const paneOutput = execSync(
+      `tmux list-panes -t "${sessionName}" -F "#{pane_pid}"`,
       { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }
     )
-    const pid = parseInt(output.trim(), 10)
-    return isNaN(pid) ? null : pid
+
+    const panePids = paneOutput.trim().split('\n').map(p => p.trim()).filter(Boolean)
+
+    for (const panePid of panePids) {
+      // Get the full process tree under this pane PID
+      // pstree shows all descendants — if there's anything beyond the shell, the session is active
+      try {
+        const tree = execSync(`pstree -A ${panePid} 2>/dev/null`, {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'ignore'],
+        }).trim()
+
+        // pstree output for a bare shell is just "bash" or "zsh" (single line, no children)
+        // If there are child processes (indicated by --- or multiple lines), it's active
+        const lines = tree.split('\n')
+        if (lines.length > 1 || tree.includes('---')) {
+          return true
+        }
+      } catch {
+        // pstree failed — process may have exited, treat as inactive
+      }
+    }
+
+    return false
   } catch {
-    return null
+    // If we can't check, assume it's active (be conservative)
+    return true
   }
 }
 
 /**
- * Get the command running in a pane by PID
- */
-function getProcessCommand(pid: number): string | null {
-  try {
-    const output = execSync(`ps -p ${pid} -o comm=`, {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-    })
-    return output.trim()
-  } catch {
-    return null
-  }
-}
-
-/**
- * Check if a tmux session is only running bash (no AI agents)
- */
-function isSessionOnlyBash(sessionName: string): boolean {
-  const pid = getTmuxSessionPanePid(sessionName)
-  if (!pid) return false
-
-  const command = getProcessCommand(pid)
-  return command === 'bash' || command === 'sh' || command === 'zsh'
-}
-
-/**
- * Detect all dead sessions
+ * Detect dead sessions.
+ *
+ * A session is only considered dead if it's a bare shell with NO child
+ * processes. Instance container sessions (orcha-orcha, orcha-teamplanner, etc.)
+ * are NEVER considered dead — they're managed by the instance registry.
  */
 export async function detectDeadSessions(): Promise<DeadSession[]> {
   const registry = await loadRegistry()
   const tmuxSessions = listOrchaTmuxSessions()
   const deadSessions: DeadSession[] = []
 
-  const validInstanceSessions = new Set(
+  // Instance container sessions are never "dead" — they're structural
+  const instanceSessionNames = new Set(
     Object.values(registry.instances).map((inst) => inst.tmuxSession)
   )
 
-  for (const { name, created } of tmuxSessions) {
-    // Check if it's a registered instance session
-    if (validInstanceSessions.has(name)) {
-      // Check if the process is still running
-      const instance = Object.values(registry.instances).find((inst) => inst.tmuxSession === name)
-      if (instance && !isProcessRunning(instance.pid)) {
-        deadSessions.push({
-          name,
-          reason: `Orcha process (PID ${instance.pid}) no longer running`,
-          created,
-        })
+  // Also build a set of UI session tmux names that are tracked in session stores
+  const trackedUiSessions = new Set<string>()
+  for (const instanceId of Object.keys(registry.instances)) {
+    try {
+      const { loadSessionStore } = await import('./session-store.js')
+      const sessions = await loadSessionStore(instanceId)
+      for (const s of sessions) {
+        if (s.tmuxSession) {
+          trackedUiSessions.add(s.tmuxSession)
+        }
       }
-    } else {
-      // Check if it's a UI session with only bash
-      if (name.startsWith('orcha-ui-session-') || name.match(/^orcha-ui-[a-f0-9-]+$/)) {
-        if (isSessionOnlyBash(name)) {
+    } catch {
+      // Ignore errors loading session store
+    }
+  }
+
+  for (const { name, created } of tmuxSessions) {
+    // NEVER touch instance container sessions
+    if (instanceSessionNames.has(name)) {
+      continue
+    }
+
+    // For UI sessions: only mark as dead if they have NO active processes
+    // AND are not tracked in any session store
+    if (name.startsWith('orcha-ui-session-') || name.startsWith('orcha-ui-')) {
+      if (trackedUiSessions.has(name)) {
+        // Tracked session — only dead if truly empty (no processes at all)
+        if (!hasActiveProcesses(name)) {
           deadSessions.push({
             name,
-            reason: 'UI session with only bash shell (no AI agent)',
+            reason: 'Tracked session with no active processes (bare shell only)',
             created,
           })
         }
       } else {
-        // Unknown orcha session not in registry
-        deadSessions.push({
-          name,
-          reason: 'Not registered in instance registry',
-          created,
-        })
+        // Untracked UI session — dead if no active processes
+        if (!hasActiveProcesses(name)) {
+          deadSessions.push({
+            name,
+            reason: 'Untracked UI session with no active processes',
+            created,
+          })
+        }
       }
     }
+    // Ignore non-UI, non-instance sessions entirely (could be user-created tmux sessions)
   }
 
   return deadSessions
@@ -176,7 +187,11 @@ function killTmuxSession(sessionName: string): void {
 }
 
 /**
- * Clean up dead sessions
+ * Clean up dead sessions.
+ *
+ * IMPORTANT: This only kills tmux sessions that are truly dead (bare shells
+ * with no child processes). It does NOT remove instance registry entries or
+ * session store directories — those are structural and should persist.
  */
 export async function cleanupDeadSessions(dryRun: boolean = false): Promise<CleanupResult> {
   const deadSessions = await detectDeadSessions()
@@ -184,36 +199,30 @@ export async function cleanupDeadSessions(dryRun: boolean = false): Promise<Clea
   const cleanedTempDirs: string[] = []
 
   if (!dryRun) {
-    // Kill dead tmux sessions
+    // Kill dead tmux sessions only
     for (const session of deadSessions) {
       killTmuxSession(session.name)
     }
 
-    // Clean up instance registry entries for dead sessions
-    const registry = await loadRegistry()
-    let registryChanged = false
-
-    for (const [instanceId, instance] of Object.entries(registry.instances)) {
-      if (!tmuxSessionExists(instance.tmuxSession)) {
-        delete registry.instances[instanceId]
-        cleanedInstances.push(instanceId)
-        registryChanged = true
-
-        // Clean up session store directory
-        const sessionDir = process.env.HOME ? join(process.env.HOME, '.orcha', instanceId) : `/tmp/orcha/${instanceId}`
-        if (existsSync(sessionDir)) {
+    // Remove session store entries for killed UI sessions (NOT the instance dirs!)
+    for (const session of deadSessions) {
+      if (session.name.startsWith('orcha-ui-')) {
+        // Find which instance this session belongs to and remove just the session entry
+        const registry = await loadRegistry()
+        for (const [instanceId] of Object.entries(registry.instances)) {
           try {
-            await rm(sessionDir, { recursive: true, force: true })
-            cleanedTempDirs.push(sessionDir)
+            const { loadSessionStore, removeSession } = await import('./session-store.js')
+            const sessions = await loadSessionStore(instanceId)
+            const match = sessions.find(s => s.tmuxSession === session.name)
+            if (match) {
+              await removeSession(instanceId, match.id)
+              break
+            }
           } catch {
-            // Ignore cleanup errors
+            // Ignore
           }
         }
       }
-    }
-
-    if (registryChanged) {
-      await saveRegistry(registry)
     }
   }
 
@@ -225,8 +234,10 @@ export async function cleanupDeadSessions(dryRun: boolean = false): Promise<Clea
 }
 
 /**
- * Clean up stale instances from registry (tmux sessions no longer running)
- * This is similar to the existing cleanupStaleInstances but more comprehensive
+ * Clean up stale instances from registry (tmux sessions no longer running).
+ *
+ * Only removes instances whose tmux container session is gone AND that have
+ * no active UI sessions. Does NOT delete session store directories.
  */
 export async function cleanupInstanceRegistry(): Promise<string[]> {
   const registry = await loadRegistry()
@@ -234,8 +245,25 @@ export async function cleanupInstanceRegistry(): Promise<string[]> {
 
   for (const [instanceId, instance] of Object.entries(registry.instances)) {
     if (!tmuxSessionExists(instance.tmuxSession)) {
-      delete registry.instances[instanceId]
-      removed.push(instanceId)
+      // Check if any UI sessions for this instance still exist
+      let hasActiveSessions = false
+      try {
+        const { loadSessionStore } = await import('./session-store.js')
+        const sessions = await loadSessionStore(instanceId)
+        for (const s of sessions) {
+          if (s.tmuxSession && tmuxSessionExists(s.tmuxSession)) {
+            hasActiveSessions = true
+            break
+          }
+        }
+      } catch {
+        // Ignore
+      }
+
+      if (!hasActiveSessions) {
+        delete registry.instances[instanceId]
+        removed.push(instanceId)
+      }
     }
   }
 

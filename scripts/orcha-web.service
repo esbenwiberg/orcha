@@ -1,17 +1,18 @@
 [Unit]
-Description=Orcha Web Dashboard Server
+Description=Orcha Web Dashboard
 After=network.target
 
 [Service]
 Type=simple
-# User and paths are populated by vm-redeploy-web.sh during installation
 User=REPLACE_USER
 WorkingDirectory=REPLACE_WORKING_DIR
-ExecStart=/usr/bin/node dist/web/server.js
-Restart=on-failure
-RestartSec=5
-Environment=NODE_ENV=production
 Environment=PORT=3000
+Environment=NO_OPEN=1
+Environment=NODE_ENV=production
+ExecStartPre=/usr/bin/bash -c 'for i in 1 2 3 4 5 6; do fuser 3000/tcp >/dev/null 2>&1 || exit 0; sleep 2; done'
+ExecStart=/usr/bin/node dist/web/start-server.js
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

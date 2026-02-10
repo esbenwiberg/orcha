@@ -3346,6 +3346,16 @@ Rules:
         this.ptySessions.delete(sessionKey)
       })
 
+      // Catch PTY child process errors to prevent crashing the server
+      ;(ptyProcess as any)._process?.on?.('error', (err: Error) => {
+        console.error(`[PTY] Process error for ${sessionKey}:`, err.message)
+        this.ptySessions.delete(sessionKey)
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'exit', code: 1 }))
+          ws.close(1011, 'PTY process error')
+        }
+      })
+
       // WebSocket input -> PTY
       ws.on('message', (message) => {
         try {
