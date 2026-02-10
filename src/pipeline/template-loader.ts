@@ -8,7 +8,7 @@
 import { readFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import Handlebars from 'handlebars'
+import * as Handlebars from 'handlebars'
 import * as yaml from 'js-yaml'
 
 // ============================================================================

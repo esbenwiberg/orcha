@@ -107,6 +107,37 @@ export function getDiff(worktreePath: string, sourceBranch: string, baseCommit?:
 const SAFE_EXTENSION_RE = /^\.[a-zA-Z0-9]+$/
 
 /**
+ * Validate that a filename is safe (no path traversal or absolute paths).
+ * Returns true if the filename is safe to use.
+ *
+ * Security: Rejects paths containing '..' (path traversal) or starting with '/'
+ * (absolute paths) that could escape the worktree boundary.
+ */
+function isSafeFilename(filename: string): boolean {
+  // Reject absolute paths
+  if (filename.startsWith('/')) return false
+  // Reject path traversal sequences
+  if (filename.includes('..')) return false
+  // Reject null bytes
+  if (filename.includes('\x00')) return false
+  return true
+}
+
+/**
+ * Filter a list of filenames to only include safe ones.
+ * Logs a warning for rejected filenames.
+ */
+function filterSafeFilenames(filenames: string[]): string[] {
+  return filenames.filter((f) => {
+    if (!isSafeFilename(f)) {
+      console.warn(`Skipping unsafe filename from git diff: ${JSON.stringify(f)}`)
+      return false
+    }
+    return true
+  })
+}
+
+/**
  * Validate that an extension is safe for use in shell commands.
  * Throws if the extension doesn't match the safe pattern.
  */
@@ -169,7 +200,7 @@ export function getChangedFilesByExtensions(
     try {
       const args = buildDiffArgs([`${baseCommit}..HEAD`], pathspecs)
       const output = execFileSync('git', args, execOpts).trim()
-      if (output) return output.split('\n').filter(Boolean)
+      if (output) return filterSafeFilenames(output.split('\n').filter(Boolean))
     } catch { /* baseCommit may be unavailable */ }
   }
 
@@ -178,13 +209,13 @@ export function getChangedFilesByExtensions(
   try {
     const args = buildDiffArgs([`origin/${sourceBranch}...HEAD`], pathspecs)
     const output = execFileSync('git', args, execOpts).trim()
-    if (output) return output.split('\n').filter(Boolean)
+    if (output) return filterSafeFilenames(output.split('\n').filter(Boolean))
   } catch { /* origin/sourceBranch may not exist */ }
 
   try {
     const args = buildDiffArgs([`${sourceBranch}...HEAD`], pathspecs)
     const output = execFileSync('git', args, execOpts).trim()
-    if (output) return output.split('\n').filter(Boolean)
+    if (output) return filterSafeFilenames(output.split('\n').filter(Boolean))
   } catch { /* sourceBranch may not exist locally */ }
 
   try {
@@ -192,7 +223,7 @@ export function getChangedFilesByExtensions(
     const output = execFileSync('git', args, execOpts).trim()
     if (output) {
       const extRegex = buildExtensionRegex(extensions)
-      return output.split('\n').filter((f) => extRegex.test(f))
+      return filterSafeFilenames(output.split('\n').filter((f) => extRegex.test(f)))
     }
   } catch { /* Ignore */ }
 

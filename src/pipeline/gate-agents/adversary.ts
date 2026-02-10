@@ -11,7 +11,7 @@
  * - If no tests written or all tests pass → pass
  */
 
-import { execSync, execFileSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import { readFileSync } from 'fs'
 import { mkdtemp, writeFile, readFile, rm } from 'fs/promises'
 import { join, resolve, relative } from 'path'
@@ -207,11 +207,11 @@ export async function runAdversary(
 /** Valid tech types for test pattern lookup. */
 const VALID_TECH_TYPES: ReadonlySet<TechStack['type']> = new Set(['node', 'dotnet', 'python'])
 
-/** Find-command fragments for test file patterns by tech type. */
-const TEST_FILE_PATTERNS: Readonly<Record<TechStack['type'], string>> = {
-  node: '\\( -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" -o -name "*.spec.js" \\)',
-  dotnet: '\\( -name "*Tests.cs" -o -name "*Test.cs" \\)',
-  python: '\\( -name "test_*.py" -o -name "*_test.py" \\)',
+/** Test file patterns as arrays for execFileSync (avoids shell interpolation). */
+const TEST_FILE_PATTERNS: Readonly<Record<TechStack['type'], string[]>> = {
+  node: ['*.test.ts', '*.spec.ts', '*.test.js', '*.spec.js'],
+  dotnet: ['*Tests.cs', '*Test.cs'],
+  python: ['test_*.py', '*_test.py'],
 }
 
 /**
@@ -231,33 +231,46 @@ function validateTechType(techType?: TechStack['type']): TechStack['type'] {
  * @param techType - If provided, searches for tech-appropriate test file patterns.
  *                   Falls back to Node patterns if not specified (backwards compatible).
  *
- * Security: techType is validated against a whitelist before use in shell command.
+ * Security: Uses execFileSync with args array to prevent command injection.
+ * The pattern array comes from a validated whitelist.
  */
 function getTestPatterns(worktreePath: string, techType?: TechStack['type']): string {
   // Validate techType against whitelist to prevent command injection
   const validatedType = validateTechType(techType)
-  const pattern = TEST_FILE_PATTERNS[validatedType]
+  const patterns = TEST_FILE_PATTERNS[validatedType]
 
   try {
-    // Find test files — pattern comes from validated whitelist
-    const testFiles = execSync(
-      `find . -maxdepth 4 -type f ${pattern} | head -5`,
-      { cwd: worktreePath, encoding: 'utf-8', timeout: 5000 },
-    ).trim()
+    // Build find args safely using execFileSync (no shell interpolation)
+    // find . -maxdepth 4 -type f \( -name "*.test.ts" -o -name "*.spec.ts" ... \)
+    const findArgs = ['.', '-maxdepth', '4', '-type', 'f', '(']
+    for (let i = 0; i < patterns.length; i++) {
+      if (i > 0) findArgs.push('-o')
+      findArgs.push('-name', patterns[i])
+    }
+    findArgs.push(')')
 
-    if (!testFiles) return ''
+    const testFilesOutput = execFileSync('find', findArgs, {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      timeout: 5000,
+    }).trim()
 
-    const patterns: string[] = []
-    for (const file of testFiles.split('\n').filter(Boolean).slice(0, 3)) {
+    if (!testFilesOutput) return ''
+
+    // Take only first 5 files (equivalent to | head -5)
+    const testFiles = testFilesOutput.split('\n').filter(Boolean).slice(0, 5)
+
+    const patternSamples: string[] = []
+    for (const file of testFiles.slice(0, 3)) {
       try {
         const fullPath = join(worktreePath, file)
         const content = (readFileSync(fullPath, 'utf-8') as string)
           .split('\n').slice(0, 30).join('\n')
-        patterns.push(`--- ${file} ---\n${content}`)
+        patternSamples.push(`--- ${file} ---\n${content}`)
       } catch { /* skip unreadable files */ }
     }
 
-    return patterns.join('\n\n')
+    return patternSamples.join('\n\n')
   } catch {
     return ''
   }

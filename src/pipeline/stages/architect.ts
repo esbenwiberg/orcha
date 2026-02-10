@@ -167,7 +167,7 @@ export async function runArchitectStage(
   }
 
   // Build the prompt (with learning hints if available)
-  const { systemPrompt, userPrompt } = buildArchitectPrompt(workItem, codebase, learningHints)
+  const { systemPrompt, userPrompt } = await buildArchitectPrompt(workItem, codebase, learningHints)
 
   try {
     // Run the architect stage

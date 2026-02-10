@@ -9,6 +9,7 @@
  */
 
 import { execSync } from 'child_process'
+import { loadTemplate, compileTemplate } from './template-loader.js'
 
 // ============================================================================
 // Types
@@ -149,116 +150,134 @@ export function parseAcceptanceCriteria(issueBody: string): string[] {
  *
  * @param learningHints - Optional hints from past pipeline outcomes (M13 learning loop).
  */
-export function buildArchitectPrompt(
+export async function buildArchitectPrompt(
   workItem: WorkItemContext,
   codebase: CodebaseContext,
   learningHints?: string[],
-): PromptParts {
+): Promise<PromptParts> {
   const tree = getCodebaseTree(codebase.worktreePath)
   const keyFiles = getKeyFiles(codebase.worktreePath)
 
-  const learningSection = learningHints && learningHints.length > 0
-    ? [
+  // Try loading template, fall back to hardcoded prompts on failure
+  try {
+    const template = await loadTemplate('architect')
+    const variables = {
+      workItem,
+      codebase,
+      tree,
+      keyFiles,
+      learningHints: learningHints || [],
+    }
+    return compileTemplate(template, variables)
+  } catch (err) {
+    console.warn(
+      `[prompt-builder] Failed to load architect template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+    )
+
+    // FALLBACK: Original hardcoded implementation
+    const learningSection = learningHints && learningHints.length > 0
+      ? [
+        '',
+        'Lessons from past pipeline runs (use these to improve your blueprint):',
+        ...learningHints.map((h) => `- ${h}`),
+      ]
+      : []
+
+    const systemPrompt = [
+      'You are an architect agent in the Orcha pipeline.',
+      'Your job is to analyze the codebase and produce a detailed implementation blueprint.',
       '',
-      'Lessons from past pipeline runs (use these to improve your blueprint):',
-      ...learningHints.map((h) => `- ${h}`),
-    ]
-    : []
+      'Guidelines:',
+      '- Read the codebase carefully using the available tools (Read, Grep, Glob).',
+      '- Understand the existing architecture, patterns, and conventions.',
+      '- Produce a blueprint that a developer agent can follow to implement the changes.',
+      '- Be specific about which files to create/modify and what changes to make.',
+      '- Identify risks and suggest a test strategy.',
+      '- Do NOT make any changes to the code. You are read-only.',
+      '',
+      'IMPORTANT - Milestone Planning:',
+      '- Divide large tasks into discrete MILESTONES (not steps).',
+      '- Each milestone should be independently implementable with a focused scope (single responsibility).',
+      '- Each milestone runs with FRESH CONTEXT (no cross-milestone state pollution).',
+      '- For small tasks (1-3 simple changes), use a single milestone.',
+      '- For large tasks (complex features, multi-file refactors), create 3-7 milestones.',
+      '- Milestone boundaries should align with natural checkpoints (e.g., add schema → add API → add UI).',
+      ...learningSection,
+      '',
+      'Output your blueprint as a JSON object matching the requested schema.',
+    ].join('\n')
 
-  const systemPrompt = [
-    'You are an architect agent in the Orcha pipeline.',
-    'Your job is to analyze the codebase and produce a detailed implementation blueprint.',
-    '',
-    'Guidelines:',
-    '- Read the codebase carefully using the available tools (Read, Grep, Glob).',
-    '- Understand the existing architecture, patterns, and conventions.',
-    '- Produce a blueprint that a developer agent can follow to implement the changes.',
-    '- Be specific about which files to create/modify and what changes to make.',
-    '- Identify risks and suggest a test strategy.',
-    '- Do NOT make any changes to the code. You are read-only.',
-    '',
-    'IMPORTANT - Milestone Planning:',
-    '- Divide large tasks into discrete MILESTONES (not steps).',
-    '- Each milestone should be independently implementable with a focused scope (single responsibility).',
-    '- Each milestone runs with FRESH CONTEXT (no cross-milestone state pollution).',
-    '- For small tasks (1-3 simple changes), use a single milestone.',
-    '- For large tasks (complex features, multi-file refactors), create 3-7 milestones.',
-    '- Milestone boundaries should align with natural checkpoints (e.g., add schema → add API → add UI).',
-    ...learningSection,
-    '',
-    'Output your blueprint as a JSON object matching the requested schema.',
-  ].join('\n')
+    const acSection = workItem.acceptanceCriteria.length > 0
+      ? ['', '## Acceptance Criteria', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
+      : []
 
-  const acSection = workItem.acceptanceCriteria.length > 0
-    ? ['', '## Acceptance Criteria', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
-    : []
+    const issueSection = workItem.issueBody
+      ? ['', '## Full Issue Body', workItem.issueBody]
+      : []
 
-  const issueSection = workItem.issueBody
-    ? ['', '## Full Issue Body', workItem.issueBody]
-    : []
+    const userPrompt = [
+      '# Work Item',
+      workItem.workItemId ? `ID: ${workItem.workItemId}` : '',
+      '',
+      '## Description',
+      workItem.description,
+      ...acSection,
+      ...issueSection,
+      '',
+      '# Codebase Context',
+      '',
+      '## Source Branch',
+      codebase.sourceBranch,
+      '',
+      '## Directory Structure',
+      '```',
+      tree,
+      '```',
+      '',
+      '## Key Files',
+      '```',
+      keyFiles,
+      '```',
+      '',
+      '# Instructions',
+      'Analyze the codebase and produce an implementation blueprint.',
+      '',
+      'Your output must be a JSON object with these fields:',
+      '- headline: A short, clear title for the plan (e.g. "Add User Authentication")',
+      '- shortDescription: Summary INCLUDING the milestone count (e.g. "Implements user authentication with 3 milestones")',
+      '  * IMPORTANT: The shortDescription MUST explicitly state how many milestones the plan contains',
+      '  * Format: "<Summary of what is being done> with <N> milestone(s)"',
+      '  * Example: "Adds JWT-based authentication with 4 milestones"',
+      '  * Example: "Refactors error handling with 1 milestone"',
+      '- approach: High-level description of the implementation approach',
+      '- filesToTouch: Array of file paths that need to be created or modified',
+      '- risks: Array of potential risks or concerns',
+      '- testStrategy: How to test the changes',
+      '- milestones: Array of milestone objects, each with:',
+      '  - description: What this milestone accomplishes',
+      '  - details: Step-by-step implementation guidance',
+      '  - filesToTouch (optional): Subset of files this milestone touches',
+      '',
+      'CRITICAL: Use "milestones" field (not "steps"). Each milestone executes with fresh context.',
+      '',
+      'Example blueprint structure:',
+      '{',
+      '  "headline": "Add User Authentication",',
+      '  "shortDescription": "Implements JWT-based user authentication with 3 milestones",',
+      '  "approach": "...",',
+      '  "filesToTouch": ["src/auth.ts", "src/middleware.ts"],',
+      '  "risks": ["..."],',
+      '  "testStrategy": "...",',
+      '  "milestones": [',
+      '    { "description": "Create auth schema and models", "details": "..." },',
+      '    { "description": "Implement JWT signing and validation", "details": "..." },',
+      '    { "description": "Add authentication middleware", "details": "..." }',
+      '  ]',
+      '}',
+    ].filter((line) => line !== '').join('\n')
 
-  const userPrompt = [
-    '# Work Item',
-    workItem.workItemId ? `ID: ${workItem.workItemId}` : '',
-    '',
-    '## Description',
-    workItem.description,
-    ...acSection,
-    ...issueSection,
-    '',
-    '# Codebase Context',
-    '',
-    '## Source Branch',
-    codebase.sourceBranch,
-    '',
-    '## Directory Structure',
-    '```',
-    tree,
-    '```',
-    '',
-    '## Key Files',
-    '```',
-    keyFiles,
-    '```',
-    '',
-    '# Instructions',
-    'Analyze the codebase and produce an implementation blueprint.',
-    '',
-    'Your output must be a JSON object with these fields:',
-    '- headline: A short, clear title for the plan (e.g. "Add User Authentication")',
-    '- shortDescription: Summary INCLUDING the milestone count (e.g. "Implements user authentication with 3 milestones")',
-    '  * IMPORTANT: The shortDescription MUST explicitly state how many milestones the plan contains',
-    '  * Format: "<Summary of what is being done> with <N> milestone(s)"',
-    '  * Example: "Adds JWT-based authentication with 4 milestones"',
-    '  * Example: "Refactors error handling with 1 milestone"',
-    '- approach: High-level description of the implementation approach',
-    '- filesToTouch: Array of file paths that need to be created or modified',
-    '- risks: Array of potential risks or concerns',
-    '- testStrategy: How to test the changes',
-    '- milestones: Array of milestone objects, each with:',
-    '  - description: What this milestone accomplishes',
-    '  - details: Step-by-step implementation guidance',
-    '  - filesToTouch (optional): Subset of files this milestone touches',
-    '',
-    'CRITICAL: Use "milestones" field (not "steps"). Each milestone executes with fresh context.',
-    '',
-    'Example blueprint structure:',
-    '{',
-    '  "headline": "Add User Authentication",',
-    '  "shortDescription": "Implements JWT-based user authentication with 3 milestones",',
-    '  "approach": "...",',
-    '  "filesToTouch": ["src/auth.ts", "src/middleware.ts"],',
-    '  "risks": ["..."],',
-    '  "testStrategy": "...",',
-    '  "milestones": [',
-    '    { "description": "Create auth schema and models", "details": "..." },',
-    '    { "description": "Implement JWT signing and validation", "details": "..." },',
-    '    { "description": "Add authentication middleware", "details": "..." }',
-    '  ]',
-    '}',
-  ].filter((line) => line !== '').join('\n')
-
-  return { systemPrompt, userPrompt }
+    return { systemPrompt, userPrompt }
+  }
 }
 
 /**
