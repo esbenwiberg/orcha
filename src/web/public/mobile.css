@@ -148,6 +148,9 @@ html, body {
 
 /* Special key toolbar */
 #key-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 6px;
