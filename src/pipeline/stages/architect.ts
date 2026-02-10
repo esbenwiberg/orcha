@@ -322,7 +322,13 @@ export async function parseMarkdownBlueprint(markdown: string): Promise<Blueprin
   // Deduplicate files
   const uniqueFiles = [...new Set(filesToTouch)]
 
-  const shortDescription = `${goal.split('\n')[0]}. ${milestoneCount || milestones.length} milestones.`
+  // Build shortDescription with proper grammar
+  const finalMilestoneCount = milestoneCount || milestones.length
+  const milestoneLabel = finalMilestoneCount === 1 ? 'milestone' : 'milestones'
+  const goalFirstLine = goal.split('\n')[0].trim()
+  const shortDescription = goalFirstLine
+    ? `${goalFirstLine}. ${finalMilestoneCount} ${milestoneLabel}.`
+    : `${finalMilestoneCount} ${milestoneLabel}.`
 
   return {
     headline,
