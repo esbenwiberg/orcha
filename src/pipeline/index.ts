@@ -58,6 +58,7 @@ export {
   getRecoveryTarget,
   createPipelineRun,
   executeArchitectStage,
+  importExistingBlueprint,
   executeDevStage,
   executeGateStage,
   executeFixLoopStage,
@@ -100,7 +101,7 @@ export { loadTemplate, compileTemplate, validateTemplate, CUSTOM_PROMPTS_DIR, DE
 export type { TemplateData, CompiledPrompt } from './template-loader.js'
 
 // Stages — Architect
-export { runArchitectStage, BLUEPRINT_SCHEMA } from './stages/architect.js'
+export { runArchitectStage, BLUEPRINT_SCHEMA, isValidBlueprint, loadBlueprintFromFile } from './stages/architect.js'
 export type { BlueprintOutput, ArchitectOptions } from './stages/architect.js'
 
 // Stages — Dev

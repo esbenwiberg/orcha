@@ -1798,6 +1798,7 @@ pipelineCmd
   .option('--title <text>', 'Short display title for the pipeline')
   .option('--description <text>', 'Inline description of the work')
   .option('--ac <criteria>', 'Inline acceptance criteria (comma-separated)')
+  .option('--blueprint <path>', 'Path to existing blueprint file (JSON or Markdown, skips architect stage)')
   .option('--source-branch <branch>', 'Source branch (default: main)')
   .option('--worktree-path <path>', 'Path to an existing worktree to use')
   .option('--model-architect <model>', 'Override model for architect stage')
@@ -1814,6 +1815,7 @@ pipelineCmd
       title,
       description,
       ac,
+      blueprint,
       sourceBranch,
       worktreePath,
       modelArchitect,
@@ -1917,6 +1919,9 @@ pipelineCmd
     if (acceptanceCriteria.length > 0) {
       console.log(`  Acceptance criteria: ${acceptanceCriteria.length} item(s)`)
     }
+    if (blueprint) {
+      console.log(`  Blueprint: ${blueprint} (will import)`)
+    }
 
     try {
       // Create the pipeline run
@@ -1933,19 +1938,39 @@ pipelineCmd
 
       console.log(`\nPipeline created: ${run.id}`)
       console.log(`  State dir: ${getPipelineDir(run.id)}`)
-      console.log(`\nStarting architect stage...`)
 
-      // Execute the architect stage
-      run = await executeArchitectStage(run, {
-        modelOverride: modelArchitect,
-      })
+      // If blueprint provided, import it; otherwise run architect stage
+      if (blueprint) {
+        const { loadBlueprintFromFile, importExistingBlueprint } = await import('../pipeline/index.js')
+        const resolvedBlueprintPath = resolve(blueprint)
 
-      if (run.state === 'error') {
-        console.error(`\nArchitect stage failed: ${run.error}`)
-        process.exit(1)
+        console.log(`\nLoading blueprint from: ${resolvedBlueprintPath}`)
+
+        const blueprintData = await loadBlueprintFromFile(resolvedBlueprintPath)
+        run = await importExistingBlueprint(run, blueprintData)
+
+        if (run.state === 'error') {
+          console.error(`\nBlueprint import failed: ${run.error}`)
+          process.exit(1)
+        }
+
+        console.log(`\nBlueprint imported successfully.`)
+      } else {
+        console.log(`\nStarting architect stage...`)
+
+        // Execute the architect stage
+        run = await executeArchitectStage(run, {
+          modelOverride: modelArchitect,
+        })
+
+        if (run.state === 'error') {
+          console.error(`\nArchitect stage failed: ${run.error}`)
+          process.exit(1)
+        }
+
+        console.log(`\nArchitect stage completed successfully.`)
       }
 
-      console.log(`\nArchitect stage completed successfully.`)
       console.log(`  State: ${run.state}`)
       if (run.blueprintPath) {
         console.log(`  Blueprint: ${run.blueprintPath}`)

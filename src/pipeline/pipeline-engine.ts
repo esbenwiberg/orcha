@@ -537,6 +537,57 @@ export async function executeArchitectStage(
   return run
 }
 
+/**
+ * Import an existing blueprint and skip the architect stage.
+ *
+ * Saves the provided blueprint and transitions directly to 'checkpoint:arch'.
+ * Use this when you have a pre-existing blueprint (e.g., from /blueprint skill).
+ *
+ * Returns the updated PipelineRun (which will be in 'checkpoint:arch' on
+ * success, or 'error' on failure).
+ */
+export async function importExistingBlueprint(
+  run: PipelineRun,
+  blueprint: import('./stages/architect.js').BlueprintOutput,
+): Promise<PipelineRun> {
+  const { writeFile } = await import('fs/promises')
+  const { join } = await import('path')
+  const { getBlueprintMilestones } = await import('./types.js')
+
+  const startedAt = new Date().toISOString()
+
+  try {
+    // Save blueprint to disk
+    const pipelineDir = getPipelineDir(run.id)
+    const blueprintPath = join(pipelineDir, 'blueprint.json')
+    await writeFile(blueprintPath, JSON.stringify(blueprint, null, 2), 'utf-8')
+
+    // Record a synthetic stage result (no architect agent actually ran)
+    const completedAt = new Date().toISOString()
+    const milestoneCount = getBlueprintMilestones(blueprint).length
+    const milestoneSuffix = milestoneCount === 1 ? 'milestone' : 'milestones'
+    const stageResult: StageResult = {
+      stage: 'architect',
+      startedAt,
+      completedAt,
+      output: `${blueprint.headline} — ${milestoneCount} ${milestoneSuffix}, ${blueprint.filesToTouch.length} files (imported)`,
+    }
+    run = await recordStageResult(run, stageResult)
+
+    // Update the blueprint path on the run
+    run = { ...run, blueprintPath }
+
+    // Transition directly to checkpoint:arch (skip the architect stage execution)
+    run = await transition(run, 'checkpoint:arch')
+
+    return run
+  } catch (err) {
+    const errorMsg = `Blueprint import failed: ${(err as Error).message}`
+    run = await transitionToError(run, errorMsg)
+    return run
+  }
+}
+
 // ============================================================================
 // Dev Stage Orchestration
 // ============================================================================

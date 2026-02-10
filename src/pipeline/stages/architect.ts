@@ -14,7 +14,7 @@
 
 import { writeFile } from 'fs/promises'
 import { join } from 'path'
-import type { PipelineRun, StageResult, BlueprintOutput } from '../types.js'
+import type { PipelineRun, StageResult, BlueprintOutput, BlueprintMilestone } from '../types.js'
 import { getBlueprintMilestones } from '../types.js'
 import { transition, recordStageResult, transitionToError } from '../pipeline-engine.js'
 import { getPipelineDir } from '../pipeline-store.js'
@@ -118,6 +118,208 @@ export const BLUEPRINT_SCHEMA = {
 
 // Re-export BlueprintOutput from types.ts for backward compatibility
 export type { BlueprintOutput } from '../types.js'
+
+// Export validation function for external use
+export { isValidBlueprint }
+
+// ============================================================================
+// Blueprint Loading from File
+// ============================================================================
+
+/**
+ * Parse a markdown blueprint (like those from /blueprint skill) into BlueprintOutput.
+ *
+ * Expected format:
+ * ```markdown
+ * # Blueprint: {title}
+ *
+ * **Milestones: N**
+ *
+ * ## Goal
+ * {description}
+ *
+ * ## Acceptance Criteria
+ * - [ ] Item 1
+ * - [ ] Item 2
+ *
+ * ## Milestones
+ *
+ * ### M1: {milestone title}
+ *
+ * **Intent:** {short description}
+ *
+ * **Key files:** {files}
+ *
+ * **Details:**
+ * {implementation details}
+ * ```
+ */
+function parseMarkdownBlueprint(markdown: string): BlueprintOutput {
+  const lines = markdown.split('\n')
+
+  // Extract title
+  const titleMatch = markdown.match(/^#\s+Blueprint:\s+(.+)$/m)
+  const headline = titleMatch ? titleMatch[1].trim() : 'Untitled Blueprint'
+
+  // Extract milestone count
+  const milestoneCountMatch = markdown.match(/\*\*Milestones:\s+(\d+)\*\*/i)
+  const milestoneCount = milestoneCountMatch ? parseInt(milestoneCountMatch[1]) : 0
+
+  // Extract Goal section
+  const goalMatch = markdown.match(/##\s+Goal\s*\n+([\s\S]*?)(?=\n##|\n###|$)/i)
+  const goal = goalMatch ? goalMatch[1].trim() : ''
+
+  // Extract Acceptance Criteria
+  const acMatch = markdown.match(/##\s+Acceptance Criteria\s*\n+([\s\S]*?)(?=\n##|\n###|$)/i)
+  const acceptanceCriteria: string[] = []
+  if (acMatch) {
+    const acLines = acMatch[1].split('\n')
+    for (const line of acLines) {
+      const itemMatch = line.match(/^-\s+\[.\]\s+(.+)$/)
+      if (itemMatch) {
+        acceptanceCriteria.push(itemMatch[1].trim())
+      }
+    }
+  }
+
+  // Extract files to touch from Architecture or Key files sections
+  const filesToTouch: string[] = []
+  const keyFilesMatches = markdown.matchAll(/\*\*Key files:\*\*\s+(.+)/gi)
+  for (const match of keyFilesMatches) {
+    const files = match[1].split(',').map(f => f.trim().replace(/`/g, ''))
+    filesToTouch.push(...files)
+  }
+
+  // Extract risks from Risks section if present
+  const risksMatch = markdown.match(/##\s+Risks\s*(?:&\s*Probes)?\s*\n+([\s\S]*?)(?=\n##|\n###|$)/i)
+  const risks: string[] = []
+  if (risksMatch) {
+    const riskLines = risksMatch[1].split('\n')
+    for (const line of riskLines) {
+      const itemMatch = line.match(/^[-*]\s+(.+)$/)
+      if (itemMatch) {
+        risks.push(itemMatch[1].trim())
+      }
+    }
+  }
+  if (risks.length === 0) {
+    risks.push('No risks identified')
+  }
+
+  // Extract test strategy from Architecture or details
+  const testStrategyMatch = markdown.match(/\*\*Verification:\*\*\s*\n+```[\s\S]*?```/i) ||
+                           markdown.match(/##\s+Test(?:ing)?\s+Strategy\s*\n+([\s\S]*?)(?=\n##|\n###|$)/i)
+  const testStrategy = testStrategyMatch ? 'See milestone verification steps' : 'Manual testing and review'
+
+  // Extract milestones
+  const milestones: BlueprintMilestone[] = []
+  const milestoneRegex = /###\s+M\d+:\s+(.+?)\s*\n+([\s\S]*?)(?=\n###\s+M\d+:|\n##\s+(?!#)|$)/gi
+
+  let milestoneMatch
+  while ((milestoneMatch = milestoneRegex.exec(markdown)) !== null) {
+    const title = milestoneMatch[1].trim()
+    const body = milestoneMatch[2].trim()
+
+    // Extract intent
+    const intentMatch = body.match(/\*\*Intent:\*\*\s+(.+?)(?:\n|$)/i)
+    const intent = intentMatch ? intentMatch[1].trim() : ''
+
+    // Extract key files for this milestone
+    const keyFilesMatch = body.match(/\*\*Key files:\*\*\s+(.+?)(?:\n|$)/i)
+    const milestoneFiles: string[] = []
+    if (keyFilesMatch) {
+      const files = keyFilesMatch[1].split(',').map(f => f.trim().replace(/`/g, ''))
+      milestoneFiles.push(...files)
+    }
+
+    // Extract details
+    const detailsMatch = body.match(/\*\*Details:\*\*\s*\n+([\s\S]*?)(?=\n\*\*Verification:|\n###|$)/i)
+    const details = detailsMatch ? detailsMatch[1].trim() : body
+
+    milestones.push({
+      description: intent || title,
+      details: details || `Implement: ${title}`,
+      ...(milestoneFiles.length > 0 ? { filesToTouch: milestoneFiles } : {}),
+    })
+  }
+
+  // If no milestones found with M1/M2 format, try generic ### headers
+  if (milestones.length === 0) {
+    const genericMilestoneRegex = /###\s+(.+?)\s*\n+([\s\S]*?)(?=\n###|\n##\s+(?!#)|$)/gi
+    let genericMatch
+    while ((genericMatch = genericMilestoneRegex.exec(markdown)) !== null) {
+      const title = genericMatch[1].trim()
+      const body = genericMatch[2].trim()
+
+      if (body.length > 0) {
+        milestones.push({
+          description: title,
+          details: body,
+        })
+      }
+    }
+  }
+
+  // Deduplicate files
+  const uniqueFiles = [...new Set(filesToTouch)]
+
+  const shortDescription = `${goal.split('\n')[0]}. ${milestoneCount || milestones.length} milestones.`
+
+  return {
+    headline,
+    shortDescription,
+    approach: goal,
+    filesToTouch: uniqueFiles,
+    risks,
+    testStrategy,
+    milestones,
+  }
+}
+
+/**
+ * Load and validate a blueprint from a file (supports JSON or Markdown).
+ *
+ * @param blueprintPath - Absolute path to the blueprint file (.json or .md)
+ * @returns Validated BlueprintOutput object
+ * @throws Error if file cannot be read or blueprint is invalid
+ */
+export async function loadBlueprintFromFile(blueprintPath: string): Promise<BlueprintOutput> {
+  const { readFile } = await import('fs/promises')
+  const { extname } = await import('path')
+
+  try {
+    const content = await readFile(blueprintPath, 'utf-8')
+    const ext = extname(blueprintPath).toLowerCase()
+
+    let parsed: BlueprintOutput
+
+    if (ext === '.md' || ext === '.markdown') {
+      // Parse markdown blueprint
+      parsed = parseMarkdownBlueprint(content)
+    } else if (ext === '.json') {
+      // Parse JSON blueprint
+      parsed = JSON.parse(content)
+    } else {
+      // Try JSON first, fall back to markdown
+      try {
+        parsed = JSON.parse(content)
+      } catch {
+        parsed = parseMarkdownBlueprint(content)
+      }
+    }
+
+    if (!isValidBlueprint(parsed)) {
+      throw new Error('Blueprint validation failed: missing required fields or invalid structure')
+    }
+
+    return parsed as BlueprintOutput
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new Error(`Blueprint file contains invalid JSON: ${err.message}`)
+    }
+    throw err
+  }
+}
 
 // ============================================================================
 // Architect Stage Runner
