@@ -244,6 +244,15 @@ function parseArchitectOutput(stdout: string): BlueprintOutput | null {
   return parseStructuredOutput(stdout, isValidBlueprint)
 }
 
+/**
+ * Validate that a milestone/step object has the required fields.
+ */
+function isValidMilestoneObject(obj: unknown): boolean {
+  if (typeof obj !== 'object' || obj === null) return false
+  const m = obj as Record<string, unknown>
+  return typeof m.description === 'string' && typeof m.details === 'string'
+}
+
 function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
   if (typeof obj !== 'object' || obj === null) return false
   const bp = obj as Record<string, unknown>
@@ -260,10 +269,14 @@ function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
   if (!hasRequiredFields) return false
 
   // Support both 'milestones' (preferred) and 'steps' (backward compat)
-  // Exactly one of these must be present AND non-empty to avoid silent skip in dev stage
-  const hasMilestones = Array.isArray(bp.milestones) && bp.milestones.length > 0
-  const hasSteps = Array.isArray(bp.steps) && bp.steps.length > 0
+  // Exactly one of these must be present AND non-empty with valid milestone objects
+  const hasMilestones = Array.isArray(bp.milestones) &&
+    bp.milestones.length > 0 &&
+    bp.milestones.every(isValidMilestoneObject)
+  const hasSteps = Array.isArray(bp.steps) &&
+    bp.steps.length > 0 &&
+    bp.steps.every(isValidMilestoneObject)
 
-  // At least one non-empty array must exist (matches anyOf in schema)
+  // At least one non-empty array with valid milestone objects must exist
   return hasMilestones || hasSteps
 }
