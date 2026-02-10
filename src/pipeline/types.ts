@@ -59,6 +59,7 @@ export type ModelStageKey =
   | 'dev'
   | 'gate'
   | 'gate:adversary'
+  | 'gate:build-runner'
   | 'gate:test-runner'
   | 'gate:lint-runner'
   | 'gate:security'
