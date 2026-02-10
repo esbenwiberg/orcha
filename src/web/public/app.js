@@ -1510,6 +1510,102 @@ function closeTemplateEditor() {
 }
 
 /**
+ * Clear error panel and Monaco error markers
+ */
+function clearValidationErrors() {
+  // Remove error panel
+  const errorPanel = document.querySelector('.template-error-panel');
+  if (errorPanel) {
+    errorPanel.remove();
+  }
+
+  // Clear Monaco error markers
+  if (state.monacoEditor && typeof monaco !== 'undefined') {
+    const model = state.monacoEditor.getModel();
+    if (model) {
+      monaco.editor.setModelMarkers(model, 'validation', []);
+    }
+  }
+}
+
+/**
+ * Display validation errors in UI with Monaco markers
+ */
+function displayValidationErrors(errorMessage) {
+  // Clear any existing errors
+  clearValidationErrors();
+
+  // Parse error message to extract line numbers if present
+  const lineNumberMatch = errorMessage.match(/line (\d+)/i);
+  const lineNumber = lineNumberMatch ? parseInt(lineNumberMatch[1], 10) : null;
+
+  // Create error panel HTML
+  const errorPanel = document.createElement('div');
+  errorPanel.className = 'template-error-panel';
+  errorPanel.innerHTML = `
+    <div class="template-error-header">
+      <span class="template-error-icon">❌</span>
+      <span class="template-error-title">Validation Errors</span>
+      <button class="template-error-dismiss" onclick="clearValidationErrors()">×</button>
+    </div>
+    <div class="template-error-list">
+      <div class="template-error-item">${escapeHtml(errorMessage)}</div>
+    </div>
+  `;
+
+  // Insert error panel between header and Monaco editor
+  const editorContainer = document.getElementById('monaco-editor-container');
+  if (editorContainer) {
+    editorContainer.parentNode.insertBefore(errorPanel, editorContainer);
+  }
+
+  // Add Monaco error marker if line number detected
+  if (state.monacoEditor && lineNumber && typeof monaco !== 'undefined') {
+    const model = state.monacoEditor.getModel();
+    if (model) {
+      monaco.editor.setModelMarkers(model, 'validation', [
+        {
+          startLineNumber: lineNumber,
+          startColumn: 1,
+          endLineNumber: lineNumber,
+          endColumn: model.getLineMaxColumn(lineNumber),
+          message: errorMessage,
+          severity: monaco.MarkerSeverity.Error
+        }
+      ]);
+    }
+  }
+}
+
+/**
+ * Validate template content and display errors
+ */
+async function validateAndDisplayErrors(templateName, content) {
+  try {
+    const response = await fetch(`/api/prompts/${encodeURIComponent(templateName)}/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content })
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      const errorMessage = data.error || 'Validation failed';
+      displayValidationErrors(errorMessage);
+      return false;
+    }
+
+    // Validation passed - clear any existing errors
+    clearValidationErrors();
+    return true;
+  } catch (err) {
+    console.error('Validation request failed:', err);
+    displayValidationErrors('Unable to connect to server. Please check your connection and try again.');
+    return false;
+  }
+}
+
+/**
  * Save template changes
  */
 async function saveTemplate(templateName) {
@@ -1525,10 +1621,22 @@ async function saveTemplate(templateName) {
   const originalText = saveBtn ? saveBtn.textContent : 'Save';
   if (saveBtn) {
     saveBtn.disabled = true;
-    saveBtn.textContent = 'Saving...';
+    saveBtn.textContent = 'Validating...';
   }
 
   try {
+    // Validate before saving
+    const isValid = await validateAndDisplayErrors(templateName, content);
+    if (!isValid) {
+      showToast('Please fix validation errors before saving', 'error');
+      return;
+    }
+
+    // Update button state for saving
+    if (saveBtn) {
+      saveBtn.textContent = 'Saving...';
+    }
+
     const response = await fetch(`/api/prompts/${encodeURIComponent(templateName)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'text/plain' },
@@ -1540,6 +1648,8 @@ async function saveTemplate(templateName) {
       throw new Error(error || response.statusText);
     }
 
+    // Show success with animation
+    showSaveSuccessIndicator();
     showToast('Template saved successfully', 'success');
 
     // Update original content to reflect saved state
@@ -1571,6 +1681,7 @@ async function saveTemplate(templateName) {
       .catch(err => console.error('Failed to refresh template list:', err));
   } catch (err) {
     console.error('Failed to save template:', err);
+    displayValidationErrors(err.message);
     showToast('Save failed: ' + err.message, 'error');
   } finally {
     // Restore button state
@@ -1579,6 +1690,22 @@ async function saveTemplate(templateName) {
       saveBtn.textContent = originalText;
     }
   }
+}
+
+/**
+ * Show green checkmark animation on successful save
+ */
+function showSaveSuccessIndicator() {
+  const saveBtn = document.querySelector('.template-editor-btn-primary');
+  if (!saveBtn) return;
+
+  // Add success class for animation
+  saveBtn.classList.add('save-success');
+
+  // Remove after animation completes
+  setTimeout(() => {
+    saveBtn.classList.remove('save-success');
+  }, 2000);
 }
 
 /**
