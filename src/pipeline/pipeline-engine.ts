@@ -25,7 +25,7 @@
 
 import type { PipelineRun, PipelineState, PipelineConfig, StageResult } from './types.js'
 import { ACTIVE_STATES, TERMINAL_STATES, SOFT_TERMINAL_STATES } from './types.js'
-import { savePipelineRun, generatePipelineId } from './pipeline-store.js'
+import { savePipelineRun, generatePipelineId, getPipelineDir } from './pipeline-store.js'
 import { getHeadSha } from './git-utils.js'
 import { WorktreeManager } from '../core/worktree-manager.js'
 import { recordPipelineOutcome } from './learning-store.js'
@@ -41,6 +41,10 @@ import { runFixLoopStage } from './stages/fix-loop.js'
 import type { FixLoopOptions } from './stages/fix-loop.js'
 import { runShipStage } from './stages/ship.js'
 import type { ShipOptions } from './stages/ship.js'
+import { detectTechStacks } from './tech-scanner.js'
+import { installDependencies } from './worktree/dependency-installer.js'
+import { writeFile, mkdir } from 'fs/promises'
+import { join } from 'path'
 
 // ============================================================================
 // Transition Table
@@ -501,6 +505,10 @@ export async function createPipelineRun(
     updatedAt: now,
   }
   await savePipelineRun(run)
+
+  // Install dependencies after worktree creation
+  await installWorktreeDependencies(run)
+
   return run
 }
 
@@ -631,4 +639,76 @@ export async function executeShipStage(
   run = await runShipStage(run, opts)
 
   return run
+}
+
+// ============================================================================
+// Dependency Installation
+// ============================================================================
+
+/**
+ * Install dependencies for detected tech stacks in the worktree.
+ * Best-effort: logs failures but doesn't fail the pipeline creation.
+ * Failed techs are tracked in pipeline.dependencyFailures.
+ */
+async function installWorktreeDependencies(run: PipelineRun): Promise<void> {
+  try {
+    // Detect tech stacks
+    const techStacks = detectTechStacks(run.worktreePath)
+
+    if (techStacks.length === 0) {
+      // No tech stacks detected — skip dependency installation
+      await appendProgress(run.id, {
+        type: 'info',
+        title: 'No tech stacks detected, skipping dependency installation',
+      }).catch(() => { /* best-effort */ })
+      return
+    }
+
+    // Emit progress for dependency installation start
+    await appendProgress(run.id, {
+      type: 'info',
+      title: `Installing dependencies for ${techStacks.length} tech stack(s)`,
+      data: { techStacks: techStacks.map((s) => s.type) },
+    }).catch(() => { /* best-effort */ })
+
+    // Install dependencies
+    const result = await installDependencies(run.worktreePath, techStacks)
+
+    // Write log file
+    const logsDir = join(getPipelineDir(run.id), 'logs')
+    await mkdir(logsDir, { recursive: true })
+    const logPath = join(logsDir, 'dependency-install.log')
+    await writeFile(logPath, result.output, 'utf-8')
+
+    if (result.success) {
+      // All installations succeeded
+      await appendProgress(run.id, {
+        type: 'info',
+        title: 'Dependencies installed successfully',
+      }).catch(() => { /* best-effort */ })
+    } else {
+      // Some installations failed — log warning and track failed techs
+      await appendProgress(run.id, {
+        type: 'info',
+        title: `Dependency installation failed for: ${result.failedTechs.join(', ')}`,
+        detail: result.errors.join('; '),
+      }).catch(() => { /* best-effort */ })
+
+      // Update pipeline with failed techs
+      const updated: PipelineRun = {
+        ...run,
+        dependencyFailures: result.failedTechs,
+        updatedAt: new Date().toISOString(),
+      }
+      await savePipelineRun(updated)
+    }
+  } catch (err) {
+    // Installation failed catastrophically — log but don't fail pipeline creation
+    const errorMsg = (err as Error).message
+    await appendProgress(run.id, {
+      type: 'info',
+      title: 'Dependency installation error',
+      detail: errorMsg,
+    }).catch(() => { /* best-effort */ })
+  }
 }

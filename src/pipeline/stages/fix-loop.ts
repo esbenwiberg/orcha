@@ -23,6 +23,8 @@ import { buildFixLoopPrompt } from '../prompt-builder.js'
 import type { WorkItemContext, CodebaseContext } from '../prompt-builder.js'
 import { getDiff } from '../git-utils.js'
 import { appendProgress } from '../progress.js'
+import { CircuitBreaker } from '../fix-loop/circuit-breaker.js'
+import { savePipelineRun } from '../pipeline-store.js'
 
 // ============================================================================
 // Types
@@ -55,6 +57,51 @@ export async function runFixLoopStage(
   const maxFixLoops = run.config.maxFixLoops ?? 3
 
   try {
+    // Initialize circuit breaker from existing state (if any)
+    const circuitBreaker = new CircuitBreaker(run.circuitBreakerState)
+
+    // Compute failure signature from current gate results
+    const failureSignature = circuitBreaker.computeSignature(run.gateResults)
+
+    // Check if this is a repeated failure (before incrementing count)
+    if (circuitBreaker.isRepeatedFailure(failureSignature)) {
+      // Circuit breaker has tripped — escalate immediately
+      await appendProgress(run.id, {
+        type: 'info',
+        stage: 'fix-loop',
+        title: 'Circuit breaker triggered: repeated failure pattern detected',
+        detail: failureSignature.description,
+      }).catch(() => { /* best-effort */ })
+
+      run = await transition(run, 'escalated')
+      return run
+    }
+
+    // Record this failure (increments count)
+    const shouldEscalate = circuitBreaker.recordFailure(failureSignature)
+
+    // Persist circuit breaker state
+    const updatedRun: PipelineRun = {
+      ...run,
+      circuitBreakerState: circuitBreaker.getState(),
+      updatedAt: new Date().toISOString(),
+    }
+    await savePipelineRun(updatedRun)
+    run = updatedRun
+
+    // Check if we should escalate due to circuit breaker
+    if (shouldEscalate) {
+      await appendProgress(run.id, {
+        type: 'info',
+        stage: 'fix-loop',
+        title: 'Circuit breaker triggered: escalating due to repeated failures',
+        detail: failureSignature.description,
+      }).catch(() => { /* best-effort */ })
+
+      run = await transition(run, 'escalated')
+      return run
+    }
+
     // Check if we've exceeded max fix loops
     if (run.fixLoopCount >= maxFixLoops) {
       run = await transition(run, 'escalated')

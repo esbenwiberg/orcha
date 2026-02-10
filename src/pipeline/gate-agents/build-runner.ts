@@ -26,14 +26,17 @@ import type { TechStack } from '../tech-scanner.js'
  * When techStacks is provided and non-empty, runs the build command for each
  * stack that has one configured. When not provided, falls back to legacy
  * package.json detection for backward compatibility.
+ *
+ * Skips stacks that failed dependency installation (tracked in dependencyFailures).
  */
 export async function runBuildRunner(
   worktreePath: string,
   techStacks?: TechStack[],
+  dependencyFailures?: string[],
 ): Promise<GateResult> {
   // Multi-tech path: run per-stack builds
   if (techStacks && techStacks.length > 0) {
-    return runMultiStackBuilds(worktreePath, techStacks)
+    return runMultiStackBuilds(worktreePath, techStacks, dependencyFailures)
   }
 
   // Legacy path: detect from package.json (backward compat)
@@ -47,13 +50,31 @@ export async function runBuildRunner(
 /**
  * Run builds for each detected tech stack. Collects per-stack results and
  * aggregates the verdict: any fail → 'fail', all skip → 'skip', else 'pass'.
+ *
+ * Skips stacks that failed dependency installation.
  */
-function runMultiStackBuilds(worktreePath: string, techStacks: TechStack[]): GateResult {
+function runMultiStackBuilds(
+  worktreePath: string,
+  techStacks: TechStack[],
+  dependencyFailures?: string[],
+): GateResult {
   const timestamp = new Date().toISOString()
   const stackResults: StackRunnerResult[] = []
+  const failedDeps = new Set(dependencyFailures ?? [])
 
   for (const stack of techStacks) {
     const relPath = relative(worktreePath, stack.absolutePath) || '.'
+
+    // Skip if dependency installation failed for this tech
+    if (failedDeps.has(stack.type)) {
+      stackResults.push({
+        type: stack.type,
+        path: relPath,
+        status: 'skip',
+        output: 'Skipped: dependency installation failed',
+      })
+      continue
+    }
 
     if (!stack.commands.build) {
       stackResults.push({

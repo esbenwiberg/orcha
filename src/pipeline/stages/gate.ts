@@ -111,9 +111,9 @@ async function runSingleGateStage(
     const skip = new Set(run.skipChecks ?? [])
 
     const [testResult, lintResult, buildResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
-      skip.has('test') ? makeSkippedResult('test') : runTestRunner(run.worktreePath, techStacks),
-      skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(run.worktreePath, run.sourceBranch, run.baseCommit, techStacks),
-      skip.has('build') ? makeSkippedResult('build') : runBuildRunner(run.worktreePath, techStacks),
+      skip.has('test') ? makeSkippedResult('test') : runTestRunner(run.worktreePath, techStacks, run.dependencyFailures),
+      skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(run.worktreePath, run.sourceBranch, run.baseCommit, techStacks, run.dependencyFailures),
+      skip.has('build') ? makeSkippedResult('build') : runBuildRunner(run.worktreePath, techStacks, run.dependencyFailures),
       skip.has('ac-validator') ? makeSkippedResult('ac-validator') : runAcValidator(run, agentOpts),
       skip.has('adversary') ? makeSkippedResult('adversary') : runAdversary(run, agentOpts),
       skip.has('security') ? makeSkippedResult('security') : runSecurityReview(run, agentOpts),
@@ -400,9 +400,9 @@ async function evaluateCompetitor(
   const skip = new Set(run.skipChecks ?? [])
 
   const [testResult, lintResult, buildResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
-    skip.has('test') ? makeSkippedResult('test') : runTestRunner(competitor.worktreePath, techStacks),
-    skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(competitor.worktreePath, run.sourceBranch, run.baseCommit, techStacks),
-    skip.has('build') ? makeSkippedResult('build') : runBuildRunner(competitor.worktreePath, techStacks),
+    skip.has('test') ? makeSkippedResult('test') : runTestRunner(competitor.worktreePath, techStacks, run.dependencyFailures),
+    skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(competitor.worktreePath, run.sourceBranch, run.baseCommit, techStacks, run.dependencyFailures),
+    skip.has('build') ? makeSkippedResult('build') : runBuildRunner(competitor.worktreePath, techStacks, run.dependencyFailures),
     skip.has('ac-validator') ? makeSkippedResult('ac-validator') : runAcValidator(competitorRun, agentOpts),
     skip.has('adversary') ? makeSkippedResult('adversary') : runAdversary(competitorRun, agentOpts),
     skip.has('security') ? makeSkippedResult('security') : runSecurityReview(competitorRun, agentOpts),
