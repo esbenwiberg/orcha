@@ -168,6 +168,83 @@ async function parseYamlTemplate(path: string): Promise<TemplateData> {
 }
 
 // ============================================================================
+// Template Discovery
+// ============================================================================
+
+/**
+ * Template metadata for listing.
+ */
+export interface TemplateInfo {
+  name: string
+  path: string
+  hasCustom: boolean
+  description: string
+}
+
+/**
+ * List all available templates in the defaults directory.
+ *
+ * Scans ~/.orcha/prompts/defaults/ for *.yaml files and checks if
+ * corresponding custom overrides exist in ~/.orcha/prompts/custom/.
+ *
+ * @returns Array of template metadata
+ */
+export async function listTemplates(): Promise<TemplateInfo[]> {
+  const { readdir } = await import('node:fs/promises')
+  const templates: TemplateInfo[] = []
+
+  try {
+    // Scan defaults directory
+    const defaultFiles = await readdir(DEFAULT_PROMPTS_DIR, { withFileTypes: true, recursive: true })
+
+    for (const entry of defaultFiles) {
+      // Only process .yaml files
+      if (!entry.isFile() || !entry.name.endsWith('.yaml')) {
+        continue
+      }
+
+      // Build relative path from defaults directory
+      // entry.path is the directory containing the file
+      const relativeDir = entry.path.replace(DEFAULT_PROMPTS_DIR, '').replace(/^\//, '')
+      const relativePath = relativeDir ? join(relativeDir, entry.name) : entry.name
+
+      // Remove .yaml extension to get template name
+      const templateName = relativePath.replace(/\.yaml$/, '')
+
+      // Check if custom override exists
+      const customPath = join(CUSTOM_PROMPTS_DIR, relativePath)
+      const hasCustom = await exists(customPath)
+
+      // Load template to get description
+      let description = ''
+      try {
+        const defaultPath = join(DEFAULT_PROMPTS_DIR, relativePath)
+        const template = await parseYamlTemplate(defaultPath)
+        description = template.description
+      } catch {
+        // If we can't parse it, just skip the description
+        description = '(invalid template)'
+      }
+
+      templates.push({
+        name: templateName,
+        path: join(DEFAULT_PROMPTS_DIR, relativePath),
+        hasCustom,
+        description,
+      })
+    }
+
+    return templates
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Defaults directory doesn't exist - return empty list
+      return []
+    }
+    throw new Error(`Failed to list templates: ${(err as Error).message}`)
+  }
+}
+
+// ============================================================================
 // Template Loading
 // ============================================================================
 

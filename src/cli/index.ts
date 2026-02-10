@@ -68,6 +68,7 @@ import {
 
 import { rm } from 'fs/promises'
 import { existsSync } from 'fs'
+import { listPrompts, showPrompt } from './prompts.js'
 
 const program = new Command()
 
@@ -1680,6 +1681,29 @@ presetCmd
       console.error('Error:', (err as Error).message)
       process.exit(1)
     }
+  })
+
+// =============================================================================
+// orcha prompts (parent command)
+// =============================================================================
+const promptsCmd = program
+  .command('prompts')
+  .description('View and manage pipeline prompt templates')
+
+// orcha prompts list
+promptsCmd
+  .command('list')
+  .description('List all available prompt templates')
+  .action(async () => {
+    await listPrompts()
+  })
+
+// orcha prompts show
+promptsCmd
+  .command('show <name>')
+  .description('Show details of a prompt template')
+  .action(async (name: string) => {
+    await showPrompt(name)
   })
 
 // =============================================================================
