@@ -300,7 +300,6 @@ function switchTab(tab) {
   const plContainer = document.getElementById('pipeline-list-container')
   const sessionInfo = document.getElementById('session-info')
   const keyToolbar = document.getElementById('key-toolbar')
-  const sessionDots = document.getElementById('session-dots')
 
   // Update tab buttons
   document.querySelectorAll('.nav-tab').forEach(btn => {
@@ -312,7 +311,6 @@ function switchTab(tab) {
     plContainer.classList.add('hidden')
     sessionInfo.style.display = ''
     keyToolbar.style.display = ''
-    sessionDots.style.display = ''
 
     // Reconnect terminal if we have sessions
     if (state.sessions.length > 0) {
@@ -329,7 +327,6 @@ function switchTab(tab) {
     plContainer.classList.remove('hidden')
     sessionInfo.style.display = 'none'
     keyToolbar.style.display = 'none'
-    sessionDots.style.display = 'none'
 
     // Render pipeline list
     renderPipelineList()
@@ -369,10 +366,16 @@ function renderSessionInfo(session) {
       <div class="status-dot ${st}"></div>
       <span class="info-name">${escapeHtml(name)}</span>
       <span class="card-state ${st}">${st}</span>
+      <button class="info-selector-btn" title="Switch session">&#9776;</button>
       <button class="info-menu-btn" title="Session actions">&#8942;</button>
     </div>
     ${session.message ? `<div class="info-message">${escapeHtml(session.message)}</div>` : ''}
   `
+
+  infoEl.querySelector('.info-selector-btn').addEventListener('click', (e) => {
+    e.stopPropagation()
+    openSessionSelector()
+  })
 
   infoEl.querySelector('.info-menu-btn').addEventListener('click', (e) => {
     e.stopPropagation()
@@ -524,25 +527,6 @@ function renderEmpty() {
   document.getElementById('session-info').innerHTML = ''
 }
 
-function renderDots(sessions) {
-  const dotsEl = document.getElementById('session-dots')
-  dotsEl.innerHTML = ''
-
-  sessions.forEach((session, i) => {
-    const dot = document.createElement('button')
-    dot.className = `nav-dot ${session.state || 'idle'}`
-    if (i === state.activeIndex) dot.classList.add('active')
-    dot.title = session.customName || session.id
-    dot.addEventListener('click', () => {
-      if (state.activeIndex !== i) {
-        state.activeIndex = i
-        switchToSession(sessions[i])
-        renderDots(sessions)
-      }
-    })
-    dotsEl.appendChild(dot)
-  })
-}
 
 function switchToSession(session) {
   renderSessionInfo(session)
@@ -617,53 +601,57 @@ async function toggleNotifications() {
 }
 
 // ============================================================================
-// Swipe navigation
+// Session Selector
 // ============================================================================
 
-function setupSwipe() {
-  const targets = [
-    document.getElementById('session-info'),
-    document.getElementById('bottom-nav'),
-  ]
-  let startX = 0, startTime = 0, swiping = false
+function openSessionSelector() {
+  if (state.sessions.length <= 1) return
 
-  function onTouchStart(e) {
-    if (state.sessions.length <= 1) return
-    if (state.activeTab !== 'sessions') return
-    startX = e.touches[0].clientX
-    startTime = Date.now()
-    swiping = true
-  }
+  const sheet = document.getElementById('session-selector-sheet')
+  const listEl = document.getElementById('session-list')
 
-  function onTouchEnd(e) {
-    if (!swiping) return
-    swiping = false
+  // Render session list
+  listEl.innerHTML = ''
+  state.sessions.forEach((session, index) => {
+    const name = session.customName || session.id
+    const st = session.state || 'idle'
+    const branch = session.branch || 'main'
+    const isActive = index === state.activeIndex
 
-    const dx = e.changedTouches[0].clientX - startX
-    const dt = Date.now() - startTime
-    const velocity = Math.abs(dx) / dt
+    const item = document.createElement('button')
+    item.className = 'session-list-item' + (isActive ? ' active' : '')
+    item.innerHTML = `
+      <div class="status-dot ${st}"></div>
+      <div class="session-item-info">
+        <div class="session-item-name">${escapeHtml(name)}</div>
+        <div class="session-item-meta">${escapeHtml(branch)} &middot; ${st}</div>
+      </div>
+      <div class="session-item-check">&#10003;</div>
+    `
 
-    if (Math.abs(dx) > 50 && velocity > 0.3) {
-      let newIndex = state.activeIndex
-      if (dx < 0 && state.activeIndex < state.sessions.length - 1) {
-        newIndex = state.activeIndex + 1
-      } else if (dx > 0 && state.activeIndex > 0) {
-        newIndex = state.activeIndex - 1
+    item.addEventListener('click', () => {
+      if (state.activeIndex !== index) {
+        state.activeIndex = index
+        switchToSession(state.sessions[index])
       }
-      if (newIndex !== state.activeIndex) {
-        state.activeIndex = newIndex
-        switchToSession(state.sessions[state.activeIndex])
-        renderDots(state.sessions)
-      }
-    }
-  }
+      closeSessionSelector()
+    })
 
-  targets.forEach(el => {
-    el.addEventListener('touchstart', onTouchStart, { passive: true })
-    el.addEventListener('touchend', onTouchEnd, { passive: true })
+    listEl.appendChild(item)
   })
 
+  sheet.classList.remove('hidden')
+
+  // Close on backdrop click
+  const backdrop = sheet.querySelector('.sheet-backdrop')
+  backdrop.addEventListener('click', closeSessionSelector, { once: true })
 }
+
+function closeSessionSelector() {
+  const sheet = document.getElementById('session-selector-sheet')
+  sheet.classList.add('hidden')
+}
+
 
 // ============================================================================
 // Key toolbar
@@ -1955,9 +1943,6 @@ async function refresh() {
         renderSessionInfo(activeSession)
       }
 
-      if (changed) {
-        renderDots(sessions)
-      }
     }
   } catch (err) {
     console.error('[Mobile] Refresh failed:', err)
@@ -1969,7 +1954,6 @@ async function init() {
     navigator.serviceWorker.register('/sw.js').catch(() => {})
   }
 
-  setupSwipe()
   setupKeyToolbar()
   setupCreateSheet()
   setupPipelineSheet()
