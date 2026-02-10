@@ -24,12 +24,15 @@ import type { TechStack } from '../tech-scanner.js'
  * Map of allowed build commands to their execFileSync arguments.
  * Only commands in this whitelist can be executed, preventing arbitrary
  * command injection from malicious package.json or project files.
+ *
+ * Security: Object.freeze() makes this immutable at runtime, preventing
+ * prototype pollution attacks that could add malicious commands.
  */
-const ALLOWED_BUILD_COMMANDS: Record<string, { cmd: string; args: string[] }> = {
-  'npm run build': { cmd: 'npm', args: ['run', 'build'] },
-  'dotnet build': { cmd: 'dotnet', args: ['build'] },
-  'python -m build': { cmd: 'python', args: ['-m', 'build'] },
-}
+const ALLOWED_BUILD_COMMANDS: Record<string, { cmd: string; args: string[] }> = Object.freeze({
+  'npm run build': Object.freeze({ cmd: 'npm', args: ['run', 'build'] as string[] }),
+  'dotnet build': Object.freeze({ cmd: 'dotnet', args: ['build'] as string[] }),
+  'python -m build': Object.freeze({ cmd: 'python', args: ['-m', 'build'] as string[] }),
+})
 
 // ============================================================================
 // Build Runner

@@ -343,47 +343,63 @@ export interface MilestoneContext {
  * implements the changes described in it. The project's CLAUDE.md is picked
  * up automatically from the worktree by Claude Code.
  */
-export function buildDevPrompt(
+export async function buildDevPrompt(
   workItem: WorkItemContext,
   codebase: CodebaseContext,
   blueprint: BlueprintContext,
-): PromptParts {
-  const systemPrompt = [
-    'You are a dev agent in the Orcha pipeline.',
-    'Your job is to implement the changes described in the blueprint below.',
-    '',
-    'Guidelines:',
-    '- Follow the blueprint steps precisely.',
-    '- Create and modify only the files listed in filesToTouch.',
-    '- Follow the existing code conventions and patterns in the codebase.',
-    '- Write clean, well-structured code.',
-    '- Do NOT run tests — that is the gate stage\'s job.',
-    '- Do NOT commit your changes — the pipeline handles commits automatically.',
-    '- If the blueprint is ambiguous, make reasonable decisions and note them.',
-    '',
-    '## Blueprint',
-    blueprint.blueprintJson,
-  ].join('\n')
+): Promise<PromptParts> {
+  // Try loading template, fall back to hardcoded prompts on failure
+  try {
+    const template = await loadTemplate('dev')
+    const variables = {
+      workItem,
+      codebase,
+      blueprint,
+    }
+    return compileTemplate(template, variables)
+  } catch (err) {
+    console.warn(
+      `[prompt-builder] Failed to load dev template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+    )
 
-  const acSection = workItem.acceptanceCriteria.length > 0
-    ? ['', '## Acceptance Criteria', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
-    : []
+    // FALLBACK: Original hardcoded implementation
+    const systemPrompt = [
+      'You are a dev agent in the Orcha pipeline.',
+      'Your job is to implement the changes described in the blueprint below.',
+      '',
+      'Guidelines:',
+      '- Follow the blueprint steps precisely.',
+      '- Create and modify only the files listed in filesToTouch.',
+      '- Follow the existing code conventions and patterns in the codebase.',
+      '- Write clean, well-structured code.',
+      '- Do NOT run tests — that is the gate stage\'s job.',
+      '- Do NOT commit your changes — the pipeline handles commits automatically.',
+      '- If the blueprint is ambiguous, make reasonable decisions and note them.',
+      '',
+      '## Blueprint',
+      blueprint.blueprintJson,
+    ].join('\n')
 
-  const userPrompt = [
-    '# Task',
-    workItem.workItemId ? `Work Item: ${workItem.workItemId}` : '',
-    '',
-    '## Description',
-    workItem.description,
-    ...acSection,
-    '',
-    '# Instructions',
-    'Implement the changes described in the blueprint.',
-    'Work through each step in order. Create or modify the listed files.',
-    `Source branch: ${codebase.sourceBranch}`,
-  ].filter((line) => line !== '').join('\n')
+    const acSection = workItem.acceptanceCriteria.length > 0
+      ? ['', '## Acceptance Criteria', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
+      : []
 
-  return { systemPrompt, userPrompt }
+    const userPrompt = [
+      '# Task',
+      workItem.workItemId ? `Work Item: ${workItem.workItemId}` : '',
+      '',
+      '## Description',
+      workItem.description,
+      ...acSection,
+      '',
+      '# Instructions',
+      'Implement the changes described in the blueprint.',
+      'Work through each step in order. Create or modify the listed files.',
+      `Source branch: ${codebase.sourceBranch}`,
+    ].filter((line) => line !== '').join('\n')
+
+    return { systemPrompt, userPrompt }
+  }
 }
 
 /**
@@ -399,70 +415,86 @@ export function buildDevPrompt(
  * - Easier debugging (can resume from a specific milestone)
  * - Clear progress tracking
  */
-export function buildMilestoneDevPrompt(
+export async function buildMilestoneDevPrompt(
   workItem: WorkItemContext,
   codebase: CodebaseContext,
   milestone: MilestoneContext,
-): PromptParts {
-  const milestoneNum = milestone.milestoneIndex + 1
-  const totalNum = milestone.totalMilestones
+): Promise<PromptParts> {
+  // Try loading template, fall back to hardcoded prompts on failure
+  try {
+    const template = await loadTemplate('milestone-dev')
+    const variables = {
+      workItem,
+      codebase,
+      milestone,
+    }
+    return compileTemplate(template, variables)
+  } catch (err) {
+    console.warn(
+      `[prompt-builder] Failed to load milestone-dev template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+    )
 
-  const filesToTouchSection = milestone.milestoneFilesToTouch && milestone.milestoneFilesToTouch.length > 0
-    ? [
+    // FALLBACK: Original hardcoded implementation
+    const milestoneNum = milestone.milestoneIndex + 1
+    const totalNum = milestone.totalMilestones
+
+    const filesToTouchSection = milestone.milestoneFilesToTouch && milestone.milestoneFilesToTouch.length > 0
+      ? [
+        '',
+        '## Files to Touch (this milestone)',
+        milestone.milestoneFilesToTouch.map((f) => `- ${f}`).join('\n'),
+      ]
+      : []
+
+    const systemPrompt = [
+      'You are a dev agent in the Orcha pipeline.',
+      `Your job is to implement the changes described in the blueprint below.`,
       '',
-      '## Files to Touch (this milestone)',
-      milestone.milestoneFilesToTouch.map((f) => `- ${f}`).join('\n'),
-    ]
-    : []
+      `**You are implementing milestone ${milestoneNum} of ${totalNum}.**`,
+      'Previous milestones have already been completed and committed.',
+      'Focus ONLY on the current milestone — do not implement other milestones.',
+      '',
+      'Guidelines:',
+      '- Follow the milestone description and details precisely.',
+      `- This is milestone ${milestoneNum}: "${milestone.milestoneDescription}"`,
+      '- Create and modify only the files needed for THIS milestone.',
+      '- Follow the existing code conventions and patterns in the codebase.',
+      '- Write clean, well-structured code.',
+      '- Do NOT run tests — that is the gate stage\'s job.',
+      '- Do NOT commit your changes — the pipeline handles commits automatically.',
+      '- If the milestone is ambiguous, make reasonable decisions and note them.',
+      ...filesToTouchSection,
+      '',
+      '## Full Blueprint (for reference)',
+      milestone.blueprintJson,
+    ].join('\n')
 
-  const systemPrompt = [
-    'You are a dev agent in the Orcha pipeline.',
-    `Your job is to implement the changes described in the blueprint below.`,
-    '',
-    `**You are implementing milestone ${milestoneNum} of ${totalNum}.**`,
-    'Previous milestones have already been completed and committed.',
-    'Focus ONLY on the current milestone — do not implement other milestones.',
-    '',
-    'Guidelines:',
-    '- Follow the milestone description and details precisely.',
-    `- This is milestone ${milestoneNum}: "${milestone.milestoneDescription}"`,
-    '- Create and modify only the files needed for THIS milestone.',
-    '- Follow the existing code conventions and patterns in the codebase.',
-    '- Write clean, well-structured code.',
-    '- Do NOT run tests — that is the gate stage\'s job.',
-    '- Do NOT commit your changes — the pipeline handles commits automatically.',
-    '- If the milestone is ambiguous, make reasonable decisions and note them.',
-    ...filesToTouchSection,
-    '',
-    '## Full Blueprint (for reference)',
-    milestone.blueprintJson,
-  ].join('\n')
+    const acSection = workItem.acceptanceCriteria.length > 0
+      ? ['', '## Acceptance Criteria (for full task)', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
+      : []
 
-  const acSection = workItem.acceptanceCriteria.length > 0
-    ? ['', '## Acceptance Criteria (for full task)', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
-    : []
+    const userPrompt = [
+      '# Current Milestone',
+      `Milestone ${milestoneNum} of ${totalNum}: ${milestone.milestoneDescription}`,
+      '',
+      '## Details',
+      milestone.milestoneDetails,
+      '',
+      '# Task Context',
+      workItem.workItemId ? `Work Item: ${workItem.workItemId}` : '',
+      '',
+      '## Description',
+      workItem.description,
+      ...acSection,
+      '',
+      '# Instructions',
+      `Implement milestone ${milestoneNum}: "${milestone.milestoneDescription}"`,
+      'Work through the milestone details. Create or modify only the files needed for this milestone.',
+      `Source branch: ${codebase.sourceBranch}`,
+    ].filter((line) => line !== '').join('\n')
 
-  const userPrompt = [
-    '# Current Milestone',
-    `Milestone ${milestoneNum} of ${totalNum}: ${milestone.milestoneDescription}`,
-    '',
-    '## Details',
-    milestone.milestoneDetails,
-    '',
-    '# Task Context',
-    workItem.workItemId ? `Work Item: ${workItem.workItemId}` : '',
-    '',
-    '## Description',
-    workItem.description,
-    ...acSection,
-    '',
-    '# Instructions',
-    `Implement milestone ${milestoneNum}: "${milestone.milestoneDescription}"`,
-    'Work through the milestone details. Create or modify only the files needed for this milestone.',
-    `Source branch: ${codebase.sourceBranch}`,
-  ].filter((line) => line !== '').join('\n')
-
-  return { systemPrompt, userPrompt }
+    return { systemPrompt, userPrompt }
+  }
 }
 
 // ============================================================================

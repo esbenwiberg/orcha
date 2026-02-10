@@ -110,8 +110,12 @@ const SAFE_EXTENSION_RE = /^\.[a-zA-Z0-9]+$/
  * Validate that a filename is safe (no path traversal or absolute paths).
  * Returns true if the filename is safe to use.
  *
- * Security: Rejects paths containing '..' (path traversal) or starting with '/'
- * (absolute paths) that could escape the worktree boundary.
+ * Security: Rejects paths containing:
+ * - '..' (path traversal)
+ * - '/' at start (absolute paths)
+ * - '\' (Windows-style paths that could be traversal on some systems)
+ * - '%' (URL-encoded sequences like %2e%2e)
+ * - null bytes
  */
 function isSafeFilename(filename: string): boolean {
   // Reject absolute paths
@@ -120,6 +124,10 @@ function isSafeFilename(filename: string): boolean {
   if (filename.includes('..')) return false
   // Reject null bytes
   if (filename.includes('\x00')) return false
+  // Reject backslashes (Windows-style paths)
+  if (filename.includes('\\')) return false
+  // Reject URL-encoded sequences (could bypass '..' checks via %2e%2e)
+  if (filename.includes('%')) return false
   return true
 }
 
@@ -139,9 +147,15 @@ function filterSafeFilenames(filenames: string[]): string[] {
 
 /**
  * Validate that an extension is safe for use in shell commands.
- * Throws if the extension doesn't match the safe pattern.
+ * Throws if the extension doesn't match the safe pattern or is too long.
+ *
+ * Security: Length limit prevents memory exhaustion from extremely long strings.
  */
 function assertSafeExtension(ext: string): void {
+  // Limit extension length to prevent memory issues (10 chars like ".typescript" is more than enough)
+  if (ext.length > 10) {
+    throw new Error(`File extension too long: ${ext}`)
+  }
   if (!SAFE_EXTENSION_RE.test(ext)) {
     throw new Error(`Invalid file extension: ${ext}`)
   }

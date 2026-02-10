@@ -205,14 +205,17 @@ export async function runAdversary(
 // ============================================================================
 
 /** Valid tech types for test pattern lookup. */
-const VALID_TECH_TYPES: ReadonlySet<TechStack['type']> = new Set(['node', 'dotnet', 'python'])
+const VALID_TECH_TYPES: ReadonlySet<TechStack['type']> = new Set<TechStack['type']>(['node', 'dotnet', 'python'])
 
-/** Test file patterns as arrays for execFileSync (avoids shell interpolation). */
-const TEST_FILE_PATTERNS: Readonly<Record<TechStack['type'], string[]>> = {
-  node: ['*.test.ts', '*.spec.ts', '*.test.js', '*.spec.js'],
-  dotnet: ['*Tests.cs', '*Test.cs'],
-  python: ['test_*.py', '*_test.py'],
-}
+/**
+ * Test file patterns as arrays for execFileSync (avoids shell interpolation).
+ * Security: Object.freeze() prevents runtime modification via prototype pollution.
+ */
+const TEST_FILE_PATTERNS = Object.freeze({
+  node: Object.freeze(['*.test.ts', '*.spec.ts', '*.test.js', '*.spec.js'] as const),
+  dotnet: Object.freeze(['*Tests.cs', '*Test.cs'] as const),
+  python: Object.freeze(['test_*.py', '*_test.py'] as const),
+}) satisfies Readonly<Record<TechStack['type'], readonly string[]>>
 
 /**
  * Validate techType against whitelist to prevent command injection.

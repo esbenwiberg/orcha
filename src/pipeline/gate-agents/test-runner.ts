@@ -25,12 +25,15 @@ import type { TechStack } from '../tech-scanner.js'
  * Map of allowed test commands to their execFileSync arguments.
  * Only commands in this whitelist can be executed, preventing arbitrary
  * command injection from malicious package.json or project files.
+ *
+ * Security: Object.freeze() makes this immutable at runtime, preventing
+ * prototype pollution attacks that could add malicious commands.
  */
-const ALLOWED_TEST_COMMANDS: Record<string, { cmd: string; args: string[] }> = {
-  'npm test': { cmd: 'npm', args: ['test'] },
-  'dotnet test': { cmd: 'dotnet', args: ['test'] },
-  'pytest': { cmd: 'pytest', args: [] },
-}
+const ALLOWED_TEST_COMMANDS: Record<string, { cmd: string; args: string[] }> = Object.freeze({
+  'npm test': Object.freeze({ cmd: 'npm', args: ['test'] as string[] }),
+  'dotnet test': Object.freeze({ cmd: 'dotnet', args: ['test'] as string[] }),
+  'pytest': Object.freeze({ cmd: 'pytest', args: [] as string[] }),
+})
 
 // ============================================================================
 // Test Runner

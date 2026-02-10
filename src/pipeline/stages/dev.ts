@@ -235,7 +235,7 @@ async function runSingleDevStage(
         milestoneFilesToTouch: milestone.filesToTouch,
       }
 
-      const { systemPrompt, userPrompt } = buildMilestoneDevPrompt(workItem, codebase, milestoneContext)
+      const { systemPrompt, userPrompt } = await buildMilestoneDevPrompt(workItem, codebase, milestoneContext)
 
       // AC #1: Run the milestone with a FRESH Claude session (clean context per milestone)
       // Each milestone gets a unique stageKey which ensures a completely new session is spawned.
@@ -354,7 +354,7 @@ async function runSingleMilestoneDevStage(
   startedAt: string,
 ): Promise<PipelineRun> {
   // Build the dev prompt (full blueprint approach for single milestone)
-  const { systemPrompt, userPrompt } = buildDevPrompt(workItem, codebase, {
+  const { systemPrompt, userPrompt } = await buildDevPrompt(workItem, codebase, {
     blueprintJson,
   })
 
@@ -845,12 +845,12 @@ async function runCompetingAgent(
 
     if (milestoneContext) {
       // Milestone-specific prompt (FRESH context per milestone)
-      const prompts = buildMilestoneDevPrompt(workItem, codebase, milestoneContext)
+      const prompts = await buildMilestoneDevPrompt(workItem, codebase, milestoneContext)
       systemPrompt = prompts.systemPrompt
       userPrompt = prompts.userPrompt
     } else {
       // Full blueprint prompt (single milestone or legacy mode)
-      const prompts = buildDevPrompt(workItem, codebase, { blueprintJson })
+      const prompts = await buildDevPrompt(workItem, codebase, { blueprintJson })
       systemPrompt = prompts.systemPrompt
       userPrompt = prompts.userPrompt
     }

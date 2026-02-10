@@ -301,12 +301,17 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/** Maximum content size to scan for dependencies (1MB). Prevents ReDoS on huge files. */
+const MAX_CONTENT_SIZE = 1024 * 1024
+
 /**
  * Check if a Python dependency name appears in combined project content.
  * Simple substring match — handles pyproject.toml, requirements.txt, setup.py, setup.cfg.
  *
- * Security: Validates dep against a safe pattern and escapes before using in RegExp
- * to prevent regex injection attacks from malformed dependency names.
+ * Security:
+ * - Validates dep against a safe pattern to prevent regex injection
+ * - Limits content size to prevent ReDoS attacks with specially crafted large files
+ * - Escapes dep before using in RegExp for defense-in-depth
  */
 function hasPythonDep(content: string, dep: string): boolean {
   // Validate dep is a reasonable Python package name (alphanumeric, hyphens, underscores)
@@ -315,9 +320,14 @@ function hasPythonDep(content: string, dep: string): boolean {
     return false
   }
 
+  // Limit content size to prevent ReDoS attacks
+  const safeContent = content.length > MAX_CONTENT_SIZE
+    ? content.slice(0, MAX_CONTENT_SIZE)
+    : content
+
   // Match the dep name as a word boundary (avoid partial matches like "ruff" in "scruff")
   // Patterns: "ruff", 'ruff', ruff==, ruff>=, ruff[, ruff\n, ruff (in requirements.txt lines)
   const escapedDep = escapeRegex(dep)
   const pattern = new RegExp(`(?:^|['"\\s,])${escapedDep}(?:['"\\s,>=<!\\[\\]]|$)`, 'm')
-  return pattern.test(content)
+  return pattern.test(safeContent)
 }

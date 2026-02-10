@@ -28,17 +28,31 @@ import { getChangedLintableFiles, getChangedFilesByExtensions } from '../git-uti
 
 /**
  * Validate that a filename is safe for use with lint commands.
- * Rejects filenames with control characters or null bytes that could
- * cause issues even with execFileSync.
+ * Uses a whitelist approach: only allows characters that are safe in all contexts.
  *
- * Security: While execFileSync prevents shell injection, we still validate
- * filenames to avoid edge cases with control characters.
+ * Security: While execFileSync prevents shell injection, we validate filenames
+ * to prevent issues with:
+ * - Control characters
+ * - Quotes and backticks (could cause issues in log parsing or other contexts)
+ * - Semicolons (shell command separators in some edge cases)
+ * - Other potentially problematic characters
+ *
+ * Allowed: alphanumeric, hyphen, underscore, period, forward slash, at-sign, plus
+ * This covers normal file paths like 'src/components/Button.tsx' or '@types/node.d.ts'
  */
-const SAFE_FILENAME_RE = /^[^\x00-\x1f\x7f]+$/
+const SAFE_FILENAME_RE = /^[a-zA-Z0-9_.\-/@+]+$/
 
 function isValidFilename(filename: string): boolean {
-  // Reject filenames with control characters or null bytes
-  return SAFE_FILENAME_RE.test(filename) && !filename.includes('\x00')
+  // Reject empty filenames
+  if (!filename) return false
+  // Reject filenames that are too long (prevent DoS)
+  if (filename.length > 500) return false
+  // Reject path traversal
+  if (filename.includes('..')) return false
+  // Reject absolute paths
+  if (filename.startsWith('/')) return false
+  // Only allow whitelisted characters
+  return SAFE_FILENAME_RE.test(filename)
 }
 
 /**

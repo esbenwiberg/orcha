@@ -123,6 +123,37 @@ async function parseYamlTemplate(path: string): Promise<TemplateData> {
 // ============================================================================
 
 /**
+ * Validate that a template name is safe (no path traversal).
+ * Only allows alphanumeric characters, hyphens, underscores, and forward slashes.
+ *
+ * Security: Prevents path traversal attacks like '../../../etc/passwd'.
+ */
+const SAFE_TEMPLATE_NAME_RE = /^[a-zA-Z0-9_/-]+$/
+
+function assertSafeTemplateName(templateName: string): void {
+  // Reject empty names
+  if (!templateName) {
+    throw new Error('Template name cannot be empty')
+  }
+  // Reject names that are too long (prevent DoS)
+  if (templateName.length > 100) {
+    throw new Error(`Template name too long: ${templateName.slice(0, 20)}...`)
+  }
+  // Reject path traversal sequences
+  if (templateName.includes('..')) {
+    throw new Error(`Invalid template name (path traversal): ${templateName}`)
+  }
+  // Reject absolute paths
+  if (templateName.startsWith('/')) {
+    throw new Error(`Invalid template name (absolute path): ${templateName}`)
+  }
+  // Only allow safe characters
+  if (!SAFE_TEMPLATE_NAME_RE.test(templateName)) {
+    throw new Error(`Invalid template name (unsafe characters): ${templateName}`)
+  }
+}
+
+/**
  * Load a template by name.
  *
  * Checks custom overrides first, then falls back to defaults.
@@ -132,6 +163,9 @@ async function parseYamlTemplate(path: string): Promise<TemplateData> {
  * @throws Error if template not found or invalid
  */
 export async function loadTemplate(templateName: string): Promise<TemplateData> {
+  // Validate template name to prevent path traversal
+  assertSafeTemplateName(templateName)
+
   const customPath = join(CUSTOM_PROMPTS_DIR, `${templateName}.yaml`)
   const defaultPath = join(DEFAULT_PROMPTS_DIR, `${templateName}.yaml`)
 
