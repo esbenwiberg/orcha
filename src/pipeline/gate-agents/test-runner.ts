@@ -12,10 +12,25 @@
 
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import type { GateResult, StackRunnerResult } from '../types.js'
 import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
+
+// ============================================================================
+// Allowed Test Commands (whitelist for security)
+// ============================================================================
+
+/**
+ * Map of allowed test commands to their execFileSync arguments.
+ * Only commands in this whitelist can be executed, preventing arbitrary
+ * command injection from malicious package.json or project files.
+ */
+const ALLOWED_TEST_COMMANDS: Record<string, { cmd: string; args: string[] }> = {
+  'npm test': { cmd: 'npm', args: ['test'] },
+  'dotnet test': { cmd: 'dotnet', args: ['test'] },
+  'pytest': { cmd: 'pytest', args: [] },
+}
 
 // ============================================================================
 // Test Runner
@@ -48,6 +63,9 @@ export async function runTestRunner(
 /**
  * Run tests for each detected tech stack. Collects per-stack results and
  * aggregates the verdict: any fail → 'fail', all skip → 'skip', else 'pass'.
+ *
+ * Uses a whitelist of allowed test commands and execFileSync to prevent
+ * command injection from malicious project files.
  */
 function runMultiStackTests(worktreePath: string, techStacks: TechStack[]): GateResult {
   const timestamp = new Date().toISOString()
@@ -65,8 +83,20 @@ function runMultiStackTests(worktreePath: string, techStacks: TechStack[]): Gate
       continue
     }
 
+    // Validate test command against whitelist to prevent command injection
+    const allowedCmd = ALLOWED_TEST_COMMANDS[stack.commands.test]
+    if (!allowedCmd) {
+      stackResults.push({
+        type: stack.type,
+        path: relPath,
+        status: 'skip',
+        output: `Test command "${stack.commands.test}" not in whitelist — skipping for security`,
+      })
+      continue
+    }
+
     try {
-      const output = execSync(stack.commands.test, {
+      const output = execFileSync(allowedCmd.cmd, allowedCmd.args, {
         cwd: stack.absolutePath,
         encoding: 'utf-8',
         timeout: 300000, // 5 minute timeout per stack
@@ -133,6 +163,7 @@ function runMultiStackTests(worktreePath: string, techStacks: TechStack[]): Gate
 
 /**
  * Original single-project test runner. Used when no techStacks are provided.
+ * Uses execFileSync with whitelisted command to prevent command injection.
  */
 async function runLegacyTests(worktreePath: string): Promise<GateResult> {
   const timestamp = new Date().toISOString()
@@ -149,8 +180,20 @@ async function runLegacyTests(worktreePath: string): Promise<GateResult> {
     }
   }
 
+  // Validate against whitelist to prevent command injection
+  const allowedCmd = ALLOWED_TEST_COMMANDS[testCommand]
+  if (!allowedCmd) {
+    return {
+      verdict: 'skip',
+      checkName: 'test-runner',
+      summary: `Test command "${testCommand}" not in whitelist — skipping for security`,
+      details: { reason: 'command-not-whitelisted', command: testCommand },
+      timestamp,
+    }
+  }
+
   try {
-    const output = execSync(testCommand, {
+    const output = execFileSync(allowedCmd.cmd, allowedCmd.args, {
       cwd: worktreePath,
       encoding: 'utf-8',
       timeout: 300000, // 5 minute timeout for tests

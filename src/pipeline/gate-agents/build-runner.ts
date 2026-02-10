@@ -11,10 +11,25 @@
 
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import type { GateResult, StackRunnerResult } from '../types.js'
 import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
+
+// ============================================================================
+// Allowed Build Commands (whitelist for security)
+// ============================================================================
+
+/**
+ * Map of allowed build commands to their execFileSync arguments.
+ * Only commands in this whitelist can be executed, preventing arbitrary
+ * command injection from malicious package.json or project files.
+ */
+const ALLOWED_BUILD_COMMANDS: Record<string, { cmd: string; args: string[] }> = {
+  'npm run build': { cmd: 'npm', args: ['run', 'build'] },
+  'dotnet build': { cmd: 'dotnet', args: ['build'] },
+  'python -m build': { cmd: 'python', args: ['-m', 'build'] },
+}
 
 // ============================================================================
 // Build Runner
@@ -47,6 +62,9 @@ export async function runBuildRunner(
 /**
  * Run builds for each detected tech stack. Collects per-stack results and
  * aggregates the verdict: any fail → 'fail', all skip → 'skip', else 'pass'.
+ *
+ * Uses a whitelist of allowed build commands and execFileSync to prevent
+ * command injection from malicious project files.
  */
 function runMultiStackBuilds(worktreePath: string, techStacks: TechStack[]): GateResult {
   const timestamp = new Date().toISOString()
@@ -64,8 +82,20 @@ function runMultiStackBuilds(worktreePath: string, techStacks: TechStack[]): Gat
       continue
     }
 
+    // Validate build command against whitelist to prevent command injection
+    const allowedCmd = ALLOWED_BUILD_COMMANDS[stack.commands.build]
+    if (!allowedCmd) {
+      stackResults.push({
+        type: stack.type,
+        path: relPath,
+        status: 'skip',
+        output: `Build command "${stack.commands.build}" not in whitelist — skipping for security`,
+      })
+      continue
+    }
+
     try {
-      const output = execSync(stack.commands.build, {
+      const output = execFileSync(allowedCmd.cmd, allowedCmd.args, {
         cwd: stack.absolutePath,
         encoding: 'utf-8',
         timeout: 300000, // 5 minute timeout per stack
@@ -132,6 +162,7 @@ function runMultiStackBuilds(worktreePath: string, techStacks: TechStack[]): Gat
 
 /**
  * Original single-project build runner. Used when no techStacks are provided.
+ * Uses execFileSync with whitelisted command to prevent command injection.
  */
 async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
   const timestamp = new Date().toISOString()
@@ -148,8 +179,20 @@ async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
     }
   }
 
+  // Validate against whitelist to prevent command injection
+  const allowedCmd = ALLOWED_BUILD_COMMANDS[buildCommand]
+  if (!allowedCmd) {
+    return {
+      verdict: 'skip',
+      checkName: 'build',
+      summary: `Build command "${buildCommand}" not in whitelist — skipping for security`,
+      details: { reason: 'command-not-whitelisted', command: buildCommand },
+      timestamp,
+    }
+  }
+
   try {
-    const output = execSync(buildCommand, {
+    const output = execFileSync(allowedCmd.cmd, allowedCmd.args, {
       cwd: worktreePath,
       encoding: 'utf-8',
       timeout: 300000, // 5 minute timeout for builds

@@ -16,7 +16,7 @@
 
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import type { GateResult, StackRunnerResult } from '../types.js'
 import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
@@ -149,21 +149,33 @@ function runMultiStackLint(
 /**
  * Run Node.js lint (eslint-based). Uses `npm run lint -- {files}` or `npx eslint {files}`
  * depending on the detected command. Parses output with the eslint parser.
+ *
+ * Uses execFileSync with args array to avoid shell injection vulnerabilities.
  */
 function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
-  const fileList = changedFiles.map((f) => `"${f.replace(/["\\$`]/g, '\\$&')}"`).join(' ')
+  // Build args array for execFileSync (avoids shell injection)
+  let cmd: string
+  let args: string[]
 
-  // Determine if this is npm run lint or npx eslint
-  let lintCommand: string
   if (stack.commands.lint === 'npm run lint') {
-    lintCommand = `npm run lint -- ${fileList} --max-warnings 0`
+    // npm run lint -- file1.ts file2.ts --max-warnings 0
+    cmd = 'npm'
+    args = ['run', 'lint', '--', ...changedFiles, '--max-warnings', '0']
+  } else if (stack.commands.lint === 'npx eslint .') {
+    // npx eslint file1.ts file2.ts --max-warnings 0
+    cmd = 'npx'
+    args = ['eslint', ...changedFiles, '--max-warnings', '0']
   } else {
-    // npx eslint or other — append file list and strict mode
-    lintCommand = `${stack.commands.lint} ${fileList} --max-warnings 0`
+    // Generic fallback: try to parse the lint command
+    // For safety, only support known patterns
+    cmd = 'npx'
+    args = ['eslint', ...changedFiles, '--max-warnings', '0']
   }
 
+  const lintCommand = `${cmd} ${args.join(' ')}` // For display only
+
   try {
-    const output = execSync(lintCommand, {
+    const output = execFileSync(cmd, args, {
       cwd: stack.absolutePath,
       encoding: 'utf-8',
       timeout: 120000,
@@ -205,14 +217,22 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
 /**
  * Run .NET lint via `dotnet format --verify-no-changes`.
  * Scoped to changed files using `--include` flags.
+ *
+ * Uses execFileSync with args array to avoid shell injection vulnerabilities.
+ * Each --include flag is passed as a separate argument.
  */
 function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
-  // Build --include flags for each changed file to scope dotnet format
-  const includeArgs = changedFiles.map((f) => `--include "${f.replace(/["\\$`]/g, '\\$&')}"`).join(' ')
-  const lintCommand = `${stack.commands.lint!} ${includeArgs}`
+  // Build args array for execFileSync (avoids shell injection)
+  // dotnet format --verify-no-changes --include file1.cs --include file2.cs
+  const args: string[] = ['format', '--verify-no-changes']
+  for (const file of changedFiles) {
+    args.push('--include', file)
+  }
+
+  const lintCommand = `dotnet ${args.join(' ')}` // For display only
 
   try {
-    const output = execSync(lintCommand, {
+    const output = execFileSync('dotnet', args, {
       cwd: stack.absolutePath,
       encoding: 'utf-8',
       timeout: 120000,
@@ -254,23 +274,33 @@ function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]
 /**
  * Run Python lint (ruff or flake8). Scoped to changed files.
  * Uses generic output parsing.
+ *
+ * Uses execFileSync with args array to avoid shell injection vulnerabilities.
  */
 function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
-  const fileList = changedFiles.map((f) => `"${f.replace(/["\\$`]/g, '\\$&')}"`).join(' ')
+  // Build args array for execFileSync (avoids shell injection)
+  let cmd: string
+  let args: string[]
 
-  // Replace the trailing '.' in commands like 'ruff check .' or 'flake8' with the file list
-  let lintCommand: string
   const baseLint = stack.commands.lint!
-  if (baseLint.endsWith(' .')) {
-    // e.g. 'ruff check .' → 'ruff check {files}'
-    lintCommand = `${baseLint.slice(0, -2)} ${fileList}`
+  if (baseLint === 'ruff check .') {
+    // ruff check file1.py file2.py
+    cmd = 'ruff'
+    args = ['check', ...changedFiles]
+  } else if (baseLint === 'flake8') {
+    // flake8 file1.py file2.py
+    cmd = 'flake8'
+    args = [...changedFiles]
   } else {
-    // e.g. 'flake8' → 'flake8 {files}'
-    lintCommand = `${baseLint} ${fileList}`
+    // Generic fallback: assume ruff-like pattern
+    cmd = 'ruff'
+    args = ['check', ...changedFiles]
   }
 
+  const lintCommand = `${cmd} ${args.join(' ')}` // For display only
+
   try {
-    const output = execSync(lintCommand, {
+    const output = execFileSync(cmd, args, {
       cwd: stack.absolutePath,
       encoding: 'utf-8',
       timeout: 120000,
