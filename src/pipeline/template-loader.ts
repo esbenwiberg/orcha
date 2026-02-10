@@ -8,8 +8,11 @@
 import { readFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import * as Handlebars from 'handlebars'
+import HandlebarsImport from 'handlebars'
 import * as yaml from 'js-yaml'
+
+// Access Handlebars from default export
+const Handlebars = HandlebarsImport
 
 // ============================================================================
 // Constants
