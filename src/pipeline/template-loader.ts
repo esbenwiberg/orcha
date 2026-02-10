@@ -7,7 +7,7 @@
 
 import { readFile, access, mkdir, writeFile, readdir, rm, cp, unlink, rename } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { join, normalize, relative, isAbsolute, posix } from 'node:path'
+import { join, normalize, relative, isAbsolute, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import HandlebarsImport from 'handlebars'
 import * as yaml from 'js-yaml'
@@ -29,6 +29,9 @@ const MAX_YAML_SIZE = 100 * 1024
 
 /** Maximum string length for any single field in the template. Prevents memory exhaustion. */
 const MAX_FIELD_LENGTH = 50 * 1024
+
+/** Maximum nesting depth for objects in variables. Prevents stack overflow during validation. */
+const MAX_OBJECT_DEPTH = 10
 
 // ============================================================================
 // Types
@@ -80,6 +83,53 @@ function registerHelpers(): void {
 
 // Register helpers on module load
 registerHelpers()
+
+// ============================================================================
+// Object Validation Helpers
+// ============================================================================
+
+/**
+ * Recursively validate object depth and check for circular references.
+ *
+ * Security: Deeply nested objects can cause stack overflow during Handlebars
+ * compilation. Circular references would cause infinite loops.
+ *
+ * @param obj - Object to validate
+ * @param maxDepth - Maximum allowed nesting depth
+ * @param seen - WeakSet to track visited objects for circular reference detection
+ * @returns Error message string if validation fails, null if valid
+ */
+function validateObjectDepth(obj: unknown, maxDepth: number, seen: WeakSet<object>): string | null {
+  if (maxDepth < 0) {
+    return `exceeds maximum nesting depth (${MAX_OBJECT_DEPTH} levels)`
+  }
+
+  if (typeof obj !== 'object' || obj === null) {
+    return null // Primitives are always valid
+  }
+
+  // Check for circular references
+  if (seen.has(obj)) {
+    return 'contains circular reference'
+  }
+  seen.add(obj)
+
+  // Recursively check all properties
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const error = validateObjectDepth(item, maxDepth - 1, seen)
+      if (error) return error
+    }
+  } else {
+    for (const key of Object.keys(obj)) {
+      const value = (obj as Record<string, unknown>)[key]
+      const error = validateObjectDepth(value, maxDepth - 1, seen)
+      if (error) return error
+    }
+  }
+
+  return null
+}
 
 // ============================================================================
 // File System Utilities
@@ -162,6 +212,14 @@ async function parseYamlTemplate(path: string): Promise<TemplateData> {
       if (typeof data.variables !== 'object' || data.variables === null || Array.isArray(data.variables)) {
         throw new Error(
           `Invalid template at ${path}: "variables" field must be an object (Record<string, unknown>)`
+        )
+      }
+      // Validate nested object depth and check for circular references
+      // This prevents stack overflow during Handlebars compilation
+      const depthError = validateObjectDepth(data.variables, MAX_OBJECT_DEPTH, new WeakSet())
+      if (depthError) {
+        throw new Error(
+          `Invalid template at ${path}: "variables" field ${depthError}`
         )
       }
     }
@@ -344,43 +402,45 @@ export async function loadTemplate(templateName: string): Promise<TemplateData> 
   const defaultPath = join(DEFAULT_PROMPTS_DIR, `${templateName}.yaml`)
 
   // Defense-in-depth: verify resolved paths are within expected directories
-  // This catches any edge cases the name validation might miss
+  // This catches any edge cases the name validation might miss.
   //
-  // Security: Use path.relative() to check containment. If the relative path
-  // starts with '..' or is absolute, the target escapes the directory.
-  // This is more robust than startsWith() which can be bypassed with crafted paths.
+  // Security: Use path.resolve() to get absolute paths, then verify they start
+  // with the expected directory. This handles symlinks, junction points, and
+  // normalization edge cases better than relative() alone.
   //
-  // Note: On Windows, normalize() converts forward slashes to backslashes.
-  // We use posix.normalize for consistent behavior, then do platform-specific
-  // checks. This prevents attacks where 'foo/bar' becomes 'foo\bar' on Windows.
-  const normalizedCustom = normalize(customPath).replace(/\\/g, '/')
-  const normalizedDefault = normalize(defaultPath).replace(/\\/g, '/')
-  const normalizedCustomDir = normalize(CUSTOM_PROMPTS_DIR).replace(/\\/g, '/')
-  const normalizedDefaultDir = normalize(DEFAULT_PROMPTS_DIR).replace(/\\/g, '/')
+  // The resolve() call fully resolves the path including:
+  // - Normalizing slashes
+  // - Resolving . and .. segments
+  // - Converting to absolute path
+  const resolvedCustom = resolve(customPath)
+  const resolvedDefault = resolve(defaultPath)
+  const resolvedCustomDir = resolve(CUSTOM_PROMPTS_DIR)
+  const resolvedDefaultDir = resolve(DEFAULT_PROMPTS_DIR)
 
   // Check custom path is contained within custom directory
-  const relativeToCustom = relative(normalizedCustomDir, normalizedCustom)
+  // Use relative() on resolved paths - if it starts with '..' the path escapes
+  const relativeToCustom = relative(resolvedCustomDir, resolvedCustom)
   if (relativeToCustom.startsWith('..') || isAbsolute(relativeToCustom)) {
     throw new Error(`Invalid template path (escapes custom directory): ${templateName}`)
   }
 
   // Check default path is contained within default directory
-  const relativeToDefault = relative(normalizedDefaultDir, normalizedDefault)
+  const relativeToDefault = relative(resolvedDefaultDir, resolvedDefault)
   if (relativeToDefault.startsWith('..') || isAbsolute(relativeToDefault)) {
     throw new Error(`Invalid template path (escapes default directory): ${templateName}`)
   }
 
   // Try custom first
-  if (await exists(normalizedCustom)) {
-    const template = await parseYamlTemplate(normalizedCustom)
+  if (await exists(resolvedCustom)) {
+    const template = await parseYamlTemplate(resolvedCustom)
     // Validate template structure and syntax
     validateTemplate(template)
     return template
   }
 
   // Fall back to default
-  if (await exists(normalizedDefault)) {
-    const template = await parseYamlTemplate(normalizedDefault)
+  if (await exists(resolvedDefault)) {
+    const template = await parseYamlTemplate(resolvedDefault)
     // Validate template structure and syntax
     validateTemplate(template)
     return template
@@ -389,8 +449,8 @@ export async function loadTemplate(templateName: string): Promise<TemplateData> 
   throw new Error(
     `Template not found: ${templateName}\n` +
     `Searched:\n` +
-    `  - ${normalizedCustom}\n` +
-    `  - ${normalizedDefault}`
+    `  - ${resolvedCustom}\n` +
+    `  - ${resolvedDefault}`
   )
 }
 

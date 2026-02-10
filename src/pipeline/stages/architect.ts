@@ -248,11 +248,22 @@ function parseArchitectOutput(stdout: string): BlueprintOutput | null {
 
 /**
  * Validate that a milestone/step object has the required fields.
+ *
+ * Security: Validates that description and details are non-empty strings.
+ * Empty strings would pass type checks but cause downstream failures in the
+ * dev stage which depends on these fields for milestone execution.
  */
 function isValidMilestoneObject(obj: unknown): boolean {
   if (typeof obj !== 'object' || obj === null) return false
   const m = obj as Record<string, unknown>
-  return typeof m.description === 'string' && typeof m.details === 'string'
+  // Require non-empty strings for both description and details
+  // Empty strings would pass 'typeof === string' but cause issues downstream
+  return (
+    typeof m.description === 'string' &&
+    m.description.length > 0 &&
+    typeof m.details === 'string' &&
+    m.details.length > 0
+  )
 }
 
 function isValidBlueprint(obj: unknown): obj is BlueprintOutput {

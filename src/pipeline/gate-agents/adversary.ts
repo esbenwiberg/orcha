@@ -402,10 +402,13 @@ function getTestRunner(
   // This transformation is safe because we've already validated testPath above.
   const safePath = testPath.startsWith('-') ? `./${testPath}` : testPath
 
-  // Use '--' separator for pytest to ensure paths are never interpreted as flags
+  // Use '--' separator for pytest BEFORE the path to ensure paths are never interpreted as flags.
+  // The '--' tells the argument parser that everything after it is a positional argument.
+  // Format: pytest -x --tb=short -- ./path/to/test.py
+  // The flags (-x, --tb=short) must come BEFORE '--', the path AFTER.
   switch (techType) {
     case 'python':
-      return { cmd: 'pytest', args: ['--', safePath, '-x', '--tb=short'] }
+      return { cmd: 'pytest', args: ['-x', '--tb=short', '--', safePath] }
     case 'dotnet':
       // .NET adversary tests cannot be executed standalone — they need a project
       // context to compile. This is a known limitation; the tests are still

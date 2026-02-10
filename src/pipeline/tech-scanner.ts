@@ -301,8 +301,15 @@ function readFileSafe(filePath: string): string | null {
 /** Maximum content size to scan for dependencies (1MB). Prevents memory exhaustion. */
 const MAX_CONTENT_SIZE = 1024 * 1024
 
-/** Maximum iterations for dependency search loop. Keeps search fast and prevents DoS. */
-const MAX_SEARCH_ITERATIONS = 100
+/**
+ * Maximum iterations for dependency search loop. Keeps search fast and prevents DoS.
+ *
+ * Security: Reduced from 100 to 50 to minimize worst-case O(n*m) behavior.
+ * With crafted input like 'pytest====pytest====pytest...', each occurrence
+ * causes a full boundary check. 50 iterations is more than enough for
+ * legitimate package files while limiting DoS potential.
+ */
+const MAX_SEARCH_ITERATIONS = 50
 
 /**
  * Check if a Python dependency name appears in combined project content.

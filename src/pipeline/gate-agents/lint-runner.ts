@@ -37,13 +37,20 @@ import { getChangedLintableFiles, getChangedFilesByExtensions } from '../git-uti
  * - Semicolons (shell command separators in some edge cases)
  * - Other potentially problematic characters
  *
- * Allowed: alphanumeric, hyphen, underscore, period, forward slash, @ (npm scopes)
- * This covers normal file paths like 'src/components/Button.tsx' and '@types/node'
+ * Allowed: alphanumeric, hyphen, underscore, period, forward slash
+ * This covers normal file paths like 'src/components/Button.tsx'
  *
- * Note: Characters like '+', ';', '|', '&', '`', '$', quotes are implicitly rejected
- * because they are NOT in the whitelist regex pattern.
+ * SECURITY NOTE: The '@' character is intentionally NOT allowed even though it's
+ * used in npm scopes (e.g., '@types/node'). In dotnet tooling, '@file.rsp'
+ * references response files that can contain arbitrary commands. Since we pass
+ * files to dotnet format --include, allowing '@' could enable command injection.
+ * npm scope directories work fine without special handling since we're passing
+ * file paths, not package names.
+ *
+ * Note: Characters like '+', ';', '|', '&', '`', '$', '@', quotes are implicitly
+ * rejected because they are NOT in the whitelist regex pattern.
  */
-const SAFE_FILENAME_RE = /^[a-zA-Z0-9_.\-/@]+$/
+const SAFE_FILENAME_RE = /^[a-zA-Z0-9_.\-/]+$/
 
 function isValidFilename(filename: string): boolean {
   // Reject empty filenames
@@ -65,20 +72,24 @@ function isValidFilename(filename: string): boolean {
 }
 
 /**
- * Prefix a filename with './' if it starts with '-' to prevent flag injection.
- * This ensures filenames like '-file.ts' are passed as './-file.ts'.
+ * Defense-in-depth filter for flag-like filenames.
  *
- * Note: This is now a defense-in-depth function. Filenames starting with '-'
- * are already rejected by isValidFilename(), so this function should rarely
- * be triggered in practice. It remains as a safety net for any code paths
- * that might bypass the validation.
+ * This function is a safety net that should rarely trigger in practice because:
+ * - isValidFilename() already rejects filenames starting with '-'
+ * - filterValidFilenames() is called before this function
+ *
+ * However, if somehow a flag-like filename bypasses validation, this catches it.
+ * Returns empty string for flag-like filenames (which is then filtered out).
+ *
+ * @param filename - Already-validated filename from filterValidFilenames()
+ * @returns The filename unchanged, or empty string if it looks like a flag
  */
 function prefixIfFlag(filename: string): string {
-  // Defense-in-depth: reject anything that looks like a flag
-  // isValidFilename() should already reject these, but double-check here
+  // Defense-in-depth: catch any flag-like filename that somehow bypassed validation
+  // This should never happen if isValidFilename() is working correctly
   if (filename.startsWith('-')) {
-    console.warn(`[lint-runner] Unexpected flag-like filename passed to prefixIfFlag: ${filename}`)
-    return '' // Return empty string which will be filtered out
+    console.warn(`[lint-runner] Security: Rejecting flag-like filename that bypassed validation: ${filename}`)
+    return '' // Empty string will be filtered out by .filter(Boolean)
   }
   return filename
 }
@@ -313,20 +324,25 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
  * Uses execFileSync with args array to avoid shell injection vulnerabilities.
  * Each --include flag is passed as a separate argument.
  *
- * Security: Files starting with '-' are already rejected by isValidFilename() in the caller.
- * The '@' character is allowed for npm scopes but is safe in dotnet format --include context
- * as it doesn't have special meaning there (unlike dotnet response files which use @file.rsp).
+ * Security:
+ * - Files starting with '-' are already rejected by isValidFilename() in the caller.
+ * - The '@' character is now rejected by SAFE_FILENAME_RE to prevent response file injection
+ *   (dotnet uses @file.rsp syntax to read commands from files).
+ * - The '--include' flags are dotnet format OPTIONS, not file arguments. The '--' separator
+ *   is placed AFTER all options to separate them from any positional arguments.
  */
 function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
   // Build args array for execFileSync (avoids shell injection)
-  // Note: Files starting with '-' are already rejected by isValidFilename() in the caller.
-  // The '--' separator is placed after --verify-no-changes to ensure file arguments
-  // can never be interpreted as options, even in edge cases.
-  // Format: dotnet format --verify-no-changes -- --include file1.cs --include file2.cs
-  const args: string[] = ['format', '--verify-no-changes', '--']
+  // Note: Files starting with '-' and '@' are already rejected by isValidFilename() in the caller.
+  // Format: dotnet format --verify-no-changes --include file1.cs --include file2.cs
+  // The '--include' flags are OPTIONS to dotnet format, not positional file arguments.
+  const args: string[] = ['format', '--verify-no-changes']
   for (const file of changedFiles) {
     args.push('--include', file)
   }
+
+  // Add '--' separator at the end to clearly mark end of options (defense-in-depth)
+  args.push('--')
 
   const lintCommand = `dotnet ${args.join(' ')}` // For display only
 

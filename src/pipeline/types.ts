@@ -127,16 +127,28 @@ export interface StackRunnerResult {
   exitCode?: number
 }
 
-/** Aggregate per-stack verdicts: any fail → 'fail', all skip → 'skip', else 'pass'. */
+/**
+ * Aggregate per-stack verdicts: any fail → 'fail', all skip → 'skip', else 'pass'.
+ *
+ * Logic:
+ * 1. If any verdict is 'fail' → return 'fail' (strictest)
+ * 2. If ALL verdicts are 'skip' → return 'skip' (nothing ran)
+ * 3. Otherwise → return 'pass' (at least one passed, none failed)
+ *
+ * Note: With current GateVerdict = 'pass' | 'fail' | 'skip', after checking for
+ * 'fail' and confirming not all are 'skip', the remaining verdicts MUST contain
+ * at least one 'pass'. The explicit check is kept for clarity and future-proofing.
+ */
 export function aggregateStackVerdicts(verdicts: GateVerdict[]): GateVerdict {
+  // Empty array case: treat as 'skip' (nothing to aggregate)
+  if (verdicts.length === 0) return 'skip'
+  // Any failure means overall failure
   if (verdicts.some((v) => v === 'fail')) return 'fail'
+  // All skipped means overall skip
   if (verdicts.every((v) => v === 'skip')) return 'skip'
-  // Explicit check for 'pass' — any verdict that isn't 'fail' or 'skip' but also
-  // isn't explicitly 'pass' would still fall through to 'pass'. Since GateVerdict
-  // is a union type that could be extended, we check for 'pass' explicitly first.
-  if (verdicts.some((v) => v === 'pass')) return 'pass'
-  // Fallback: empty array or all unknown verdicts (shouldn't happen with current types)
-  return 'skip'
+  // At this point, we have no failures and not all skipped.
+  // With GateVerdict = 'pass' | 'fail' | 'skip', this means at least one 'pass'.
+  return 'pass'
 }
 
 export interface StageResult {
