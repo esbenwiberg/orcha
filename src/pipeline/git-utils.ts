@@ -102,21 +102,50 @@ export function getDiff(worktreePath: string, sourceBranch: string, baseCommit?:
 // Changed Files Detection
 // ============================================================================
 
-const LINTABLE_EXTENSIONS = /\.(ts|js|tsx|jsx)$/
+/**
+ * Build git pathspec glob patterns from file extensions.
+ * e.g. ['.cs', '.fs'] → "'*.cs' '*.fs'"
+ */
+function buildExtensionGlobs(extensions: string[]): string {
+  return extensions.map((ext) => `'*${ext}'`).join(' ')
+}
 
 /**
- * Get the list of changed files (relative paths) that are lintable.
- * Uses git diff --name-only with extension filters.
+ * Build a regex that matches any of the given extensions at the end of a filename.
+ * e.g. ['.cs', '.fs'] → /\.(cs|fs)$/
  */
-export function getChangedLintableFiles(worktreePath: string, sourceBranch: string, baseCommit?: string): string[] {
+function buildExtensionRegex(extensions: string[]): RegExp {
+  const alts = extensions.map((ext) => ext.replace(/^\./, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  return new RegExp(`\\.(${alts.join('|')})$`)
+}
+
+/**
+ * Get the list of changed files (relative paths) matching the given extensions.
+ * Uses git diff --name-only with extension filters.
+ *
+ * Strategy order (same as getDiff):
+ * 1. baseCommit..HEAD (exact)
+ * 2. origin/sourceBranch...HEAD (three-dot merge-base)
+ * 3. sourceBranch...HEAD (local fallback)
+ * 4. HEAD (last resort — filters with regex since pathspec may not apply)
+ */
+export function getChangedFilesByExtensions(
+  worktreePath: string,
+  sourceBranch: string,
+  extensions: string[],
+  baseCommit?: string,
+): string[] {
+  if (extensions.length === 0) return []
+
   const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
+  const globs = buildExtensionGlobs(extensions)
 
   // Best strategy: diff from exact base commit
   if (baseCommit) {
     assertSafeCommitSha(baseCommit)
     try {
       const output = execSync(
-        `git diff --name-only ${baseCommit}..HEAD -- '*.ts' '*.js' '*.tsx' '*.jsx'`,
+        `git diff --name-only ${baseCommit}..HEAD -- ${globs}`,
         execOpts,
       ).trim()
       if (output) return output.split('\n').filter(Boolean)
@@ -127,7 +156,7 @@ export function getChangedLintableFiles(worktreePath: string, sourceBranch: stri
 
   try {
     const output = execSync(
-      `git diff --name-only origin/${sourceBranch}... -- '*.ts' '*.js' '*.tsx' '*.jsx'`,
+      `git diff --name-only origin/${sourceBranch}... -- ${globs}`,
       execOpts,
     ).trim()
     if (output) return output.split('\n').filter(Boolean)
@@ -135,7 +164,7 @@ export function getChangedLintableFiles(worktreePath: string, sourceBranch: stri
 
   try {
     const output = execSync(
-      `git diff --name-only ${sourceBranch}... -- '*.ts' '*.js' '*.tsx' '*.jsx'`,
+      `git diff --name-only ${sourceBranch}... -- ${globs}`,
       execOpts,
     ).trim()
     if (output) return output.split('\n').filter(Boolean)
@@ -144,9 +173,18 @@ export function getChangedLintableFiles(worktreePath: string, sourceBranch: stri
   try {
     const output = execSync('git diff --name-only HEAD', execOpts).trim()
     if (output) {
-      return output.split('\n').filter((f) => LINTABLE_EXTENSIONS.test(f))
+      const extRegex = buildExtensionRegex(extensions)
+      return output.split('\n').filter((f) => extRegex.test(f))
     }
   } catch { /* Ignore */ }
 
   return []
+}
+
+/**
+ * Get the list of changed files (relative paths) that are lintable (JS/TS).
+ * Convenience wrapper around getChangedFilesByExtensions for backward compatibility.
+ */
+export function getChangedLintableFiles(worktreePath: string, sourceBranch: string, baseCommit?: string): string[] {
+  return getChangedFilesByExtensions(worktreePath, sourceBranch, ['.ts', '.js', '.tsx', '.jsx'], baseCommit)
 }

@@ -70,7 +70,7 @@ export { runStage, killPipelineProcesses } from './stage-runner.js'
 export type { StageRunnerOptions, StageRunnerResult } from './stage-runner.js'
 
 // Git Utilities
-export { getDiff, getChangedLintableFiles } from './git-utils.js'
+export { getDiff, getChangedFilesByExtensions, getChangedLintableFiles } from './git-utils.js'
 
 // Output Parser
 export { tryParseJson, parseStructuredOutput } from './output-parser.js'
