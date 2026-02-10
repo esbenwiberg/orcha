@@ -37,12 +37,12 @@ import { getChangedLintableFiles, getChangedFilesByExtensions } from '../git-uti
  * - Semicolons (shell command separators in some edge cases)
  * - Other potentially problematic characters
  *
- * Allowed: alphanumeric, hyphen, underscore, period, forward slash
- * This covers normal file paths like 'src/components/Button.tsx'
+ * Allowed: alphanumeric, hyphen, underscore, period, forward slash, @ (npm scopes)
+ * This covers normal file paths like 'src/components/Button.tsx' and '@types/node'
  *
- * Rejected: '@' and '+' which can be special in some contexts (npm scope, argument parsers)
+ * Rejected: '+' which can be special in some contexts (argument parsers)
  */
-const SAFE_FILENAME_RE = /^[a-zA-Z0-9_.\-/]+$/
+const SAFE_FILENAME_RE = /^[a-zA-Z0-9_.\-/@]+$/
 
 function isValidFilename(filename: string): boolean {
   // Reject empty filenames

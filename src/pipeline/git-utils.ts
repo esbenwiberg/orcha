@@ -200,9 +200,14 @@ function assertSafeExtension(ext: string): void {
 /**
  * Build a regex that matches any of the given extensions at the end of a filename.
  * e.g. ['.cs', '.fs'] → /\.(cs|fs)$/
+ *
+ * Security: The pattern is anchored to end-of-string ($) to prevent matching files
+ * like 'test.ts.backup' when looking for '.ts' files.
  */
 function buildExtensionRegex(extensions: string[]): RegExp {
+  // Escape regex special characters in each extension (after removing leading dot)
   const alts = extensions.map((ext) => ext.replace(/^\./, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  // Pattern: \.(ext1|ext2)$ — anchored to end of string
   return new RegExp(`\\.(${alts.join('|')})$`)
 }
 
@@ -211,9 +216,12 @@ function buildExtensionRegex(extensions: string[]): RegExp {
  * Returns args array: ['diff', '--name-only', ...range, '--', ...pathspecs]
  *
  * Security: Uses execFileSync with args array to prevent shell injection.
+ * Filters out empty pathspecs to prevent 'git diff -- ""' from matching all files.
  */
 function buildDiffArgs(range: string[], pathspecs: string[]): string[] {
-  return ['diff', '--name-only', ...range, '--', ...pathspecs]
+  // Filter out empty pathspecs which could cause git to match all files
+  const filteredPathspecs = pathspecs.filter((p) => p && p.length > 0)
+  return ['diff', '--name-only', ...range, '--', ...filteredPathspecs]
 }
 
 /**

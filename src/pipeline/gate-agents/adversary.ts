@@ -303,14 +303,45 @@ function getTestPatterns(worktreePath: string, techType?: TechStack['type']): st
 // ============================================================================
 
 /**
+ * Validate that a test path is safe for execution.
+ * Rejects paths with control characters, newlines, or other injection vectors.
+ *
+ * Security: This is a defense-in-depth check. Even though execFileSync with args
+ * array prevents shell injection, we validate to prevent:
+ * - Control characters that could affect terminal output
+ * - Newlines that could be interpreted specially by some tools
+ * - Flag injection via paths starting with '-'
+ */
+function isSafeTestPath(testPath: string): boolean {
+  // Reject empty paths
+  if (!testPath) return false
+  // Reject paths that are too long (prevent DoS)
+  if (testPath.length > 500) return false
+  // Reject control characters (ASCII 0-31, except tab which is rare but ok)
+  // This catches newlines (\n, \r), null bytes, and other problematic chars
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(testPath)) return false
+  // Reject paths with newlines explicitly (covers \n = 0x0a and \r = 0x0d)
+  if (testPath.includes('\n') || testPath.includes('\r')) return false
+  return true
+}
+
+/**
  * Get the command and args to execute a test file for the given tech type.
  *
- * Returns null if execution should be skipped (e.g. .NET tests need project context).
+ * Returns null if execution should be skipped (e.g. .NET tests need project context
+ * or the path fails validation).
  */
 function getTestRunner(
   testPath: string,
   techType?: TechStack['type'],
 ): { cmd: string; args: string[] } | null {
+  // Security: Validate test path before any processing
+  if (!isSafeTestPath(testPath)) {
+    console.warn(`[adversary] Rejecting unsafe test path: ${JSON.stringify(testPath).slice(0, 100)}`)
+    return null
+  }
+
   // Security: Prefix testPath with './' if it starts with '-' to prevent flag injection.
   // Even though execFileSync with args array prevents shell injection, a path like
   // '--some-flag' could be interpreted as a CLI flag by the test runner.

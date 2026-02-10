@@ -60,7 +60,9 @@ export async function listPrompts(): Promise<void> {
 
     console.log(`\n${templates.length} template(s) available`)
     console.log('\nCommands:')
-    console.log('  orcha prompts show <name>  - View template details')
+    console.log('  orcha prompts show <name>   - View template details')
+    console.log('  orcha prompts edit <name>   - Edit template in your editor')
+    console.log('  orcha prompts reset <name>  - Reset template to default')
   } catch (err) {
     console.error(chalk.red('Error listing templates:'), (err as Error).message)
     process.exit(1)
