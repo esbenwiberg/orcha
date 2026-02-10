@@ -4,19 +4,38 @@
  * Shell-only gate agent — no AI session needed.
  * Runs lint scoped to changed files only (compared to the source branch).
  *
- * Discovery order:
- * 1. `npm run lint` if "lint" script exists in package.json
- * 2. `npx eslint` as fallback
+ * Supports multi-tech stacks: when TechStack[] is provided, runs each
+ * stack's lint command in its own directory with extension-filtered files.
+ * Falls back to legacy Node.js-only detection when no stacks are provided.
  *
- * Uses `--max-warnings 0` for strict mode — any warning = gate failure.
- * Only lints files matching *.ts, *.js, *.tsx, *.jsx.
+ * Tech-specific behavior:
+ * - Node: `npm run lint -- {files}` or `npx eslint {files}` (eslint output parsing)
+ * - .NET: `dotnet format --verify-no-changes` in stack path (no file list — project-wide)
+ * - Python: `ruff check {files}` or `flake8 {files}` (generic output parsing)
  */
 
 import { readFile } from 'fs/promises'
-import { join } from 'path'
+import { join, relative } from 'path'
 import { execSync } from 'child_process'
-import type { GateResult } from '../types.js'
-import { getChangedLintableFiles } from '../git-utils.js'
+import type { GateResult, GateVerdict } from '../types.js'
+import type { TechStack } from '../tech-scanner.js'
+import { getChangedLintableFiles, getChangedFilesByExtensions } from '../git-utils.js'
+
+// ============================================================================
+// Per-Stack Result (for details breakdown)
+// ============================================================================
+
+interface StackLintResult {
+  type: string
+  path: string
+  status: GateVerdict
+  command?: string
+  filesChecked?: number
+  files?: string[]
+  findings?: LintFinding[]
+  output?: string
+  exitCode?: number
+}
 
 // ============================================================================
 // Lint Runner
@@ -24,8 +43,296 @@ import { getChangedLintableFiles } from '../git-utils.js'
 
 /**
  * Run lint on changed files in the worktree and return a GateResult.
+ *
+ * When techStacks is provided and non-empty, runs the lint command for each
+ * stack that has one configured, scoped to files matching that stack's
+ * lintableExtensions. When not provided, falls back to legacy Node.js
+ * detection for backward compatibility.
  */
 export async function runLintRunner(
+  worktreePath: string,
+  sourceBranch: string,
+  baseCommit?: string,
+  techStacks?: TechStack[],
+): Promise<GateResult> {
+  // Multi-tech path: run per-stack lints
+  if (techStacks && techStacks.length > 0) {
+    return runMultiStackLint(worktreePath, sourceBranch, baseCommit, techStacks)
+  }
+
+  // Legacy path: detect from package.json (backward compat)
+  return runLegacyLint(worktreePath, sourceBranch, baseCommit)
+}
+
+// ============================================================================
+// Multi-Stack Lint Execution
+// ============================================================================
+
+/**
+ * Run lint for each detected tech stack. Collects per-stack results and
+ * aggregates the verdict: any fail → 'fail', all skip → 'skip', else 'pass'.
+ */
+function runMultiStackLint(
+  worktreePath: string,
+  sourceBranch: string,
+  baseCommit: string | undefined,
+  techStacks: TechStack[],
+): GateResult {
+  const timestamp = new Date().toISOString()
+  const stackResults: StackLintResult[] = []
+
+  for (const stack of techStacks) {
+    const relPath = relative(worktreePath, stack.absolutePath) || '.'
+
+    if (!stack.commands.lint) {
+      stackResults.push({
+        type: stack.type,
+        path: relPath,
+        status: 'skip',
+      })
+      continue
+    }
+
+    // .NET operates on the whole project — no file list needed
+    if (stack.type === 'dotnet') {
+      stackResults.push(runDotnetLint(stack, relPath))
+      continue
+    }
+
+    // For Node and Python, scope to changed files matching stack extensions
+    const changedFiles = getChangedFilesByExtensions(
+      worktreePath,
+      sourceBranch,
+      stack.lintableExtensions,
+      baseCommit,
+    )
+
+    if (changedFiles.length === 0) {
+      stackResults.push({
+        type: stack.type,
+        path: relPath,
+        status: 'skip',
+        filesChecked: 0,
+      })
+      continue
+    }
+
+    if (stack.type === 'node') {
+      stackResults.push(runNodeLint(stack, relPath, changedFiles))
+    } else if (stack.type === 'python') {
+      stackResults.push(runPythonLint(stack, relPath, changedFiles))
+    }
+  }
+
+  // Aggregate verdict
+  const verdict = aggregateVerdict(stackResults.map((r) => r.status))
+
+  // Build summary
+  const passed = stackResults.filter((r) => r.status === 'pass').length
+  const failed = stackResults.filter((r) => r.status === 'fail').length
+  const skipped = stackResults.filter((r) => r.status === 'skip').length
+  const parts: string[] = []
+  if (passed > 0) parts.push(`${passed} passed`)
+  if (failed > 0) parts.push(`${failed} failed`)
+  if (skipped > 0) parts.push(`${skipped} skipped`)
+  const summary =
+    verdict === 'fail'
+      ? `Lint failed (${parts.join(', ')})`
+      : verdict === 'skip'
+        ? `No lint commands configured or no lintable files changed — skipping lint gate`
+        : `Lint passed (${parts.join(', ')})`
+
+  return {
+    verdict,
+    checkName: 'lint',
+    summary,
+    details: { stacks: stackResults },
+    timestamp,
+  }
+}
+
+// ============================================================================
+// Per-Tech Lint Execution
+// ============================================================================
+
+/**
+ * Run Node.js lint (eslint-based). Uses `npm run lint -- {files}` or `npx eslint {files}`
+ * depending on the detected command. Parses output with the eslint parser.
+ */
+function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
+  const fileList = changedFiles.map((f) => `"${f.replace(/["\\$`]/g, '\\$&')}"`).join(' ')
+
+  // Determine if this is npm run lint or npx eslint
+  let lintCommand: string
+  if (stack.commands.lint === 'npm run lint') {
+    lintCommand = `npm run lint -- ${fileList} --max-warnings 0`
+  } else {
+    // npx eslint or other — append file list and strict mode
+    lintCommand = `${stack.commands.lint} ${fileList} --max-warnings 0`
+  }
+
+  try {
+    const output = execSync(lintCommand, {
+      cwd: stack.absolutePath,
+      encoding: 'utf-8',
+      timeout: 120000,
+      env: {
+        ...process.env,
+        CI: '1',
+        NO_COLOR: '1',
+        FORCE_COLOR: '0',
+      },
+    })
+
+    return {
+      type: stack.type,
+      path: relPath,
+      status: 'pass',
+      command: lintCommand,
+      filesChecked: changedFiles.length,
+      files: changedFiles,
+      output: output.slice(-2000),
+    }
+  } catch (err) {
+    const execError = err as { status?: number; stdout?: string; stderr?: string }
+    const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
+
+    return {
+      type: stack.type,
+      path: relPath,
+      status: 'fail',
+      command: lintCommand,
+      filesChecked: changedFiles.length,
+      files: changedFiles,
+      findings: parseEslintOutput(output),
+      output: output.slice(-4000),
+      exitCode: execError.status,
+    }
+  }
+}
+
+/**
+ * Run .NET lint via `dotnet format --verify-no-changes`.
+ * Operates on the whole project/solution — no file list needed.
+ */
+function runDotnetLint(stack: TechStack, relPath: string): StackLintResult {
+  const lintCommand = stack.commands.lint!
+
+  try {
+    const output = execSync(lintCommand, {
+      cwd: stack.absolutePath,
+      encoding: 'utf-8',
+      timeout: 120000,
+      env: {
+        ...process.env,
+        CI: '1',
+        NO_COLOR: '1',
+        DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+      },
+    })
+
+    return {
+      type: stack.type,
+      path: relPath,
+      status: 'pass',
+      command: lintCommand,
+      output: output.slice(-2000),
+    }
+  } catch (err) {
+    const execError = err as { status?: number; stdout?: string; stderr?: string }
+    const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
+
+    return {
+      type: stack.type,
+      path: relPath,
+      status: 'fail',
+      command: lintCommand,
+      findings: parseGenericOutput(output),
+      output: output.slice(-4000),
+      exitCode: execError.status,
+    }
+  }
+}
+
+/**
+ * Run Python lint (ruff or flake8). Scoped to changed files.
+ * Uses generic output parsing.
+ */
+function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
+  const fileList = changedFiles.map((f) => `"${f.replace(/["\\$`]/g, '\\$&')}"`).join(' ')
+
+  // Replace the trailing '.' in commands like 'ruff check .' or 'flake8' with the file list
+  let lintCommand: string
+  const baseLint = stack.commands.lint!
+  if (baseLint.endsWith(' .')) {
+    // e.g. 'ruff check .' → 'ruff check {files}'
+    lintCommand = `${baseLint.slice(0, -2)} ${fileList}`
+  } else {
+    // e.g. 'flake8' → 'flake8 {files}'
+    lintCommand = `${baseLint} ${fileList}`
+  }
+
+  try {
+    const output = execSync(lintCommand, {
+      cwd: stack.absolutePath,
+      encoding: 'utf-8',
+      timeout: 120000,
+      env: {
+        ...process.env,
+        CI: '1',
+        NO_COLOR: '1',
+        FORCE_COLOR: '0',
+      },
+    })
+
+    return {
+      type: stack.type,
+      path: relPath,
+      status: 'pass',
+      command: lintCommand,
+      filesChecked: changedFiles.length,
+      files: changedFiles,
+      output: output.slice(-2000),
+    }
+  } catch (err) {
+    const execError = err as { status?: number; stdout?: string; stderr?: string }
+    const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
+
+    return {
+      type: stack.type,
+      path: relPath,
+      status: 'fail',
+      command: lintCommand,
+      filesChecked: changedFiles.length,
+      files: changedFiles,
+      findings: parseGenericOutput(output),
+      output: output.slice(-4000),
+      exitCode: execError.status,
+    }
+  }
+}
+
+// ============================================================================
+// Verdict Aggregation
+// ============================================================================
+
+/**
+ * Aggregate individual verdicts: any fail → 'fail', all skip → 'skip', else 'pass'.
+ */
+function aggregateVerdict(verdicts: GateVerdict[]): GateVerdict {
+  if (verdicts.some((v) => v === 'fail')) return 'fail'
+  if (verdicts.every((v) => v === 'skip')) return 'skip'
+  return 'pass'
+}
+
+// ============================================================================
+// Legacy Lint Execution (backward compat)
+// ============================================================================
+
+/**
+ * Original single-project lint runner. Used when no techStacks are provided.
+ */
+async function runLegacyLint(
   worktreePath: string,
   sourceBranch: string,
   baseCommit?: string,
@@ -90,7 +397,7 @@ export async function runLintRunner(
     const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
 
     // Parse lint output for structured reporting
-    const findings = parseLintOutput(output)
+    const findings = parseEslintOutput(output)
 
     return {
       verdict: 'fail',
@@ -110,7 +417,7 @@ export async function runLintRunner(
 }
 
 // ============================================================================
-// Lint Strategy Detection
+// Lint Strategy Detection (legacy)
 // ============================================================================
 
 type LintStrategy = 'npm-lint' | 'npx-eslint'
@@ -171,7 +478,7 @@ interface LintFinding {
  * Parse eslint-style output into structured findings.
  * Handles the default eslint formatter output.
  */
-function parseLintOutput(output: string): LintFinding[] {
+function parseEslintOutput(output: string): LintFinding[] {
   const findings: LintFinding[] = []
   let currentFile = ''
 
@@ -194,6 +501,47 @@ function parseLintOutput(output: string): LintFinding[] {
         severity: match[3],
         message: match[4],
         rule: match[5],
+      })
+    }
+  }
+
+  return findings
+}
+
+/**
+ * Parse generic linter output (ruff, flake8, dotnet format) into structured findings.
+ * Handles common "file:line:col: message" formats.
+ */
+function parseGenericOutput(output: string): LintFinding[] {
+  const findings: LintFinding[] = []
+
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+
+    // Pattern: "file.py:10:5: E123 some message" (ruff / flake8 style)
+    const match = trimmed.match(/^(.+?):(\d+):(\d+):\s+(\S+)\s+(.+)$/)
+    if (match) {
+      findings.push({
+        file: match[1],
+        line: parseInt(match[2], 10),
+        column: parseInt(match[3], 10),
+        rule: match[4],
+        severity: 'error',
+        message: match[5],
+      })
+      continue
+    }
+
+    // Pattern: "file.py:10: E123 some message" (no column)
+    const matchNoCol = trimmed.match(/^(.+?):(\d+):\s+(\S+)\s+(.+)$/)
+    if (matchNoCol) {
+      findings.push({
+        file: matchNoCol[1],
+        line: parseInt(matchNoCol[2], 10),
+        rule: matchNoCol[3],
+        severity: 'error',
+        message: matchNoCol[4],
       })
     }
   }
