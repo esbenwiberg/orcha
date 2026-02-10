@@ -1301,6 +1301,40 @@ async function showPresetActions(name) {
 }
 
 /**
+ * Render the settings section in the sidebar
+ */
+function renderSettings() {
+  const settingsListEl = document.getElementById('settings-list');
+  if (!settingsListEl) return;
+
+  let html = '<div class="settings-header"><span>Settings</span></div>';
+  html += '<div class="settings-item" onclick="showPromptsEditor()">';
+  html += '<div class="settings-item-name">Prompts</div>';
+  html += '</div>';
+
+  settingsListEl.innerHTML = html;
+}
+
+/**
+ * Show prompts editor (placeholder for now)
+ */
+function showPromptsEditor() {
+  console.log('Opening prompts editor');
+
+  // Clear terminal grid
+  const terminalGrid = document.getElementById('terminal-grid');
+  if (terminalGrid) {
+    terminalGrid.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);font-size:1rem;">Prompts editor will go here</div>';
+  }
+
+  // Hide pipeline detail if shown
+  const pipelineDetail = document.getElementById('pipeline-detail');
+  if (pipelineDetail) {
+    pipelineDetail.style.display = 'none';
+  }
+}
+
+/**
  * Restart the Orcha web server
  */
 async function restartServer() {
@@ -3925,6 +3959,7 @@ async function render() {
   updateSidebar(tmuxSessions, instances);
   updatePipelineSidebar(pipelines);
   updatePresetSidebar(presets);
+  renderSettings();
   updateSummary(summary);
   renderActionBar(actions);
   updateUsageDisplay(usage);

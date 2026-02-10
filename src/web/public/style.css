@@ -2408,6 +2408,38 @@ body {
   font-size: 0.75rem;
 }
 
+/* Settings sidebar */
+.settings-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.settings-item {
+  padding: 6px 16px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.settings-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.settings-item.active {
+  background: var(--bg-tertiary);
+  border-left-color: var(--accent-purple);
+}
+
+.settings-item-name {
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
 .pipeline-item {
   display: flex;
   align-items: center;
