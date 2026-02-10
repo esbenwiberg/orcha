@@ -14,7 +14,7 @@
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
 import { execSync } from 'child_process'
-import type { PipelineRun, GateResult, StageResult } from '../types.js'
+import type { PipelineRun, GateResult, StageResult, AttemptHistoryEntry } from '../types.js'
 import { transition, recordStageResult, incrementFixLoop, transitionToError } from '../pipeline-engine.js'
 import { getPipelineDir } from '../pipeline-store.js'
 import { runStage } from '../stage-runner.js'
@@ -25,6 +25,7 @@ import { getDiff } from '../git-utils.js'
 import { appendProgress } from '../progress.js'
 import { CircuitBreaker } from '../fix-loop/circuit-breaker.js'
 import { savePipelineRun } from '../pipeline-store.js'
+import { EscalationManager } from '../escalation/escalation-manager.js'
 
 // ============================================================================
 // Types
@@ -73,6 +74,10 @@ export async function runFixLoopStage(
         detail: failureSignature.description,
       }).catch(() => { /* best-effort */ })
 
+      // Use escalation manager to record escalation state
+      const escalationManager = new EscalationManager()
+      await escalationManager.escalate(run.id, `Circuit breaker: ${failureSignature.description}`)
+
       run = await transition(run, 'escalated')
       return run
     }
@@ -98,12 +103,20 @@ export async function runFixLoopStage(
         detail: failureSignature.description,
       }).catch(() => { /* best-effort */ })
 
+      // Use escalation manager to record escalation state
+      const escalationManager = new EscalationManager()
+      await escalationManager.escalate(run.id, `Circuit breaker: ${failureSignature.description}`)
+
       run = await transition(run, 'escalated')
       return run
     }
 
     // Check if we've exceeded max fix loops
     if (run.fixLoopCount >= maxFixLoops) {
+      // Use escalation manager to record escalation state
+      const escalationManager = new EscalationManager()
+      await escalationManager.escalate(run.id, `Max fix loops exceeded (${maxFixLoops})`)
+
       run = await transition(run, 'escalated')
       return run
     }
@@ -194,7 +207,9 @@ export async function runFixLoopStage(
         model: result.model,
         budget: result.budget,
         failureReport,
+        startedAt,
         completedAt: new Date().toISOString(),
+        // Gate results will be populated after gate re-runs (not yet available here)
       }, null, 2),
       'utf-8',
     )

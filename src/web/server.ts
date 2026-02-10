@@ -2632,6 +2632,134 @@ export class WebDashboardServer {
       }
     })
 
+    // API: List all escalated pipelines
+    this.app.get('/api/pipelines/escalated', async (_req, res) => {
+      try {
+        const { EscalationManager } = await import('../pipeline/escalation/escalation-manager.js')
+        const manager = new EscalationManager()
+        const escalated = await manager.getEscalatedPipelines()
+        res.json(escalated)
+      } catch (err) {
+        console.error('[API] Get escalated pipelines error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Get escalation details for a pipeline
+    this.app.get('/api/pipelines/:id/escalation', async (req, res) => {
+      try {
+        const { EscalationManager } = await import('../pipeline/escalation/escalation-manager.js')
+        const { loadPipelineRun } = await import('../pipeline/index.js')
+        const { AuditLogger } = await import('../pipeline/escalation/audit-log.js')
+
+        const run = await loadPipelineRun(req.params.id)
+        if (!run) {
+          res.status(404).json({ error: 'Pipeline not found' })
+          return
+        }
+
+        const manager = new EscalationManager()
+        const escalation = await manager.getEscalationDetails(req.params.id)
+
+        if (!escalation) {
+          res.status(404).json({ error: 'Pipeline is not escalated' })
+          return
+        }
+
+        // Get audit trail
+        const auditLogger = new AuditLogger(req.params.id)
+        const auditTrail = await auditLogger.getAuditTrail()
+
+        // Build available actions based on current state
+        const availableActions = [
+          { type: 'skip-gate', label: 'Skip Gate Check', requiresInput: true, inputType: 'gate-name' },
+          { type: 'override-severity', label: 'Override Severity', requiresInput: true, inputType: 'severity' },
+          { type: 'retry-with-feedback', label: 'Retry with Feedback', requiresInput: true, inputType: 'text' },
+          { type: 'abort', label: 'Abort Pipeline', requiresInput: false },
+          { type: 'force-ship', label: 'Force Ship', requiresInput: false, requiresConfirmation: true },
+        ]
+
+        res.json({
+          escalation,
+          auditTrail,
+          availableActions,
+          gateResults: run.gateResults,
+        })
+      } catch (err) {
+        console.error('[API] Get escalation details error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Process user action on escalated pipeline
+    this.app.post('/api/pipelines/:id/escalation/action', async (req, res) => {
+      try {
+        const { processUserAction } = await import('../pipeline/escalation/user-actions.js')
+        const { executeFixLoopStage, executeGateStage, executeShipStage } = await import('../pipeline/index.js')
+
+        const action = req.body
+        if (!action || !action.type) {
+          res.status(400).json({ error: 'Invalid action: missing type' })
+          return
+        }
+
+        // Add timestamp if not present
+        if (!action.timestamp) {
+          action.timestamp = new Date().toISOString()
+        }
+
+        // Process the action
+        let run = await processUserAction(req.params.id, action)
+
+        console.log(`[API] Pipeline ${req.params.id} escalation action ${action.type} -> state: ${run.state}`)
+        res.status(202).json(run)
+
+        // Auto-continue execution for certain state transitions
+        const continueRun = async (r: typeof run) => {
+          let current = r
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            if (current.state === 'fix-loop') {
+              current = await executeFixLoopStage(current)
+            } else if (current.state === 'gate') {
+              current = await executeGateStage(current)
+            } else if (current.state === 'ship') {
+              current = await executeShipStage(current)
+            } else {
+              break // checkpoint, terminal, escalated, or error — stop
+            }
+          }
+        }
+        continueRun(run).catch((err) => {
+          console.error(`[API] Pipeline ${req.params.id} post-action execution failed:`, (err as Error).message)
+        })
+      } catch (err) {
+        console.error('[API] Process escalation action error:', err)
+        if (!res.headersSent) {
+          res.status(400).json({ error: (err as Error).message })
+        }
+      }
+    })
+
+    // API: Get attempt history for a pipeline (for timeline view)
+    this.app.get('/api/pipelines/:id/attempt-history', async (req, res) => {
+      try {
+        const { EscalationManager } = await import('../pipeline/escalation/escalation-manager.js')
+        const manager = new EscalationManager()
+        const escalation = await manager.getEscalationDetails(req.params.id)
+
+        if (!escalation) {
+          res.json({ attemptHistory: [] })
+          return
+        }
+
+        res.json({ attemptHistory: escalation.attemptHistory })
+      } catch (err) {
+        console.error('[API] Get attempt history error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Get gate results for a pipeline
     this.app.get('/api/pipelines/:id/gate-results', async (req, res) => {
       try {

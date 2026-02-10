@@ -313,6 +313,73 @@ export interface CircuitBreakerState {
 }
 
 // ============================================================================
+// Escalation & User Actions
+// ============================================================================
+
+/** User action types for escalated pipelines. */
+export type UserActionType =
+  | 'skip-gate'
+  | 'override-severity'
+  | 'retry-with-feedback'
+  | 'abort'
+  | 'force-ship'
+
+/** A user action on an escalated pipeline. */
+export interface UserAction {
+  type: UserActionType
+  /** Gate name to skip (for skip-gate). */
+  gateName?: string
+  /** New severity threshold (for override-severity). */
+  severityThreshold?: Severity
+  /** User feedback text (for retry-with-feedback). */
+  feedback?: string
+  /** User who performed the action. */
+  user?: string
+  timestamp: string
+}
+
+/** Escalation state tracking. */
+export interface EscalationState {
+  /** Reason for escalation (e.g. "Max fix loops exceeded"). */
+  reason: string
+  /** ISO 8601 timestamp when escalated. */
+  escalatedAt: string
+  /** Fix attempt history with metadata. */
+  attemptHistory: AttemptHistoryEntry[]
+  /** Gate failure report at escalation time. */
+  failureReport?: string
+}
+
+/** Single entry in the fix attempt history. */
+export interface AttemptHistoryEntry {
+  /** Attempt number (1-indexed). */
+  attempt: number
+  /** Commit SHA after this attempt. */
+  commitSha?: string
+  /** Model used for this attempt. */
+  model?: string
+  /** Timestamp when attempt started. */
+  startedAt: string
+  /** Timestamp when attempt completed. */
+  completedAt?: string
+  /** Gate results after this attempt (if re-gated). */
+  gateResults?: GateResult[]
+}
+
+/** Audit log entry for user actions. */
+export interface AuditEntry {
+  /** User action that was performed. */
+  action: UserAction
+  /** Result of the action (success or error). */
+  result: 'success' | 'error'
+  /** Error message if result is 'error'. */
+  error?: string
+  /** Pipeline state after the action. */
+  newState?: PipelineState
+  timestamp: string
+}
+
+// ============================================================================
 // Milestone Progress Tracking
 // ============================================================================
 
@@ -423,6 +490,10 @@ export interface PipelineRun {
   // --- Review rounds ---
   /** Number of times the pipeline has been sent back for review feedback or review points. */
   reviewRounds?: number
+
+  // --- Escalation ---
+  /** Escalation state when pipeline is escalated. */
+  escalation?: EscalationState
 
   // --- Error ---
   /** Error message if state === 'error'. */
