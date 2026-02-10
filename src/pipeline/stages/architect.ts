@@ -104,9 +104,14 @@ export const BLUEPRINT_SCHEMA = {
       description: '(Deprecated - use milestones instead) Backward compatibility alias for milestones',
     },
   },
-  // Note: milestones/steps not in required array because JSON schema can't express "one of".
-  // The isValidBlueprint type guard enforces that at least one is present.
+  // Schema requires the core fields. For milestones vs steps, we use anyOf to express
+  // "at least one must be present". The isValidBlueprint type guard additionally
+  // enforces that the array is non-empty to prevent silent skips in the dev stage.
   required: ['headline', 'shortDescription', 'approach', 'filesToTouch', 'risks', 'testStrategy'],
+  anyOf: [
+    { required: ['milestones'] },
+    { required: ['steps'] },
+  ],
 }
 
 // Re-export BlueprintOutput from types.ts for backward compatibility
@@ -241,8 +246,10 @@ function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
   if (typeof obj !== 'object' || obj === null) return false
   const bp = obj as Record<string, unknown>
   // Support both 'milestones' (preferred) and 'steps' (backward compat)
-  // At least one must be present
-  const hasMilestones = Array.isArray(bp.milestones) || Array.isArray(bp.steps)
+  // At least one must be present AND non-empty to avoid silent skip in dev stage
+  const milestonesArray = Array.isArray(bp.milestones) ? bp.milestones : []
+  const stepsArray = Array.isArray(bp.steps) ? bp.steps : []
+  const hasMilestones = milestonesArray.length > 0 || stepsArray.length > 0
   return (
     typeof bp.headline === 'string' &&
     typeof bp.shortDescription === 'string' &&
