@@ -5,14 +5,29 @@
  * Runs the project's configured test command (default: `npm test`)
  * in the pipeline worktree and captures the output.
  *
- * Detects test command from package.json scripts. If no test command
- * exists, skips with a warning.
+ * Supports multi-tech stacks: when TechStack[] is provided, runs each
+ * stack's test command in its own directory. Falls back to legacy
+ * package.json detection when no stacks are provided.
  */
 
 import { readFile } from 'fs/promises'
-import { join } from 'path'
+import { join, relative } from 'path'
 import { execSync } from 'child_process'
-import type { GateResult } from '../types.js'
+import type { GateResult, GateVerdict } from '../types.js'
+import type { TechStack } from '../tech-scanner.js'
+
+// ============================================================================
+// Per-Stack Result (for details breakdown)
+// ============================================================================
+
+interface StackTestResult {
+  type: string
+  path: string
+  status: GateVerdict
+  command?: string
+  output?: string
+  exitCode?: number
+}
 
 // ============================================================================
 // Test Runner
@@ -20,8 +35,127 @@ import type { GateResult } from '../types.js'
 
 /**
  * Run tests in the worktree and return a GateResult.
+ *
+ * When techStacks is provided and non-empty, runs the test command for each
+ * stack that has one configured. When not provided, falls back to legacy
+ * package.json detection for backward compatibility.
  */
-export async function runTestRunner(worktreePath: string): Promise<GateResult> {
+export async function runTestRunner(
+  worktreePath: string,
+  techStacks?: TechStack[],
+): Promise<GateResult> {
+  // Multi-tech path: run per-stack tests
+  if (techStacks && techStacks.length > 0) {
+    return runMultiStackTests(worktreePath, techStacks)
+  }
+
+  // Legacy path: detect from package.json (backward compat)
+  return runLegacyTests(worktreePath)
+}
+
+// ============================================================================
+// Multi-Stack Test Execution
+// ============================================================================
+
+/**
+ * Run tests for each detected tech stack. Collects per-stack results and
+ * aggregates the verdict: any fail → 'fail', all skip → 'skip', else 'pass'.
+ */
+function runMultiStackTests(worktreePath: string, techStacks: TechStack[]): GateResult {
+  const timestamp = new Date().toISOString()
+  const stackResults: StackTestResult[] = []
+
+  for (const stack of techStacks) {
+    const relPath = relative(worktreePath, stack.absolutePath) || '.'
+
+    if (!stack.commands.test) {
+      stackResults.push({
+        type: stack.type,
+        path: relPath,
+        status: 'skip',
+      })
+      continue
+    }
+
+    try {
+      const output = execSync(stack.commands.test, {
+        cwd: stack.absolutePath,
+        encoding: 'utf-8',
+        timeout: 300000, // 5 minute timeout per stack
+        env: {
+          ...process.env,
+          CI: '1',
+          NO_COLOR: '1',
+          FORCE_COLOR: '0',
+        },
+      })
+
+      stackResults.push({
+        type: stack.type,
+        path: relPath,
+        status: 'pass',
+        command: stack.commands.test,
+        output: output.slice(-2000),
+      })
+    } catch (err) {
+      const execError = err as { status?: number; stdout?: string; stderr?: string }
+      const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
+
+      stackResults.push({
+        type: stack.type,
+        path: relPath,
+        status: 'fail',
+        command: stack.commands.test,
+        output: output.slice(-4000),
+        exitCode: execError.status,
+      })
+    }
+  }
+
+  // Aggregate verdict
+  const verdict = aggregateVerdict(stackResults.map((r) => r.status))
+
+  // Build summary
+  const passed = stackResults.filter((r) => r.status === 'pass').length
+  const failed = stackResults.filter((r) => r.status === 'fail').length
+  const skipped = stackResults.filter((r) => r.status === 'skip').length
+  const parts: string[] = []
+  if (passed > 0) parts.push(`${passed} passed`)
+  if (failed > 0) parts.push(`${failed} failed`)
+  if (skipped > 0) parts.push(`${skipped} skipped`)
+  const summary =
+    verdict === 'fail'
+      ? `Tests failed (${parts.join(', ')})`
+      : verdict === 'skip'
+        ? `No test commands configured — skipping test gate`
+        : `All tests passed (${parts.join(', ')})`
+
+  return {
+    verdict,
+    checkName: 'test-runner',
+    summary,
+    details: { stacks: stackResults },
+    timestamp,
+  }
+}
+
+/**
+ * Aggregate individual verdicts: any fail → 'fail', all skip → 'skip', else 'pass'.
+ */
+function aggregateVerdict(verdicts: GateVerdict[]): GateVerdict {
+  if (verdicts.some((v) => v === 'fail')) return 'fail'
+  if (verdicts.every((v) => v === 'skip')) return 'skip'
+  return 'pass'
+}
+
+// ============================================================================
+// Legacy Test Execution (backward compat)
+// ============================================================================
+
+/**
+ * Original single-project test runner. Used when no techStacks are provided.
+ */
+async function runLegacyTests(worktreePath: string): Promise<GateResult> {
   const timestamp = new Date().toISOString()
 
   // Detect test command from package.json
