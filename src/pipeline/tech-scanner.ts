@@ -325,13 +325,14 @@ function hasPythonDep(content: string, dep: string): boolean {
   let pos = 0
   while ((pos = lowerContent.indexOf(lowerDep, pos)) !== -1) {
     // Check character before (must be word boundary)
-    const charBefore = pos > 0 ? lowerContent[pos - 1] : '\n'
-    const isValidBefore = /^[\s'"=<>!,\[\]\n]$/.test(charBefore)
+    // Using character code checks instead of regex to prevent ReDoS
+    const charBefore = pos > 0 ? lowerContent.charCodeAt(pos - 1) : 10 // '\n'
+    const isValidBefore = isWordBoundaryChar(charBefore)
 
     // Check character after (must be word boundary)
     const afterPos = pos + lowerDep.length
-    const charAfter = afterPos < lowerContent.length ? lowerContent[afterPos] : '\n'
-    const isValidAfter = /^[\s'"=<>!,\[\]\n]$/.test(charAfter)
+    const charAfter = afterPos < lowerContent.length ? lowerContent.charCodeAt(afterPos) : 10 // '\n'
+    const isValidAfter = isWordBoundaryChar(charAfter)
 
     if (isValidBefore && isValidAfter) {
       return true
@@ -340,5 +341,23 @@ function hasPythonDep(content: string, dep: string): boolean {
     pos++
   }
 
+  return false
+}
+
+/**
+ * Check if a character code represents a word boundary for dependency matching.
+ * Uses character codes instead of regex to prevent ReDoS vulnerabilities.
+ *
+ * Matches: whitespace, quotes, =, <, >, !, comma, [, ], newline
+ */
+function isWordBoundaryChar(code: number): boolean {
+  // Space (32), Tab (9), Newline (10), Carriage return (13)
+  if (code === 32 || code === 9 || code === 10 || code === 13) return true
+  // Single quote (39), Double quote (34)
+  if (code === 39 || code === 34) return true
+  // = (61), < (60), > (62), ! (33)
+  if (code === 61 || code === 60 || code === 62 || code === 33) return true
+  // Comma (44), [ (91), ] (93)
+  if (code === 44 || code === 91 || code === 93) return true
   return false
 }

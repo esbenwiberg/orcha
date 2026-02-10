@@ -131,7 +131,12 @@ export interface StackRunnerResult {
 export function aggregateStackVerdicts(verdicts: GateVerdict[]): GateVerdict {
   if (verdicts.some((v) => v === 'fail')) return 'fail'
   if (verdicts.every((v) => v === 'skip')) return 'skip'
-  return 'pass'
+  // Explicit check for 'pass' — any verdict that isn't 'fail' or 'skip' but also
+  // isn't explicitly 'pass' would still fall through to 'pass'. Since GateVerdict
+  // is a union type that could be extended, we check for 'pass' explicitly first.
+  if (verdicts.some((v) => v === 'pass')) return 'pass'
+  // Fallback: empty array or all unknown verdicts (shouldn't happen with current types)
+  return 'skip'
 }
 
 export interface StageResult {

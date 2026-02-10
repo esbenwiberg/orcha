@@ -68,7 +68,7 @@ import {
 
 import { rm } from 'fs/promises'
 import { existsSync } from 'fs'
-import { listPrompts, showPrompt } from './prompts.js'
+import { listPrompts, showPrompt, editPrompt, resetPrompt } from './prompts.js'
 
 const program = new Command()
 
@@ -1704,6 +1704,22 @@ promptsCmd
   .description('Show details of a prompt template')
   .action(async (name: string) => {
     await showPrompt(name)
+  })
+
+// orcha prompts edit
+promptsCmd
+  .command('edit <name>')
+  .description('Edit a prompt template in your editor')
+  .action(async (name: string) => {
+    await editPrompt(name)
+  })
+
+// orcha prompts reset
+promptsCmd
+  .command('reset <name>')
+  .description('Reset a prompt template to default')
+  .action(async (name: string) => {
+    await resetPrompt(name)
   })
 
 // =============================================================================

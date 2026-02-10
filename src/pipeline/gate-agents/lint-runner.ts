@@ -40,7 +40,11 @@ import { getChangedLintableFiles, getChangedFilesByExtensions } from '../git-uti
  * Allowed: alphanumeric, hyphen, underscore, period, forward slash, at-sign, plus
  * This covers normal file paths like 'src/components/Button.tsx' or '@types/node.d.ts'
  */
-const SAFE_FILENAME_RE = /^[a-zA-Z0-9_.\-/@+]+$/
+// Security: Strict whitelist of allowed characters in filenames.
+// Rejects:
+// - '@' and '+' which can be special in some contexts (npm scope, argument parsers)
+// - Consecutive slashes via separate validation
+const SAFE_FILENAME_RE = /^[a-zA-Z0-9_.\-/]+$/
 
 function isValidFilename(filename: string): boolean {
   // Reject empty filenames
@@ -51,6 +55,8 @@ function isValidFilename(filename: string): boolean {
   if (filename.includes('..')) return false
   // Reject absolute paths
   if (filename.startsWith('/')) return false
+  // Reject consecutive slashes (could bypass security checks)
+  if (filename.includes('//')) return false
   // Only allow whitelisted characters
   return SAFE_FILENAME_RE.test(filename)
 }

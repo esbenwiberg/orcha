@@ -166,9 +166,16 @@ function filterSafeFilenames(filenames: string[]): string[] {
  * Validate that an extension is safe for use in shell commands.
  * Throws if the extension doesn't match the safe pattern or is too long.
  *
- * Security: Length limit prevents memory exhaustion from extremely long strings.
+ * Security:
+ * - Length limit prevents memory exhaustion from extremely long strings
+ * - Pattern validation ensures only alphanumeric extensions
+ * - Must start with '.' to be a valid extension
  */
 function assertSafeExtension(ext: string): void {
+  // Must start with '.'
+  if (!ext.startsWith('.')) {
+    throw new Error(`Invalid file extension (must start with '.'): ${ext}`)
+  }
   // Limit extension length to prevent memory issues (10 chars like ".typescript" is more than enough)
   if (ext.length > 10) {
     throw new Error(`File extension too long: ${ext}`)

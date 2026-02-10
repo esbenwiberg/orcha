@@ -277,6 +277,18 @@ function assertSafeTemplateName(templateName: string): void {
   if (!SAFE_TEMPLATE_NAME_RE.test(templateName)) {
     throw new Error(`Invalid template name (unsafe characters): ${templateName}`)
   }
+  // Validate each path segment individually to catch edge cases like 'foo//bar'
+  // or segments that are empty after split (which would indicate consecutive slashes)
+  const segments = templateName.split('/')
+  for (const segment of segments) {
+    if (!segment) {
+      throw new Error(`Invalid template name (empty path segment): ${templateName}`)
+    }
+    // Each segment must not be a relative path indicator
+    if (segment === '.' || segment === '..') {
+      throw new Error(`Invalid template name (relative path segment): ${templateName}`)
+    }
+  }
 }
 
 /**
@@ -440,4 +452,40 @@ function extractVariableReferences(template: TemplateData): string[] {
   extractFromText(template.userPrompt)
 
   return Array.from(vars)
+}
+
+// ============================================================================
+// Template Management
+// ============================================================================
+
+/**
+ * Reset a template to its default by deleting the custom override.
+ *
+ * @param templateName - Template name (e.g., 'architect', 'gate/adversary')
+ * @throws Error if template doesn't exist or deletion fails
+ */
+export async function resetTemplate(templateName: string): Promise<void> {
+  // Validate template name to prevent path traversal
+  assertSafeTemplateName(templateName)
+
+  const customPath = join(CUSTOM_PROMPTS_DIR, `${templateName}.yaml`)
+  const defaultPath = join(DEFAULT_PROMPTS_DIR, `${templateName}.yaml`)
+
+  // Check if default exists
+  if (!(await exists(defaultPath))) {
+    throw new Error(`Template '${templateName}' does not exist in defaults`)
+  }
+
+  // Check if custom override exists
+  if (!(await exists(customPath))) {
+    throw new Error(`Template '${templateName}' has no custom override to reset`)
+  }
+
+  // Delete custom override
+  const { unlink } = await import('node:fs/promises')
+  try {
+    await unlink(customPath)
+  } catch (err) {
+    throw new Error(`Failed to delete custom override: ${(err as Error).message}`)
+  }
 }

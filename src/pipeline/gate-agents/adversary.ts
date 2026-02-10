@@ -50,6 +50,8 @@ interface TestExecResult {
   filename: string
   compiled: boolean
   passed: boolean
+  /** True if test execution was skipped (e.g. .NET tests which are review-only). */
+  skipped?: boolean
   output: string
 }
 
@@ -147,8 +149,10 @@ export async function runAdversary(
     // Execute each test against the worktree (tech-aware runner)
     const execResults = await executeTests(tempDir, run.worktreePath, adversaryOutput.tests, primaryTech)
 
-    // Determine verdict: only tests that compiled AND failed count as gate failures
-    const compiled = execResults.filter((r) => r.compiled)
+    // Categorize results: compiled tests, skipped tests, and failures
+    const skipped = execResults.filter((r) => r.skipped)
+    const executed = execResults.filter((r) => !r.skipped)
+    const compiled = executed.filter((r) => r.compiled)
     const failedTests = compiled.filter((r) => !r.passed)
 
     if (failedTests.length > 0) {
@@ -159,6 +163,7 @@ export async function runAdversary(
         details: {
           testsWritten: adversaryOutput.tests.length,
           testsCompiled: compiled.length,
+          testsSkipped: skipped.length,
           testsPassed: compiled.length - failedTests.length,
           testsFailed: failedTests.length,
           failures: failedTests.map((t) => ({
@@ -178,6 +183,7 @@ export async function runAdversary(
       details: {
         testsWritten: adversaryOutput.tests.length,
         testsCompiled: compiled.length,
+        testsSkipped: skipped.length,
         testsPassed: compiled.length,
         testsFailed: 0,
         reasoning: adversaryOutput.reasoning,
@@ -301,9 +307,14 @@ function getTestRunner(
   testPath: string,
   techType?: TechStack['type'],
 ): { cmd: string; args: string[] } | null {
+  // Security: Prefix testPath with './' if it starts with '-' to prevent flag injection.
+  // Even though execFileSync with args array prevents shell injection, a path like
+  // '--some-flag' could be interpreted as a CLI flag by the test runner.
+  const safePath = testPath.startsWith('-') ? `./${testPath}` : testPath
+
   switch (techType) {
     case 'python':
-      return { cmd: 'pytest', args: [testPath, '-x', '--tb=short'] }
+      return { cmd: 'pytest', args: [safePath, '-x', '--tb=short'] }
     case 'dotnet':
       // .NET adversary tests cannot be executed standalone — they need a project
       // context to compile. This is a known limitation; the tests are still
@@ -311,7 +322,7 @@ function getTestRunner(
       return null
     case 'node':
     default:
-      return { cmd: 'npx', args: ['tsx', testPath] }
+      return { cmd: 'npx', args: ['tsx', safePath] }
   }
 }
 
@@ -362,11 +373,13 @@ async function executeTests(
     // Get the appropriate test runner for this tech type
     const runner = getTestRunner(testPath, techType)
     if (!runner) {
-      // Execution skipped (e.g. .NET) — treat as compiled-but-passed (review-only)
+      // Execution skipped (e.g. .NET) — mark as skipped, not "passed"
+      // The verdict calculation should treat skipped tests differently from passed tests
       results.push({
         filename: safeName,
-        compiled: true,
-        passed: true,
+        compiled: false, // Not compiled because we didn't even try
+        passed: false,   // Not passed because we didn't run it
+        skipped: true,   // Explicitly mark as skipped
         output: `Execution skipped for ${techType ?? 'unknown'} — tests are review-only artifacts`,
       })
       continue

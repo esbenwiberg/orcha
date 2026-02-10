@@ -283,9 +283,11 @@ function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
   // Schema semantics: anyOf requires at least one of milestones OR steps to be valid.
   // If BOTH fields are present, at least one must be valid.
   // If both are present and both are invalid, that's a failure.
-  // If both are present and both are valid, we prefer milestones (this is fine per anyOf).
+  // If both are present and both are valid, milestones takes precedence (see getBlueprintMilestones
+  // in types.ts which always reads milestones first, falling back to steps only if milestones is empty).
   if (milestonesPresent && stepsPresent) {
     // Both fields present — at least one must be valid
+    // Note: At runtime, getBlueprintMilestones enforces milestones > steps precedence
     return milestonesValid || stepsValid
   } else if (milestonesPresent) {
     // Only milestones field present — it must be valid

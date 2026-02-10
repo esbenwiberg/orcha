@@ -170,8 +170,11 @@ export async function buildArchitectPrompt(
     }
     return compileTemplate(template, variables)
   } catch (err) {
+    // Note: Template loading failure is expected on first run or fresh installs.
+    // The hardcoded prompts serve as a reliable fallback. If custom templates are
+    // configured and failing, check ~/.orcha/prompts/ for syntax errors.
     console.warn(
-      `[prompt-builder] Failed to load architect template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+      `[prompt-builder] Template 'architect' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
     )
 
     // FALLBACK: Original hardcoded implementation
@@ -359,7 +362,7 @@ export async function buildDevPrompt(
     return compileTemplate(template, variables)
   } catch (err) {
     console.warn(
-      `[prompt-builder] Failed to load dev template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+      `[prompt-builder] Template 'dev' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
     )
 
     // FALLBACK: Original hardcoded implementation
@@ -431,7 +434,7 @@ export async function buildMilestoneDevPrompt(
     return compileTemplate(template, variables)
   } catch (err) {
     console.warn(
-      `[prompt-builder] Failed to load milestone-dev template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+      `[prompt-builder] Template 'milestone-dev' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
     )
 
     // FALLBACK: Original hardcoded implementation
@@ -539,7 +542,7 @@ export async function buildAcValidatorPrompt(
     return compileTemplate(template, variables)
   } catch (err) {
     console.warn(
-      `[prompt-builder] Failed to load gate/ac-validator template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+      `[prompt-builder] Template 'gate/ac-validator' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
     )
 
     // FALLBACK: Original hardcoded implementation
@@ -625,7 +628,7 @@ export async function buildAdversaryPrompt(
     return compileTemplate(template, variables)
   } catch (err) {
     console.warn(
-      `[prompt-builder] Failed to load gate/adversary template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+      `[prompt-builder] Template 'gate/adversary' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
     )
 
     // FALLBACK: Original hardcoded implementation
@@ -747,7 +750,7 @@ export async function buildSecurityReviewPrompt(
     return compileTemplate(template, variables)
   } catch (err) {
     console.warn(
-      `[prompt-builder] Failed to load gate/security-review template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+      `[prompt-builder] Template 'gate/security-review' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
     )
 
     // FALLBACK: Original hardcoded implementation
@@ -830,7 +833,7 @@ export async function buildCodeReviewPrompt(
     return compileTemplate(template, variables)
   } catch (err) {
     console.warn(
-      `[prompt-builder] Failed to load gate/code-review template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+      `[prompt-builder] Template 'gate/code-review' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
     )
 
     // FALLBACK: Original hardcoded implementation
@@ -914,7 +917,7 @@ export async function buildFixLoopPrompt(
     return compileTemplate(template, variables)
   } catch (err) {
     console.warn(
-      `[prompt-builder] Failed to load fix-loop template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+      `[prompt-builder] Template 'fix-loop' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
     )
 
     // FALLBACK: Original hardcoded implementation
