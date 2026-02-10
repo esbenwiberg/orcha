@@ -17,24 +17,19 @@
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
 import { execSync } from 'child_process'
-import type { GateResult, GateVerdict } from '../types.js'
+import type { GateResult, StackRunnerResult } from '../types.js'
+import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
 import { getChangedLintableFiles, getChangedFilesByExtensions } from '../git-utils.js'
 
 // ============================================================================
-// Per-Stack Result (for details breakdown)
+// Lint-specific result (extends StackRunnerResult with lint fields)
 // ============================================================================
 
-interface StackLintResult {
-  type: string
-  path: string
-  status: GateVerdict
-  command?: string
+interface StackLintResult extends StackRunnerResult {
   filesChecked?: number
   files?: string[]
   findings?: LintFinding[]
-  output?: string
-  exitCode?: number
 }
 
 // ============================================================================
@@ -93,13 +88,7 @@ function runMultiStackLint(
       continue
     }
 
-    // .NET operates on the whole project — no file list needed
-    if (stack.type === 'dotnet') {
-      stackResults.push(runDotnetLint(stack, relPath))
-      continue
-    }
-
-    // For Node and Python, scope to changed files matching stack extensions
+    // For all stacks, scope to changed files matching stack extensions
     const changedFiles = getChangedFilesByExtensions(
       worktreePath,
       sourceBranch,
@@ -119,13 +108,15 @@ function runMultiStackLint(
 
     if (stack.type === 'node') {
       stackResults.push(runNodeLint(stack, relPath, changedFiles))
+    } else if (stack.type === 'dotnet') {
+      stackResults.push(runDotnetLint(stack, relPath, changedFiles))
     } else if (stack.type === 'python') {
       stackResults.push(runPythonLint(stack, relPath, changedFiles))
     }
   }
 
   // Aggregate verdict
-  const verdict = aggregateVerdict(stackResults.map((r) => r.status))
+  const verdict = aggregateStackVerdicts(stackResults.map((r) => r.status))
 
   // Build summary
   const passed = stackResults.filter((r) => r.status === 'pass').length
@@ -213,10 +204,12 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
 
 /**
  * Run .NET lint via `dotnet format --verify-no-changes`.
- * Operates on the whole project/solution — no file list needed.
+ * Scoped to changed files using `--include` flags.
  */
-function runDotnetLint(stack: TechStack, relPath: string): StackLintResult {
-  const lintCommand = stack.commands.lint!
+function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
+  // Build --include flags for each changed file to scope dotnet format
+  const includeArgs = changedFiles.map((f) => `--include "${f.replace(/["\\$`]/g, '\\$&')}"`).join(' ')
+  const lintCommand = `${stack.commands.lint!} ${includeArgs}`
 
   try {
     const output = execSync(lintCommand, {
@@ -236,6 +229,8 @@ function runDotnetLint(stack: TechStack, relPath: string): StackLintResult {
       path: relPath,
       status: 'pass',
       command: lintCommand,
+      filesChecked: changedFiles.length,
+      files: changedFiles,
       output: output.slice(-2000),
     }
   } catch (err) {
@@ -247,6 +242,8 @@ function runDotnetLint(stack: TechStack, relPath: string): StackLintResult {
       path: relPath,
       status: 'fail',
       command: lintCommand,
+      filesChecked: changedFiles.length,
+      files: changedFiles,
       findings: parseGenericOutput(output),
       output: output.slice(-4000),
       exitCode: execError.status,
@@ -310,19 +307,6 @@ function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]
       exitCode: execError.status,
     }
   }
-}
-
-// ============================================================================
-// Verdict Aggregation
-// ============================================================================
-
-/**
- * Aggregate individual verdicts: any fail → 'fail', all skip → 'skip', else 'pass'.
- */
-function aggregateVerdict(verdicts: GateVerdict[]): GateVerdict {
-  if (verdicts.some((v) => v === 'fail')) return 'fail'
-  if (verdicts.every((v) => v === 'skip')) return 'skip'
-  return 'pass'
 }
 
 // ============================================================================

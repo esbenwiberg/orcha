@@ -13,21 +13,9 @@
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
 import { execSync } from 'child_process'
-import type { GateResult, GateVerdict } from '../types.js'
+import type { GateResult, StackRunnerResult } from '../types.js'
+import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
-
-// ============================================================================
-// Per-Stack Result (for details breakdown)
-// ============================================================================
-
-interface StackTestResult {
-  type: string
-  path: string
-  status: GateVerdict
-  command?: string
-  output?: string
-  exitCode?: number
-}
 
 // ============================================================================
 // Test Runner
@@ -63,7 +51,7 @@ export async function runTestRunner(
  */
 function runMultiStackTests(worktreePath: string, techStacks: TechStack[]): GateResult {
   const timestamp = new Date().toISOString()
-  const stackResults: StackTestResult[] = []
+  const stackResults: StackRunnerResult[] = []
 
   for (const stack of techStacks) {
     const relPath = relative(worktreePath, stack.absolutePath) || '.'
@@ -113,7 +101,7 @@ function runMultiStackTests(worktreePath: string, techStacks: TechStack[]): Gate
   }
 
   // Aggregate verdict
-  const verdict = aggregateVerdict(stackResults.map((r) => r.status))
+  const verdict = aggregateStackVerdicts(stackResults.map((r) => r.status))
 
   // Build summary
   const passed = stackResults.filter((r) => r.status === 'pass').length
@@ -137,15 +125,6 @@ function runMultiStackTests(worktreePath: string, techStacks: TechStack[]): Gate
     details: { stacks: stackResults },
     timestamp,
   }
-}
-
-/**
- * Aggregate individual verdicts: any fail → 'fail', all skip → 'skip', else 'pass'.
- */
-function aggregateVerdict(verdicts: GateVerdict[]): GateVerdict {
-  if (verdicts.some((v) => v === 'fail')) return 'fail'
-  if (verdicts.every((v) => v === 'skip')) return 'skip'
-  return 'pass'
 }
 
 // ============================================================================

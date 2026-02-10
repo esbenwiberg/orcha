@@ -12,6 +12,7 @@ export type {
   PipelineConfig,
   GateVerdict,
   GateResult,
+  StackRunnerResult,
   StageResult,
   Blueprint,
   UsageSnapshot,
@@ -20,7 +21,7 @@ export type {
   PipelineRun,
 } from './types.js'
 
-export { ACTIVE_STATES, TERMINAL_STATES, SOFT_TERMINAL_STATES } from './types.js'
+export { ACTIVE_STATES, TERMINAL_STATES, SOFT_TERMINAL_STATES, aggregateStackVerdicts } from './types.js'
 
 // Config
 export {

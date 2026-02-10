@@ -117,6 +117,23 @@ export interface GateResult {
   timestamp: string // ISO 8601
 }
 
+/** Per-stack result used by multi-tech gate runners (test, lint, build). */
+export interface StackRunnerResult {
+  type: string
+  path: string
+  status: GateVerdict
+  command?: string
+  output?: string
+  exitCode?: number
+}
+
+/** Aggregate per-stack verdicts: any fail → 'fail', all skip → 'skip', else 'pass'. */
+export function aggregateStackVerdicts(verdicts: GateVerdict[]): GateVerdict {
+  if (verdicts.some((v) => v === 'fail')) return 'fail'
+  if (verdicts.every((v) => v === 'skip')) return 'skip'
+  return 'pass'
+}
+
 export interface StageResult {
   stage: PipelineState
   startedAt: string // ISO 8601

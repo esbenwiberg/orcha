@@ -161,8 +161,8 @@ function detectDotnet(worktreePath: string): TechStack[] {
         rootPath: worktreePath,
         absolutePath: worktreePath,
         detectedVia: slnFiles[0].name,
-        commands: dotnetCommands,
-        lintableExtensions: dotnetExtensions,
+        commands: { ...dotnetCommands },
+        lintableExtensions: [...dotnetExtensions],
       })
       return stacks
     }
@@ -207,8 +207,8 @@ function detectDotnet(worktreePath: string): TechStack[] {
       rootPath: worktreePath,
       absolutePath: dirname(csprojPath),
       detectedVia: csprojPath.slice(worktreePath.length + 1), // relative path
-      commands: dotnetCommands,
-      lintableExtensions: dotnetExtensions,
+      commands: { ...dotnetCommands },
+      lintableExtensions: [...dotnetExtensions],
     })
   }
 
@@ -248,12 +248,11 @@ function detectPython(worktreePath: string): TechStack[] {
 
   const commands: TechStack['commands'] = {}
 
-  // Test command: check if pytest is in deps
+  // Test command: only set if pytest is detected in deps
   if (hasPythonDep(allContent, 'pytest')) {
     commands.test = 'pytest'
-  } else {
-    commands.test = 'python -m pytest'
   }
+  // else: no test command — don't assume pytest is installed
 
   // Lint command: prefer ruff, then flake8, else skip
   if (hasPythonDep(allContent, 'ruff')) {
