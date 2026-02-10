@@ -898,51 +898,67 @@ export async function buildCodeReviewPrompt(
  * failure report from the gate stage. It must fix the issues without
  * re-implementing from scratch.
  */
-export function buildFixLoopPrompt(
+export async function buildFixLoopPrompt(
   workItem: WorkItemContext,
   codebase: CodebaseContext,
   ctx: FixLoopContext,
-): PromptParts {
-  const systemPrompt = [
-    'You are a fix agent in the Orcha pipeline.',
-    'The dev agent\'s implementation failed the quality gate. Your job is to fix the issues.',
-    '',
-    'Guidelines:',
-    '- Read the failure report carefully — it tells you exactly what went wrong.',
-    '- Fix ONLY the issues identified. Do not refactor or re-implement unrelated code.',
-    '- The existing code changes are already committed. Make targeted fixes on top.',
-    '- Follow the blueprint and existing code conventions.',
-    '- Do NOT run tests — the gate will re-run automatically after your fixes.',
-    '- Do NOT commit your changes — the pipeline handles commits automatically.',
-    '',
-    `This is fix attempt ${ctx.attempt} of ${ctx.maxAttempts}.`,
-    '',
-    '## Blueprint',
-    ctx.blueprintJson,
-  ].join('\n')
+): Promise<PromptParts> {
+  // Try loading template, fall back to hardcoded prompts on failure
+  try {
+    const template = await loadTemplate('fix-loop')
+    const variables = {
+      workItem,
+      codebase,
+      ctx,
+    }
+    return compileTemplate(template, variables)
+  } catch (err) {
+    console.warn(
+      `[prompt-builder] Failed to load fix-loop template, falling back to hardcoded prompts: ${err instanceof Error ? err.message : String(err)}`
+    )
 
-  const acSection = workItem.acceptanceCriteria.length > 0
-    ? ['', '## Acceptance Criteria', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
-    : []
+    // FALLBACK: Original hardcoded implementation
+    const systemPrompt = [
+      'You are a fix agent in the Orcha pipeline.',
+      'The dev agent\'s implementation failed the quality gate. Your job is to fix the issues.',
+      '',
+      'Guidelines:',
+      '- Read the failure report carefully — it tells you exactly what went wrong.',
+      '- Fix ONLY the issues identified. Do not refactor or re-implement unrelated code.',
+      '- The existing code changes are already committed. Make targeted fixes on top.',
+      '- Follow the blueprint and existing code conventions.',
+      '- Do NOT run tests — the gate will re-run automatically after your fixes.',
+      '- Do NOT commit your changes — the pipeline handles commits automatically.',
+      '',
+      `This is fix attempt ${ctx.attempt} of ${ctx.maxAttempts}.`,
+      '',
+      '## Blueprint',
+      ctx.blueprintJson,
+    ].join('\n')
 
-  const userPrompt = [
-    '# Gate Failure Report',
-    ctx.failureReport,
-    '',
-    '# Current Code Changes (git diff)',
-    '```diff',
-    ctx.diff,
-    '```',
-    ...acSection,
-    '',
-    '# Task Description',
-    workItem.description,
-    '',
-    '# Instructions',
-    'Fix the issues described in the gate failure report above.',
-    'Make targeted changes to resolve each failure.',
-    `Source branch: ${codebase.sourceBranch}`,
-  ].join('\n')
+    const acSection = workItem.acceptanceCriteria.length > 0
+      ? ['', '## Acceptance Criteria', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
+      : []
 
-  return { systemPrompt, userPrompt }
+    const userPrompt = [
+      '# Gate Failure Report',
+      ctx.failureReport,
+      '',
+      '# Current Code Changes (git diff)',
+      '```diff',
+      ctx.diff,
+      '```',
+      ...acSection,
+      '',
+      '# Task Description',
+      workItem.description,
+      '',
+      '# Instructions',
+      'Fix the issues described in the gate failure report above.',
+      'Make targeted changes to resolve each failure.',
+      `Source branch: ${codebase.sourceBranch}`,
+    ].join('\n')
+
+    return { systemPrompt, userPrompt }
+  }
 }
