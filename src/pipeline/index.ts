@@ -69,8 +69,12 @@ export type { CreatePipelineRunOptions } from './pipeline-engine.js'
 export { runStage, killPipelineProcesses } from './stage-runner.js'
 export type { StageRunnerOptions, StageRunnerResult } from './stage-runner.js'
 
+// Tech Scanner
+export { detectTechStacks } from './tech-scanner.js'
+export type { TechStack } from './tech-scanner.js'
+
 // Git Utilities
-export { getDiff, getChangedFilesByExtensions, getChangedLintableFiles } from './git-utils.js'
+export { getDiff, getHeadSha, getChangedFilesByExtensions, getChangedLintableFiles } from './git-utils.js'
 
 // Output Parser
 export { tryParseJson, parseStructuredOutput } from './output-parser.js'
@@ -80,6 +84,7 @@ export {
   parseAcceptanceCriteria,
   buildArchitectPrompt,
   buildDevPrompt,
+  buildMilestoneDevPrompt,
   buildAcValidatorPrompt,
   buildAdversaryPrompt,
   buildSecurityReviewPrompt,
@@ -87,7 +92,7 @@ export {
   buildFixLoopPrompt,
   buildStagePrompt,
 } from './prompt-builder.js'
-export type { WorkItemContext, CodebaseContext, BlueprintContext, DiffContext, FixLoopContext, PromptParts } from './prompt-builder.js'
+export type { WorkItemContext, CodebaseContext, BlueprintContext, MilestoneContext, DiffContext, FixLoopContext, PromptParts } from './prompt-builder.js'
 
 // Stages — Architect
 export { runArchitectStage, BLUEPRINT_SCHEMA } from './stages/architect.js'
@@ -161,6 +166,7 @@ export type { ProgressEntry, ProgressType } from './progress.js'
 // Gate Agents
 export { runTestRunner } from './gate-agents/test-runner.js'
 export { runLintRunner } from './gate-agents/lint-runner.js'
+export { runBuildRunner } from './gate-agents/build-runner.js'
 export { runAcValidator } from './gate-agents/ac-validator.js'
 export type { AcValidatorOptions } from './gate-agents/ac-validator.js'
 export { runAdversary } from './gate-agents/adversary.js'
