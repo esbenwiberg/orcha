@@ -245,18 +245,23 @@ function parseArchitectOutput(stdout: string): BlueprintOutput | null {
 function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
   if (typeof obj !== 'object' || obj === null) return false
   const bp = obj as Record<string, unknown>
-  // Support both 'milestones' (preferred) and 'steps' (backward compat)
-  // At least one must be present AND non-empty to avoid silent skip in dev stage
-  const milestonesArray = Array.isArray(bp.milestones) ? bp.milestones : []
-  const stepsArray = Array.isArray(bp.steps) ? bp.steps : []
-  const hasMilestones = milestonesArray.length > 0 || stepsArray.length > 0
-  return (
+
+  // Validate core required fields
+  const hasRequiredFields =
     typeof bp.headline === 'string' &&
     typeof bp.shortDescription === 'string' &&
     typeof bp.approach === 'string' &&
     Array.isArray(bp.filesToTouch) &&
     Array.isArray(bp.risks) &&
-    typeof bp.testStrategy === 'string' &&
-    hasMilestones
-  )
+    typeof bp.testStrategy === 'string'
+
+  if (!hasRequiredFields) return false
+
+  // Support both 'milestones' (preferred) and 'steps' (backward compat)
+  // Exactly one of these must be present AND non-empty to avoid silent skip in dev stage
+  const hasMilestones = Array.isArray(bp.milestones) && bp.milestones.length > 0
+  const hasSteps = Array.isArray(bp.steps) && bp.steps.length > 0
+
+  // At least one non-empty array must exist (matches anyOf in schema)
+  return hasMilestones || hasSteps
 }

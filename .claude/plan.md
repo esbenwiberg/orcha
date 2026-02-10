@@ -1,160 +1,843 @@
-# Blueprint: Pipeline Cost Display & CLI Feature Parity in Web Dashboard
+# Blueprint: Customizable Prompt Templates for Pipeline Stages
 
 ## Goal
 
-Surface pipeline cost/usage data prominently in the web dashboard (currently buried in side panel only visible on pipeline detail), and close the most impactful CLI-vs-web feature gaps — specifically presets, cleanup, and pipeline resume.
+Add a prompt template system that allows users to view and customize the instructions given to AI agents in each pipeline stage (architect, dev, milestone-dev, gate agents, fix-loop) without editing source code. This enables prompt engineering, debugging, and project-specific tuning.
 
 ## Non-Goals
 
-- Real-time streaming cost updates via WebSocket (cost only updates between stages)
-- Per-model token cost breakdowns
-- MCP server management from web (niche CLI-only use case)
-- Demo mode in web
-- Direct tmux attach from web (web has integrated terminals)
+- **Runtime prompt modification** — prompts are loaded at stage execution time (not edited mid-stage)
+- **Web-based prompt editor** — initial version is CLI-only (web UI can be added later)
+- **Multi-language templates** — English-only for now
+- **Version control integration** — templates are files, users can version control manually
+- **Prompt A/B testing framework** — users can manually test different prompts, but no built-in A/B system
+- **AI-powered prompt optimization** — no automatic prompt improvement (users iterate manually)
 
 ## Acceptance Criteria
 
-- [ ] Pipeline list sidebar items show estimated cost badge when `usageSnapshot.totalCostUsd > 0`
-- [ ] Pipeline detail header area shows cost prominently (not just in side panel)
-- [ ] Per-stage cost breakdown visible in pipeline detail (from `usage.json` data)
-- [ ] New `/api/pipelines/:id/usage` endpoint returns detailed `usage.json` data
-- [ ] Preset management UI: list, load, delete presets from web dashboard
-- [ ] New preset API endpoints: `GET /api/presets`, `POST /api/presets/:name/load`, `DELETE /api/presets/:name`
-- [ ] Cleanup utility accessible from web: button to run cleanup with dry-run preview
-- [ ] New cleanup API endpoints: `POST /api/cleanup` with `dryRun` option
-- [ ] Pipeline resume button in web UI for paused/errored pipelines
-- [ ] New `POST /api/pipelines/:id/resume` endpoint
-- [ ] Both `src/web/public/` and `dist/web/public/` files are synced after changes
+- [ ] Prompts are stored as YAML files in `~/.orcha/prompts/defaults/` (read-only defaults shipped with Orcha)
+- [ ] Users can create custom overrides in `~/.orcha/prompts/custom/` (merged with defaults)
+- [ ] Templates support variable interpolation (e.g., `{{description}}`, `{{worktreePath}}`, `{{#if learningHints}}...{{/if}}`)
+- [ ] CLI command `orcha prompts list` shows all available prompt templates
+- [ ] CLI command `orcha prompts show <name>` displays a template's content (with variable placeholders)
+- [ ] CLI command `orcha prompts edit <name>` opens template in editor (creates custom override if needed)
+- [ ] CLI command `orcha prompts reset <name>` removes custom override (reverts to default)
+- [ ] CLI command `orcha prompts diff <name>` shows differences between custom and default versions
+- [ ] CLI command `orcha prompts export` exports all custom prompts as a tarball for sharing
+- [ ] CLI command `orcha prompts import <file>` imports custom prompts from a tarball
+- [ ] `prompt-builder.ts` refactored to load templates from files instead of hardcoded strings
+- [ ] If a template file is missing or invalid, fall back to hardcoded default with warning
+- [ ] Template validation on load (ensure required variables are present, no syntax errors)
+- [ ] Works for all stages: architect, dev, milestone-dev, fix-loop, and 5 gate agents (ac-validator, adversary, security-review, code-review, test-runner)
 
 ## Architecture
 
-### Data Flow — Pipeline Cost
+### High-Level Flow
 
 ```
-usage.json (per pipeline)
-  → GET /api/pipelines/:id/usage (new endpoint)
-  → Frontend fetches on pipeline detail load
-  → Renders per-stage breakdown table + cost in header
-
-usageSnapshot (already in pipeline list response)
-  → Frontend reads totalCostUsd from each pipeline
-  → Shows cost badge in sidebar list items
+User runs: orcha pipeline run --description "Add feature X"
+  ↓
+pipeline-engine.ts calls runArchitectStage()
+  ↓
+architect.ts calls buildArchitectPrompt(workItem, codebase, learningHints)
+  ↓
+prompt-builder.ts:
+  1. Load template from ~/.orcha/prompts/custom/architect.yaml (if exists)
+  2. Else load from ~/.orcha/prompts/defaults/architect.yaml
+  3. Compile template with Handlebars
+  4. Interpolate variables: { workItem, codebase, learningHints, ... }
+  5. Return { systemPrompt, userPrompt }
+  ↓
+stage-runner.ts runs Claude with compiled prompts
 ```
 
-### Data Flow — Presets
+### Template File Structure
 
 ```
-~/.orcha/presets/*.json (existing CLI preset files)
-  → GET /api/presets (reads preset dir, returns list)
-  → POST /api/presets/:name/load (starts sessions from preset config)
-  → DELETE /api/presets/:name (removes preset file)
-  → Frontend shows preset list in session creation dialog
+~/.orcha/prompts/
+├── defaults/              # Shipped with Orcha (read-only, in package)
+│   ├── architect.yaml
+│   ├── dev.yaml
+│   ├── milestone-dev.yaml
+│   ├── fix-loop.yaml
+│   └── gate/
+│       ├── ac-validator.yaml
+│       ├── adversary.yaml
+│       ├── security-review.yaml
+│       ├── code-review.yaml
+│       └── test-runner.yaml
+└── custom/                # User overrides
+    └── (same structure)
 ```
 
-### Data Flow — Cleanup
+### Template Format (YAML + Handlebars)
 
+```yaml
+# ~/.orcha/prompts/defaults/architect.yaml
+name: "Architect Stage"
+version: "1.0.0"
+description: "Analyzes codebase and produces implementation blueprint"
+
+# Variables this template expects
+variables:
+  workItem:
+    workItemId: string?
+    description: string
+    acceptanceCriteria: string[]
+    issueBody: string?
+  codebase:
+    worktreePath: string
+    sourceBranch: string
+  learningHints: string[]?
+  tree: string           # Generated by prompt-builder
+  keyFiles: string       # Generated by prompt-builder
+
+systemPrompt: |
+  You are an architect agent in the Orcha pipeline.
+  Your job is to analyze the codebase and produce a detailed implementation blueprint.
+
+  Guidelines:
+  - Read the codebase carefully using the available tools (Read, Grep, Glob).
+  - Understand the existing architecture, patterns, and conventions.
+  - Produce a blueprint that a developer agent can follow to implement the changes.
+  - Be specific about which files to create/modify and what changes to make.
+  - Identify risks and suggest a test strategy.
+  - Do NOT make any changes to the code. You are read-only.
+
+  IMPORTANT - Milestone Planning:
+  - Divide large tasks into discrete MILESTONES (not steps).
+  - Each milestone should be independently implementable with a focused scope (single responsibility).
+  - Each milestone runs with FRESH CONTEXT (no cross-milestone state pollution).
+  - For small tasks (1-3 simple changes), use a single milestone.
+  - For large tasks (complex features, multi-file refactors), create 3-7 milestones.
+  - Milestone boundaries should align with natural checkpoints (e.g., add schema → add API → add UI).
+  {{#if learningHints}}
+
+  Lessons from past pipeline runs (use these to improve your blueprint):
+  {{#each learningHints}}
+  - {{this}}
+  {{/each}}
+  {{/if}}
+
+  Output your blueprint as a JSON object matching the requested schema.
+
+userPrompt: |
+  # Work Item
+  {{#if workItem.workItemId}}ID: {{workItem.workItemId}}{{/if}}
+
+  ## Description
+  {{workItem.description}}
+  {{#if workItem.acceptanceCriteria}}
+
+  ## Acceptance Criteria
+  {{#each workItem.acceptanceCriteria}}
+  {{add @index 1}}. {{this}}
+  {{/each}}
+  {{/if}}
+  {{#if workItem.issueBody}}
+
+  ## Full Issue Body
+  {{workItem.issueBody}}
+  {{/if}}
+
+  # Codebase Context
+
+  ## Source Branch
+  {{codebase.sourceBranch}}
+
+  ## Directory Structure
+  ```
+  {{tree}}
+  ```
+
+  ## Key Files
+  ```
+  {{keyFiles}}
+  ```
+
+  # Instructions
+  Analyze the codebase and produce an implementation blueprint.
+
+  Your output must be a JSON object with these fields:
+  - headline: A short, clear title for the plan (e.g. "Add User Authentication")
+  - shortDescription: Summary INCLUDING the milestone count (e.g. "Implements user authentication with 3 milestones")
+    * IMPORTANT: The shortDescription MUST explicitly state how many milestones the plan contains
+    * Format: "<Summary of what is being done> with <N> milestone(s)"
+    * Example: "Adds JWT-based authentication with 4 milestones"
+    * Example: "Refactors error handling with 1 milestone"
+  - approach: High-level description of the implementation approach
+  - filesToTouch: Array of file paths that need to be created or modified
+  - risks: Array of potential risks or concerns
+  - testStrategy: How to test the changes
+  - milestones: Array of milestone objects, each with:
+    - description: What this milestone accomplishes
+    - details: Step-by-step implementation guidance
+    - filesToTouch (optional): Subset of files this milestone touches
+
+  CRITICAL: Use "milestones" field (not "steps"). Each milestone executes with fresh context.
+
+  Example blueprint structure:
+  {
+    "headline": "Add User Authentication",
+    "shortDescription": "Implements JWT-based user authentication with 3 milestones",
+    "approach": "...",
+    "filesToTouch": ["src/auth.ts", "src/middleware.ts"],
+    "risks": ["..."],
+    "testStrategy": "...",
+    "milestones": [
+      { "description": "Create auth schema and models", "details": "..." },
+      { "description": "Implement JWT signing and validation", "details": "..." },
+      { "description": "Add authentication middleware", "details": "..." }
+    ]
+  }
 ```
-POST /api/cleanup { dryRun: true }
-  → Calls existing cleanupDeadSessions() + worktrees.cleanup()
-  → Returns preview of what would be cleaned
-POST /api/cleanup { dryRun: false }
-  → Actually performs cleanup
-  → Returns results
+
+### Template Loading Logic
+
+```typescript
+// src/pipeline/template-loader.ts
+
+interface TemplateData {
+  name: string
+  version: string
+  description: string
+  variables: Record<string, unknown>
+  systemPrompt: string
+  userPrompt: string
+}
+
+async function loadTemplate(
+  templateName: string,  // e.g., 'architect' or 'gate/adversary'
+): Promise<TemplateData> {
+  const customPath = join(CUSTOM_PROMPTS_DIR, `${templateName}.yaml`)
+  const defaultPath = join(DEFAULT_PROMPTS_DIR, `${templateName}.yaml`)
+
+  // Try custom first, fall back to default
+  if (await exists(customPath)) {
+    return parseYamlTemplate(customPath)
+  } else if (await exists(defaultPath)) {
+    return parseYamlTemplate(defaultPath)
+  } else {
+    throw new Error(`Template not found: ${templateName}`)
+  }
+}
+
+function compileTemplate(
+  template: TemplateData,
+  variables: Record<string, unknown>,
+): { systemPrompt: string; userPrompt: string } {
+  const systemPrompt = Handlebars.compile(template.systemPrompt)(variables)
+  const userPrompt = Handlebars.compile(template.userPrompt)(variables)
+  return { systemPrompt, userPrompt }
+}
+```
+
+### Handlebars Helpers
+
+```typescript
+// Custom helpers for templates
+Handlebars.registerHelper('add', (a, b) => a + b)
+Handlebars.registerHelper('join', (arr, sep) => arr.join(sep))
+Handlebars.registerHelper('truncate', (str, len) => str.slice(0, len))
 ```
 
 ## Key Files
 
-| File | Change |
-|------|--------|
-| `src/web/server.ts` | Add `/api/pipelines/:id/usage`, `/api/presets/*`, `/api/cleanup`, `/api/pipelines/:id/resume` endpoints |
-| `src/web/public/app.js` | Cost badge in sidebar, cost in detail header, per-stage breakdown, preset UI, cleanup UI, resume button |
-| `src/web/public/style.css` | Styles for cost badge, per-stage table, preset list, cleanup dialog |
+### New Files
+
+- `src/pipeline/template-loader.ts` (~200-300 lines)
+  - `loadTemplate(name: string): Promise<TemplateData>`
+  - `compileTemplate(template, variables): PromptParts`
+  - `validateTemplate(template): void` (check required variables)
+  - `listTemplates(): Promise<TemplateInfo[]>`
+  - `resetTemplate(name: string): Promise<void>` (delete custom override)
+  - `exportTemplates(outputPath: string): Promise<void>` (tarball)
+  - `importTemplates(inputPath: string): Promise<void>` (untar)
+
+- `src/cli/prompts.ts` (~150-200 lines)
+  - CLI command handlers for `orcha prompts *`
+  - `listPrompts()`, `showPrompt(name)`, `editPrompt(name)`, `diffPrompt(name)`, `resetPrompt(name)`, `exportPrompts()`, `importPrompts(file)`
+
+- `~/.orcha/prompts/defaults/*.yaml` (~1500-2000 lines total, 9 files)
+  - Extract existing prompts from `prompt-builder.ts` into YAML templates
+  - `architect.yaml` (~200 lines)
+  - `dev.yaml` (~150 lines)
+  - `milestone-dev.yaml` (~200 lines)
+  - `fix-loop.yaml` (~150 lines)
+  - `gate/ac-validator.yaml` (~100 lines)
+  - `gate/adversary.yaml` (~150 lines)
+  - `gate/security-review.yaml` (~150 lines)
+  - `gate/code-review.yaml` (~150 lines)
+  - `gate/test-runner.yaml` (~50 lines, placeholder for future)
+
+### Modified Files
+
+- `src/pipeline/prompt-builder.ts` (~835 lines → ~100-150 lines)
+  - Replace hardcoded prompt strings with calls to `loadTemplate()` + `compileTemplate()`
+  - Keep helper functions: `getCodebaseTree()`, `getKeyFiles()`, `parseAcceptanceCriteria()`
+  - Keep all existing function signatures (backward compatible)
+  - Add fallback to hardcoded prompts if template loading fails (with warning)
+
+- `src/cli/index.ts`
+  - Add `orcha prompts` parent command
+  - Wire up `prompts.ts` handlers
+
+- `package.json`
+  - Add `handlebars` dependency (~40KB, widely used)
+  - Add `js-yaml` dependency (~20KB, for YAML parsing)
+  - Add `tar` dependency (~15KB, for export/import)
+
+- `tsconfig.json`
+  - Ensure `resolveJsonModule: true` for importing YAML types
+
+### Dependencies
+
+```json
+{
+  "handlebars": "^4.7.8",
+  "js-yaml": "^4.1.0",
+  "tar": "^7.4.3"
+}
+```
 
 ## Milestones
 
-### M1: Pipeline cost in sidebar list + detail header
+### M1: Template Loader Infrastructure
 
-**Intent:** Make pipeline cost visible at a glance — in the sidebar list items and prominently in the detail view header area — not just buried in the side panel.
+**Intent:** Create the core template loading and compilation system.
 
-**Key files:** `src/web/public/app.js`, `src/web/public/style.css`
+**Key files:** `src/pipeline/template-loader.ts`, `package.json`
 
-**Changes:**
-- In `updatePipelineSidebar()`: add cost badge to each pipeline-item when `usageSnapshot.totalCostUsd > 0`
-- In `renderPipelineDetail()`: add cost display near the stage progress bar (top of detail view)
-- CSS for `.pipeline-cost-badge` and `.pipeline-header-cost`
-
-**Verification:**
-- `cp src/web/public/app.js dist/web/public/ && cp src/web/public/style.css dist/web/public/`
-- Visual check: pipeline sidebar shows "$X.XX" next to pipeline name
-- Visual check: pipeline detail header shows cost prominently
-
-### M2: Per-stage cost breakdown
-
-**Intent:** Add a `/api/pipelines/:id/usage` endpoint and render a per-stage cost/token table in the pipeline detail side panel.
-
-**Key files:** `src/web/server.ts`, `src/web/public/app.js`, `src/web/public/style.css`
-
-**Changes:**
-- Server: new `GET /api/pipelines/:id/usage` reads `~/.orcha/pipelines/{id}/usage.json`
-- Frontend: fetch usage data on pipeline detail load, render per-stage table (stage, cost, input tokens, output tokens, duration)
-- Replace current simple "Usage" section in side panel with richer breakdown
+**Details:**
+1. Create `src/pipeline/template-loader.ts`
+2. Define `TemplateData` interface
+3. Implement `loadTemplate(name)`:
+   - Check `~/.orcha/prompts/custom/{name}.yaml`
+   - Fall back to `~/.orcha/prompts/defaults/{name}.yaml`
+   - Parse YAML using `js-yaml`
+   - Return `TemplateData`
+4. Implement `compileTemplate(template, variables)`:
+   - Use Handlebars to compile `systemPrompt` and `userPrompt`
+   - Interpolate variables
+   - Return `{ systemPrompt, userPrompt }`
+5. Add Handlebars custom helpers: `add`, `join`, `truncate`
+6. Implement `validateTemplate(template)`:
+   - Check that template has required fields: `name`, `systemPrompt`, `userPrompt`
+   - Check that all referenced variables in template exist in the variables schema
+   - Throw descriptive errors on validation failure
+7. Add dependencies to `package.json`: `handlebars`, `js-yaml`, `tar`
 
 **Verification:**
-- `curl http://localhost:3847/api/pipelines/<id>/usage` returns per-stage data
-- Visual check: side panel shows per-stage cost table
-- `npm run build` passes
+```bash
+npm install
+npx tsc --noEmit src/pipeline/template-loader.ts
 
-### M3: Preset management UI
+# Unit test (manual)
+node -e "
+const { compileTemplate } = require('./dist/pipeline/template-loader.js');
+const template = {
+  systemPrompt: 'You are {{role}}',
+  userPrompt: 'Task: {{task}}'
+};
+const result = compileTemplate(template, { role: 'architect', task: 'build plan' });
+console.log(result);
+"
+```
 
-**Intent:** Surface CLI preset save/load/delete in the web dashboard so users can manage session templates without the CLI.
+---
 
-**Key files:** `src/web/server.ts`, `src/web/public/app.js`, `src/web/public/style.css`
+### M2: Extract Architect Template
 
-**Changes:**
-- Server: `GET /api/presets` (list), `POST /api/presets/:name/load` (start sessions from preset), `DELETE /api/presets/:name` (remove)
-- Frontend: preset list in session creation area or as a dropdown/section, with load and delete actions
-- Reuse existing preset loading logic from `src/core/presets.ts` (or wherever presets are implemented)
+**Intent:** Convert architect prompts from hardcoded strings to YAML template.
 
-**Verification:**
-- `curl http://localhost:3847/api/presets` returns saved presets
-- Visual check: can see presets in web UI, load one to start sessions, delete one
-- `npm run build` passes
+**Key files:** `~/.orcha/prompts/defaults/architect.yaml`, `src/pipeline/prompt-builder.ts`
 
-### M4: Cleanup utility in web
-
-**Intent:** Let users run cleanup (orphaned worktrees, dead sessions) from the web dashboard with a dry-run preview.
-
-**Key files:** `src/web/server.ts`, `src/web/public/app.js`, `src/web/public/style.css`
-
-**Changes:**
-- Server: `POST /api/cleanup` with `{ dryRun: boolean }` body, calls existing `cleanupDeadSessions()` and `worktrees.cleanup()`
-- Frontend: cleanup button (in settings or header area), shows modal with dry-run preview, confirm button to execute
-- Reuse existing cleanup logic from `src/core/cleanup.ts`
-
-**Verification:**
-- `curl -X POST http://localhost:3847/api/cleanup -H 'Content-Type: application/json' -d '{"dryRun":true}'` returns preview
-- Visual check: cleanup dialog shows what would be removed, confirm executes it
-- `npm run build` passes
-
-### M5: Pipeline resume button
-
-**Intent:** Add a resume button for paused/errored pipelines in the web UI, matching `orcha pipeline resume` CLI behavior.
-
-**Key files:** `src/web/server.ts`, `src/web/public/app.js`
-
-**Changes:**
-- Server: `POST /api/pipelines/:id/resume` with optional `{ continue: true }` — reuses pipeline engine resume logic
-- Frontend: "Resume" button visible when pipeline is in error/paused/checkpoint state (next to existing approve/reject buttons)
+**Details:**
+1. Create `~/.orcha/prompts/defaults/` directory
+2. Create `architect.yaml`:
+   - Copy `systemPrompt` from `buildArchitectPrompt()` (lines 168-189)
+   - Copy `userPrompt` from `buildArchitectPrompt()` (lines 200-259)
+   - Convert string interpolation to Handlebars: `${var}` → `{{var}}`
+   - Convert conditionals to Handlebars: `if (x) { ... }` → `{{#if x}}...{{/if}}`
+   - Add metadata: `name`, `version`, `description`, `variables` schema
+3. Update `buildArchitectPrompt()` in `prompt-builder.ts`:
+   - Import `loadTemplate`, `compileTemplate` from `template-loader.ts`
+   - Replace hardcoded prompt strings with:
+     ```typescript
+     const template = await loadTemplate('architect')
+     const variables = { workItem, codebase, learningHints, tree, keyFiles }
+     return compileTemplate(template, variables)
+     ```
+   - Keep `getCodebaseTree()` and `getKeyFiles()` calls (still needed to populate `tree`, `keyFiles` variables)
+   - Add try-catch: if template loading fails, fall back to hardcoded strings with `console.warn()`
+4. Ensure backward compatibility: same output format, same behavior
 
 **Verification:**
-- Pause a pipeline, click resume in web UI, pipeline continues
-- `npm run build` passes
+```bash
+npx tsc --noEmit src/pipeline/prompt-builder.ts
+npm run build
 
-## Risks & Unknowns
+# Test architect stage
+orcha pipeline run --description "Test prompt templates" --stop-after architect
+cat ~/.orcha/pipelines/*/architect-prompt.txt  # Check generated prompt
 
-| Risk | Probe |
-|------|-------|
-| Preset file format/location may differ from what CLI writes | `grep -r 'presets' src/core/` to find preset storage logic |
-| `usage.json` may not exist for older pipelines | Handle gracefully — return empty/null if file missing |
-| Cleanup functions may expect CLI-specific context | Check `cleanupDeadSessions()` signature for required params |
-| Cost data may be $0.00 for pipelines that didn't track usage | Show "N/A" or hide cost badge when cost is 0 |
+# Compare output before and after migration (should be identical)
+```
+
+---
+
+### M3: Extract Dev and Milestone-Dev Templates
+
+**Intent:** Convert dev stage prompts to YAML templates.
+
+**Key files:** `~/.orcha/prompts/defaults/dev.yaml`, `~/.orcha/prompts/defaults/milestone-dev.yaml`, `src/pipeline/prompt-builder.ts`
+
+**Details:**
+1. Create `dev.yaml`:
+   - Extract from `buildDevPrompt()` (lines 332-365)
+   - Convert to Handlebars format
+   - Variables: `{ workItem, codebase, blueprint }`
+2. Create `milestone-dev.yaml`:
+   - Extract from `buildMilestoneDevPrompt()` (lines 399-444)
+   - Convert to Handlebars format
+   - Variables: `{ workItem, codebase, milestone }` where `milestone` includes `blueprintJson`, `milestoneIndex`, `totalMilestones`, `milestoneDescription`, `milestoneDetails`, `milestoneFilesToTouch`
+3. Update `buildDevPrompt()` and `buildMilestoneDevPrompt()`:
+   - Replace hardcoded strings with template loading + compilation
+   - Add fallback to hardcoded defaults on error
+4. Test both dev modes:
+   - Single-milestone blueprints (use `dev.yaml`)
+   - Multi-milestone blueprints (use `milestone-dev.yaml`)
+
+**Verification:**
+```bash
+npx tsc --noEmit src/pipeline/prompt-builder.ts
+npm run build
+
+# Test dev stage (single milestone)
+orcha pipeline run --description "Simple feature" --stop-after dev
+
+# Test milestone-dev (multi milestone)
+orcha pipeline run --description "Complex feature" --stop-after dev
+# (Requires blueprint with 2+ milestones)
+```
+
+---
+
+### M4: Extract Gate Agent Templates
+
+**Intent:** Convert all gate agent prompts to YAML templates.
+
+**Key files:** `~/.orcha/prompts/defaults/gate/*.yaml`, `src/pipeline/prompt-builder.ts`
+
+**Details:**
+1. Create `gate/` subdirectory in defaults
+2. Create `ac-validator.yaml`:
+   - Extract from `buildAcValidatorPrompt()` (lines 481-524)
+   - Variables: `{ workItem, diff }`
+3. Create `adversary.yaml`:
+   - Extract from `buildAdversaryPrompt()` (lines 541-599)
+   - Variables: `{ workItem, diff, testPatterns, techType, techGuidance }`
+4. Create `security-review.yaml`:
+   - Extract from `buildSecurityReviewPrompt()` (lines 652-707)
+   - Variables: `{ workItem, diff }`
+5. Create `code-review.yaml`:
+   - Extract from `buildCodeReviewPrompt()` (lines 720-772)
+   - Variables: `{ workItem, diff }`
+6. Create `test-runner.yaml` (placeholder for future):
+   - Minimal template (test-runner currently doesn't use prompt-builder)
+   - Can be expanded later if test-runner becomes LLM-based
+7. Update `buildAcValidatorPrompt()`, `buildAdversaryPrompt()`, `buildSecurityReviewPrompt()`, `buildCodeReviewPrompt()`:
+   - Load templates from `gate/*.yaml`
+   - Compile with variables
+   - Fallback on error
+8. Keep `getTechGuidance()` helper (still needed for adversary)
+
+**Verification:**
+```bash
+npx tsc --noEmit src/pipeline/prompt-builder.ts
+npm run build
+
+# Test gate agents
+orcha pipeline run --description "Test gate prompts" --stage gate
+cat ~/.orcha/pipelines/*/gate-results/*.json
+```
+
+---
+
+### M5: Extract Fix-Loop Template
+
+**Intent:** Convert fix-loop prompts to YAML template.
+
+**Key files:** `~/.orcha/prompts/defaults/fix-loop.yaml`, `src/pipeline/prompt-builder.ts`
+
+**Details:**
+1. Create `fix-loop.yaml`:
+   - Extract from `buildFixLoopPrompt()` (lines 792-831)
+   - Variables: `{ workItem, codebase, ctx }` where `ctx` includes `blueprintJson`, `diff`, `failureReport`, `attempt`, `maxAttempts`
+2. Update `buildFixLoopPrompt()`:
+   - Load template from `fix-loop.yaml`
+   - Compile with variables
+   - Fallback on error
+3. Test fix-loop with intentional gate failure:
+   - Run pipeline with code that fails tests
+   - Ensure fix-loop prompt loads correctly
+
+**Verification:**
+```bash
+npx tsc --noEmit src/pipeline/prompt-builder.ts
+npm run build
+
+# Test fix-loop (requires gate failure)
+# Create a test case with failing tests, let fix-loop trigger
+orcha pipeline run --description "Intentional failure for fix-loop test"
+cat ~/.orcha/pipelines/*/fix-loop-prompt.txt
+```
+
+---
+
+### M6: CLI Commands - List and Show
+
+**Intent:** Add CLI commands to list and view prompt templates.
+
+**Key files:** `src/cli/prompts.ts`, `src/cli/index.ts`, `src/pipeline/template-loader.ts`
+
+**Details:**
+1. Create `src/cli/prompts.ts`
+2. Implement `listTemplates()` in `template-loader.ts`:
+   - Scan `~/.orcha/prompts/defaults/` for `*.yaml` files
+   - Return list: `[{ name: 'architect', path: '...', hasCustom: false, description: '...' }, ...]`
+   - Mark `hasCustom: true` if corresponding file exists in `custom/`
+3. Implement CLI handler `listPrompts()` in `prompts.ts`:
+   - Call `listTemplates()`
+   - Display table:
+     ```
+     NAME               CUSTOMIZED  DESCRIPTION
+     architect          ✓           Analyzes codebase and produces blueprint
+     dev                            Implements blueprint changes
+     gate/adversary     ✓           Writes adversarial tests
+     ...
+     ```
+4. Implement `showPrompt(name)` in `prompts.ts`:
+   - Call `loadTemplate(name)`
+   - Display template content (YAML) with syntax highlighting (use `chalk` for colors)
+   - Show: name, version, description, variables schema, system prompt, user prompt
+5. Add `orcha prompts` parent command to `index.ts`
+6. Add subcommands:
+   - `orcha prompts list`
+   - `orcha prompts show <name>`
+
+**Verification:**
+```bash
+npm run build
+
+orcha prompts list
+# Should show all 9 templates (architect, dev, milestone-dev, fix-loop, 5 gate agents)
+
+orcha prompts show architect
+# Should display architect.yaml content with syntax highlighting
+```
+
+---
+
+### M7: CLI Commands - Edit and Reset
+
+**Intent:** Add CLI commands to edit and reset prompt templates.
+
+**Key files:** `src/cli/prompts.ts`, `src/pipeline/template-loader.ts`
+
+**Details:**
+1. Implement `editPrompt(name)` in `prompts.ts`:
+   - Check if custom override exists in `~/.orcha/prompts/custom/{name}.yaml`
+   - If not, copy from `defaults/{name}.yaml` to `custom/{name}.yaml`
+   - Open in editor using `$EDITOR` environment variable (default: `nano`, fallback: `vi`)
+   - Use Node's `child_process.spawn()` to open editor
+   - After editor closes, validate template with `validateTemplate()`
+   - If validation fails, prompt user to fix or discard changes
+2. Implement `resetTemplate(name)` in `template-loader.ts`:
+   - Delete `~/.orcha/prompts/custom/{name}.yaml` if it exists
+   - Confirm with user: "Are you sure you want to reset 'architect' to default? (y/N)"
+3. Add subcommands:
+   - `orcha prompts edit <name>`
+   - `orcha prompts reset <name>`
+
+**Verification:**
+```bash
+orcha prompts edit architect
+# Opens architect.yaml in editor
+# Make a change, save, exit
+
+orcha prompts list
+# Should show "✓" next to architect (customized)
+
+orcha prompts reset architect
+# Confirms reset
+# Custom file deleted
+
+orcha prompts list
+# Should show architect without "✓" (no longer customized)
+```
+
+---
+
+### M8: CLI Commands - Diff, Export, Import
+
+**Intent:** Add CLI commands to diff, export, and import templates.
+
+**Key files:** `src/cli/prompts.ts`, `src/pipeline/template-loader.ts`
+
+**Details:**
+1. Implement `diffPrompt(name)` in `prompts.ts`:
+   - Load default template: `~/.orcha/prompts/defaults/{name}.yaml`
+   - Load custom template: `~/.orcha/prompts/custom/{name}.yaml` (if exists)
+   - Use `diff-lines` library (or spawn `diff` command) to show differences
+   - Display unified diff format with colors (green for additions, red for deletions)
+   - If no custom exists, show: "No custom overrides for 'architect'"
+2. Implement `exportTemplates(outputPath)` in `template-loader.ts`:
+   - Create tarball of `~/.orcha/prompts/custom/` directory
+   - Use `tar` library: `tar.create({ gzip: true, file: outputPath }, ['~/.orcha/prompts/custom'])`
+   - Default output path: `./orcha-prompts-export.tar.gz`
+   - Include metadata file: `export-manifest.json` with timestamp, Orcha version
+3. Implement `importTemplates(inputPath)` in `template-loader.ts`:
+   - Extract tarball to `~/.orcha/prompts/custom/`
+   - Use `tar.extract({ file: inputPath, cwd: '~/.orcha/prompts/custom' })`
+   - Validate all imported templates (call `validateTemplate()` on each)
+   - If validation fails, rollback import (delete imported files)
+   - Confirm with user before overwriting existing custom templates
+4. Add subcommands:
+   - `orcha prompts diff <name>`
+   - `orcha prompts export [output-file]`
+   - `orcha prompts import <file>`
+
+**Verification:**
+```bash
+# Diff
+orcha prompts edit architect  # Make a change
+orcha prompts diff architect
+# Should show unified diff
+
+# Export
+orcha prompts export
+# Creates orcha-prompts-export.tar.gz
+
+# Import (on another machine or clean state)
+orcha prompts reset architect  # Clear custom
+orcha prompts import orcha-prompts-export.tar.gz
+# Should restore custom architect template
+```
+
+---
+
+### M9: Fallback Mechanism and Error Handling
+
+**Intent:** Ensure pipeline doesn't break if templates are missing or invalid.
+
+**Key files:** `src/pipeline/prompt-builder.ts`, `src/pipeline/template-loader.ts`
+
+**Details:**
+1. In `template-loader.ts`, add `getHardcodedFallback(name)`:
+   - Returns hardcoded prompt strings for each template
+   - Used only when template loading fails
+   - Copy original hardcoded strings from old `prompt-builder.ts` (pre-migration)
+2. Update all `build*Prompt()` functions in `prompt-builder.ts`:
+   - Wrap template loading in try-catch:
+     ```typescript
+     try {
+       const template = await loadTemplate('architect')
+       return compileTemplate(template, variables)
+     } catch (err) {
+       console.warn(`Failed to load template 'architect': ${err.message}`)
+       console.warn('Falling back to hardcoded default prompt')
+       return getHardcodedFallback('architect', variables)
+     }
+     ```
+3. Log warnings to `~/.orcha/pipeline-warnings.log` (persistent log file)
+4. Add template validation on load:
+   - Check required fields exist
+   - Check Handlebars syntax is valid (try compiling with empty variables)
+   - Throw descriptive errors if validation fails
+5. Test error scenarios:
+   - Missing template file
+   - Invalid YAML syntax
+   - Missing required variables in template
+   - Handlebars compilation errors
+
+**Verification:**
+```bash
+# Test missing template
+mv ~/.orcha/prompts/defaults/architect.yaml /tmp/
+orcha pipeline run --description "Test fallback"
+# Should warn and use hardcoded fallback
+
+# Test invalid YAML
+echo "invalid: [yaml" > ~/.orcha/prompts/custom/architect.yaml
+orcha pipeline run --description "Test validation"
+# Should warn and fall back
+
+# Restore
+rm ~/.orcha/prompts/custom/architect.yaml
+mv /tmp/architect.yaml ~/.orcha/prompts/defaults/
+```
+
+---
+
+### M10: Documentation and Package Defaults
+
+**Intent:** Ship default templates with npm package and document usage.
+
+**Key files:** `package.json`, `README.md`, `docs/prompt-templates.md`
+
+**Details:**
+1. Update `package.json`:
+   - Add `files` field to include `~/.orcha/prompts/defaults/` in npm package
+   - Ensure `defaults/` directory is copied to `~/.orcha/` on install (post-install script)
+2. Create post-install script:
+   - `scripts/install-defaults.js`:
+     - Copy `node_modules/@orcha/prompts/defaults/` to `~/.orcha/prompts/defaults/`
+     - Only copy if target doesn't exist (don't overwrite user's defaults)
+     - Idempotent (safe to run multiple times)
+3. Create `docs/prompt-templates.md`:
+   - Overview of template system
+   - How to view templates (`orcha prompts list`, `show`)
+   - How to customize templates (`orcha prompts edit`)
+   - Handlebars syntax reference
+   - Available variables per template
+   - Best practices for prompt engineering
+   - Sharing templates (`export`, `import`)
+4. Update `README.md`:
+   - Add "Customizable Prompts" section
+   - Link to `docs/prompt-templates.md`
+   - Example: "Customize architect prompts for your codebase"
+5. Add to `CLAUDE.md`:
+   - Note about template loading precedence (custom > defaults > hardcoded fallback)
+   - File paths for templates
+
+**Verification:**
+```bash
+# Test npm package install (local)
+npm pack
+mkdir test-install && cd test-install
+npm install ../orcha-*.tgz
+ls ~/.orcha/prompts/defaults/
+# Should contain all 9 default templates
+
+# Check documentation
+cat docs/prompt-templates.md
+cat README.md | grep -A5 "Customizable Prompts"
+```
+
+---
+
+## Risks & Probes
+
+| Risk | Mitigation |
+|------|------------|
+| **Handlebars syntax errors in templates** | Add validation step in `validateTemplate()`. Test compilation with empty variables. Show clear error messages with line numbers. |
+| **Template loading performance (filesystem reads)** | Cache loaded templates in memory. Only reload if file mtime changes. Initial load: ~50ms (acceptable for pipeline stages). |
+| **Variable name mismatches (typo in template)** | Handlebars silently ignores missing variables (outputs empty string). Add validation: parse template, extract variable references, check against schema. |
+| **Backward compatibility breaks** | Keep fallback mechanism. If template loading fails, use hardcoded defaults. Add migration guide for users upgrading from pre-template versions. |
+| **YAML parsing errors** | Wrap `js-yaml.load()` in try-catch. Show error with file path and line number. Provide validation tool: `orcha prompts validate <name>`. |
+| **Editor detection fails ($EDITOR not set)** | Fall back to `nano`, then `vi`, then `code --wait`. Show clear message: "No editor found. Set $EDITOR environment variable." |
+| **Export/import path resolution** | Use absolute paths. Normalize with `path.resolve()`. Handle `~` expansion for home directory. Test on Linux, macOS, Windows WSL. |
+| **Template versioning conflicts** | Add version field to templates. Check version compatibility on import. Warn if importing older/newer version than current Orcha supports. |
+| **Large diff output (custom vs default)** | Limit diff display to first 500 lines. Offer option to save full diff to file: `orcha prompts diff architect --output diff.txt`. |
+| **Concurrent edits (multiple prompts open)** | Not a concern for single-user CLI tool. If needed, add file locking (flock). |
+
+---
+
+## Design Decisions
+
+### Why YAML Instead of JSON?
+
+**Rationale:**
+- More human-readable for multi-line strings (prompts)
+- Supports comments (users can document their customizations)
+- Widely used for config files (familiar to developers)
+- Handlebars templates are easier to read without JSON escaping
+
+**Considered alternatives:**
+- JSON: More verbose, no comments, harder to read
+- TOML: Less common, overkill for this use case
+- Plain text: No structure, harder to parse metadata
+
+### Why Handlebars Instead of Other Template Engines?
+
+**Rationale:**
+- Simple, logic-less syntax (prevents complex logic in prompts)
+- Widely used (~40M downloads/week on npm)
+- Small footprint (~40KB minified)
+- Supports helpers for common operations (if, each, etc.)
+- No security concerns (unlike eval-based templating)
+
+**Considered alternatives:**
+- Mustache: Similar but less powerful (no helpers)
+- EJS: Too much logic, harder to constrain
+- Template literals: Requires code changes, not file-based
+
+### Why Custom Overrides Instead of In-Place Edits?
+
+**Rationale:**
+- Preserves shipped defaults (users can reset easily)
+- Allows updates to defaults without overwriting user changes
+- Clear separation: defaults (read-only) vs custom (user-owned)
+- Easier to diff and understand what changed
+- Enables version control of custom prompts separately
+
+**Implementation:**
+- Defaults shipped in package: `node_modules/@orcha/prompts/defaults/`
+- Copied to `~/.orcha/prompts/defaults/` on install (immutable)
+- Custom overrides in `~/.orcha/prompts/custom/` (user-editable)
+- Load precedence: custom > defaults > hardcoded fallback
+
+### Why Not a Web UI for Editing?
+
+**Rationale:**
+- CLI-first approach aligns with Orcha's design
+- Editor integration better for large prompts (syntax highlighting, search, etc.)
+- Web UI adds complexity (server, auth, real-time sync)
+- Can be added later as enhancement
+
+**Future work:**
+- Add web UI in M11 (out of scope for this blueprint)
+- Integrate with web dashboard (prompts tab)
+- Live preview of interpolated prompts
+
+---
+
+## Future Enhancements (Not in This Blueprint)
+
+1. **Per-project templates** — Allow `.orcha/prompts/` in project directory to override global templates
+2. **Template marketplace** — Share prompts via `orcha prompts install <url>` (like npm packages)
+3. **Prompt A/B testing** — Run pipeline with 2+ prompt variants, compare results
+4. **AI-powered prompt optimization** — Analyze failed pipelines, suggest prompt improvements
+5. **Web UI for editing** — Visual editor in web dashboard
+6. **Versioned templates** — Track prompt changes over time, rollback to previous versions
+7. **Conditional prompts** — Load different templates based on project type (Node.js vs Python)
+8. **Prompt analytics** — Track which prompts lead to best outcomes (gate pass rate, cost, time)
+
+---
+
+## Open Questions
+
+1. **Should we support remote template URLs?**
+   - **Current decision:** No. Local files only (users can download and import).
+   - **Future:** Add `orcha prompts install <url>` to fetch from GitHub, etc.
+
+2. **Should we validate Handlebars syntax on import?**
+   - **Current decision:** Yes. Validate on import, edit, and template load. Reject invalid templates.
+   - **Implementation:** Try compiling template with sample variables. Catch Handlebars errors.
+
+3. **Should we ship multiple preset templates (e.g., "concise", "detailed")?**
+   - **Current decision:** No. One default template per stage. Users can create variants manually.
+   - **Future:** Add `orcha prompts list-presets`, `orcha prompts apply-preset <name>`.
+
+4. **How to handle template updates across Orcha versions?**
+   - **Current decision:** Post-install script copies defaults to `~/.orcha/prompts/defaults/` only if not present. User's custom overrides are never touched. On Orcha upgrade, user must manually review and merge updates (use `diff` command).
+   - **Future:** Add migration tool: `orcha prompts migrate` to merge new default features into custom templates.
+
+5. **Should templates support includes (e.g., shared snippets)?**
+   - **Current decision:** No. Each template is self-contained (simpler, more explicit).
+   - **Future:** Add Handlebars partials: `{{> shared/guidelines}}` to reuse prompt sections.
+
+---
+
+Next: /probe 'M1: Template Loader Infrastructure'

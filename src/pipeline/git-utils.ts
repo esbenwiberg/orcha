@@ -102,11 +102,32 @@ export function getDiff(worktreePath: string, sourceBranch: string, baseCommit?:
 // Changed Files Detection
 // ============================================================================
 
+// Strict validation pattern for file extensions to prevent command injection.
+// Only allows extensions like .ts, .js, .cs, .py, etc.
+const SAFE_EXTENSION_RE = /^\.[a-zA-Z0-9]+$/
+
+/**
+ * Validate that an extension is safe for use in shell commands.
+ * Throws if the extension doesn't match the safe pattern.
+ */
+function assertSafeExtension(ext: string): void {
+  if (!SAFE_EXTENSION_RE.test(ext)) {
+    throw new Error(`Invalid file extension: ${ext}`)
+  }
+}
+
 /**
  * Build git pathspec glob patterns from file extensions.
  * e.g. ['.cs', '.fs'] → "'*.cs' '*.fs'"
+ *
+ * Security: Validates all extensions against a strict pattern before
+ * concatenating into shell commands to prevent command injection.
  */
 function buildExtensionGlobs(extensions: string[]): string {
+  // Validate all extensions before building the command
+  for (const ext of extensions) {
+    assertSafeExtension(ext)
+  }
   return extensions.map((ext) => `'*${ext}'`).join(' ')
 }
 

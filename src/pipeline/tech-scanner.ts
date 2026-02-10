@@ -295,12 +295,23 @@ function readFileSafe(filePath: string): string | null {
 }
 
 /**
+ * Escape special regex characters in a string.
+ */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
  * Check if a Python dependency name appears in combined project content.
  * Simple substring match — handles pyproject.toml, requirements.txt, setup.py, setup.cfg.
+ *
+ * Security: Escapes the dep parameter before using it in RegExp to prevent
+ * regex injection attacks from malformed dependency names.
  */
 function hasPythonDep(content: string, dep: string): boolean {
   // Match the dep name as a word boundary (avoid partial matches like "ruff" in "scruff")
   // Patterns: "ruff", 'ruff', ruff==, ruff>=, ruff[, ruff\n, ruff (in requirements.txt lines)
-  const pattern = new RegExp(`(?:^|['"\\s,])${dep}(?:['"\\s,>=<!\\[\\]]|$)`, 'm')
+  const escapedDep = escapeRegex(dep)
+  const pattern = new RegExp(`(?:^|['"\\s,])${escapedDep}(?:['"\\s,>=<!\\[\\]]|$)`, 'm')
   return pattern.test(content)
 }

@@ -59,18 +59,23 @@
     "commander": "^12.1.0",
     "express": "^5.2.1",
     "express-openid-connect": "^2.19.4",
+    "handlebars": "^4.7.8",
     "ink": "^6.6.0",
     "ink-box": "^1.0.0",
+    "js-yaml": "^4.1.0",
     "node-pty": "^1.1.0",
     "react": "^19.2.4",
     "simple-git": "^3.27.0",
+    "tar": "^7.4.3",
     "tree-kill": "^1.2.2",
     "ws": "^8.19.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.17.0",
     "@types/react": "^19.2.10",
+    "@types/tar": "^6.1.13",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   },
