@@ -557,6 +557,11 @@ export async function importExistingBlueprint(
   const startedAt = new Date().toISOString()
 
   try {
+    // Transition: created -> architect (required by state machine)
+    if (run.state === 'created') {
+      run = await transition(run, 'architect')
+    }
+
     // Save blueprint to disk
     const pipelineDir = getPipelineDir(run.id)
     const blueprintPath = join(pipelineDir, 'blueprint.json')
@@ -577,7 +582,7 @@ export async function importExistingBlueprint(
     // Update the blueprint path on the run
     run = { ...run, blueprintPath }
 
-    // Transition directly to checkpoint:arch (skip the architect stage execution)
+    // Transition: architect -> checkpoint:arch
     run = await transition(run, 'checkpoint:arch')
 
     return run
