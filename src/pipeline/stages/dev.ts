@@ -218,13 +218,6 @@ async function runSingleDevStage(
         startedAt: milestoneStartedAt,
       }
 
-      await appendProgress(run.id, {
-        type: 'info',
-        stage: 'dev',
-        title: `Starting milestone ${i + 1}/${milestones.length}: ${milestone.description}`,
-        data: { milestoneIndex: i, description: milestone.description },
-      }).catch(() => { /* best-effort */ })
-
       // Build milestone-specific prompt (FRESH context for each milestone)
       const milestoneContext: MilestoneContext = {
         blueprintJson,
@@ -236,6 +229,15 @@ async function runSingleDevStage(
       }
 
       const { systemPrompt, userPrompt } = await buildMilestoneDevPrompt(workItem, codebase, milestoneContext)
+
+      // Report milestone start AFTER successful prompt build
+      // (If prompt building fails, we don't want to mislead by saying "Starting milestone")
+      await appendProgress(run.id, {
+        type: 'info',
+        stage: 'dev',
+        title: `Starting milestone ${i + 1}/${milestones.length}: ${milestone.description}`,
+        data: { milestoneIndex: i, description: milestone.description },
+      }).catch(() => { /* best-effort */ })
 
       // AC #1: Run the milestone with a FRESH Claude session (clean context per milestone)
       // Each milestone gets a unique stageKey which ensures a completely new session is spawned.

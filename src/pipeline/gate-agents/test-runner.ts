@@ -26,9 +26,17 @@ import type { TechStack } from '../tech-scanner.js'
  * Only commands in this whitelist can be executed, preventing arbitrary
  * command injection from malicious package.json or project files.
  *
- * Security: Object.freeze() makes this immutable at runtime, preventing
- * prototype pollution attacks that could add malicious commands.
- * Deep freeze is applied to nested args arrays as well.
+ * Security:
+ * - Object.freeze() makes this immutable at runtime, preventing prototype
+ *   pollution attacks that could add malicious commands.
+ * - Deep freeze is applied to nested args arrays as well.
+ * - The args arrays are spread-copied before use ([...allowedCmd.args]) to
+ *   prevent any modification of the frozen originals.
+ *
+ * Threat model: We trust that techStacks data comes from detectTechStacks()
+ * which reads project marker files (package.json, *.csproj, etc.). An attacker
+ * with write access to these files could influence which stack is detected,
+ * but the command executed is always from this fixed whitelist.
  */
 const ALLOWED_TEST_COMMANDS: Readonly<Record<string, Readonly<{ cmd: string; args: readonly string[] }>>> = Object.freeze({
   'npm test': Object.freeze({ cmd: 'npm', args: Object.freeze(['test']) }),

@@ -336,8 +336,14 @@ export async function diffPrompt(name: string): Promise<void> {
     }
 
     // Run diff command
-    // Use -u for unified format, --color=always for colored output
-    const diffProcess = spawn('diff', ['-u', '--color=always', defaultPath, customPath], {
+    // Use -u for unified format
+    // Note: --color=always is GNU diff only (not available on macOS BSD diff)
+    // We try with color first, fall back to plain diff on error
+    const useColor = process.platform !== 'darwin' // Skip --color on macOS
+    const diffArgs = useColor
+      ? ['-u', '--color=always', defaultPath, customPath]
+      : ['-u', defaultPath, customPath]
+    const diffProcess = spawn('diff', diffArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 

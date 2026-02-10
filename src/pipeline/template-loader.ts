@@ -408,15 +408,21 @@ export async function loadTemplate(templateName: string): Promise<TemplateData> 
   // escape the expected directory using relative() checks.
   //
   // NOTE: resolve() does NOT follow symlinks — it only normalizes the path string.
-  // Symlink attacks are mitigated by:
-  // 1. assertSafeTemplateName rejecting '..' and absolute paths
-  // 2. The relative() check below catching any escape attempts via normalized paths
-  // 3. The user controlling ~/.orcha/prompts/ directory contents
+  // This is INTENTIONAL for the following reasons:
   //
-  // We don't use realpath() here because:
-  // - It would fail on non-existent paths (we need to check both custom and default)
-  // - Symlinks within the prompts directory are a user configuration choice
-  // - The user has write access to ~/.orcha/ anyway, so symlinks don't escalate privilege
+  // 1. Symlinks within ~/.orcha/prompts/ are a USER CONFIGURATION CHOICE
+  //    - The user controls this directory and has write access anyway
+  //    - A user creating a symlink is explicitly opting into that behavior
+  //    - Symlinks don't escalate privilege since the user already has access
+  //
+  // 2. Using realpath() would break legitimate use cases:
+  //    - It fails on non-existent paths (we check both custom and default)
+  //    - Users may want to symlink templates from a shared location
+  //
+  // 3. Defense-in-depth is still provided by:
+  //    - assertSafeTemplateName rejecting '..' and absolute paths
+  //    - The relative() check below catching path escape via normalized paths
+  //    - File permissions (only the user can write to ~/.orcha/)
   //
   // The resolve() call normalizes the path including:
   // - Normalizing slashes
@@ -790,17 +796,32 @@ export async function importTemplates(
       // Copy files from temp to custom directory
       await cp(extractedCustomDir, CUSTOM_PROMPTS_DIR, { recursive: true })
 
-      // Clean up backup if import succeeded
+      // Clean up backup ONLY after import fully succeeded
+      // Note: If the process crashes between cp() and rm(), the backup remains
+      // but this is acceptable — user can manually clean up, and data is safe
       if (backupDir) {
         await rm(backupDir, { recursive: true, force: true })
       }
     } catch (err) {
       // Rollback: restore backup if it exists
-      if (backupDir) {
-        if (existsSync(CUSTOM_PROMPTS_DIR)) {
-          await rm(CUSTOM_PROMPTS_DIR, { recursive: true, force: true })
+      // Order is critical: rename backup FIRST, then clean up failed import
+      // This ensures we never lose both directories if process crashes mid-rollback
+      if (backupDir && existsSync(backupDir)) {
+        // Step 1: Rename backup to a temp location first
+        const tempRestoreDir = `${CUSTOM_PROMPTS_DIR}.restore-${Date.now()}`
+        try {
+          await rename(backupDir, tempRestoreDir)
+          // Step 2: Now safe to remove the failed import directory
+          if (existsSync(CUSTOM_PROMPTS_DIR)) {
+            await rm(CUSTOM_PROMPTS_DIR, { recursive: true, force: true })
+          }
+          // Step 3: Move restored backup to final location
+          await rename(tempRestoreDir, CUSTOM_PROMPTS_DIR)
+        } catch (rollbackErr) {
+          // If rollback fails, leave backup in place so user can recover
+          console.error(`Rollback failed: ${(rollbackErr as Error).message}`)
+          console.error(`Backup preserved at: ${backupDir}`)
         }
-        await rename(backupDir, CUSTOM_PROMPTS_DIR)
       }
       throw new Error(`Failed to import templates: ${(err as Error).message}`)
     }

@@ -38,9 +38,11 @@ async function logWarning(message: string): Promise<void> {
     const sanitizedMessage = message.replace(/[\x00-\x1f]/g, '').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
     const logLine = `[${timestamp}] ${sanitizedMessage}\n`
     await appendFile(PIPELINE_WARNINGS_LOG, logLine, 'utf-8')
-  } catch {
-    // Silently fail if we can't write to log file
-    // Don't want to break the pipeline for logging issues
+  } catch (err) {
+    // Fall back to console if we can't write to log file.
+    // This ensures warnings are visible during development/debugging.
+    // We don't throw because logging failures shouldn't break the pipeline.
+    console.error(`[prompt-builder] Failed to write to warning log: ${(err as Error).message}`)
   }
 }
 

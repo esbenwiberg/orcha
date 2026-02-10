@@ -334,6 +334,10 @@ export function getChangedFilesByExtensions(
   // Validate ALL extensions FIRST before building pathspecs.
   // This ensures we don't partially build the pathspecs array if validation
   // throws midway through (which could leave us in an inconsistent state).
+  //
+  // Note: buildDiffArgs also validates pathspecs via isValidPathspec().
+  // This is intentional defense-in-depth — each layer validates independently
+  // so a bug in one layer doesn't compromise security.
   for (const ext of extensions) {
     assertSafeExtension(ext)
   }

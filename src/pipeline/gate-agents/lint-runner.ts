@@ -323,10 +323,14 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
  *
  * Security:
  * - Files starting with '-' are already rejected by isValidFilename() in the caller.
- * - The '@' character is now rejected by SAFE_FILENAME_RE to prevent response file injection
+ * - The '@' character is rejected by SAFE_FILENAME_RE to prevent response file injection
  *   (dotnet uses @file.rsp syntax to read commands from files).
  * - The '--include' flags take option arguments (the filenames), not positional args.
  *   No '--' separator is needed since there are no positional arguments to separate.
+ *
+ * Note: A theoretical TOCTOU race exists where a file could be renamed after validation
+ * but before execution. However, this requires filesystem write access to the worktree
+ * AND precise timing (milliseconds window), making it impractical to exploit.
  */
 function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
   // Build args array for execFileSync (avoids shell injection)

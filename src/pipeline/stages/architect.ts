@@ -207,8 +207,8 @@ export async function runArchitectStage(
     // Record the stage result
     const completedAt = new Date().toISOString()
     const milestoneCount = getBlueprintMilestones(blueprint).length
-    // Handle singular/plural correctly: "1 milestone" vs "0 milestones" / "2 milestones"
-    // Note: Zero milestones should not occur (validation requires >= 1), but handle gracefully
+    // Handle singular/plural: "1 milestone" vs "2 milestones"
+    // (Zero milestones cannot occur here — isValidBlueprint requires at least one)
     const milestoneSuffix = milestoneCount === 1 ? 'milestone' : 'milestones'
     const stageResult: StageResult = {
       stage: 'architect',
@@ -249,17 +249,20 @@ function parseArchitectOutput(stdout: string): BlueprintOutput | null {
 /**
  * Validate that a milestone/step object has the required fields.
  *
- * Security: Validates that description and details are non-empty strings.
+ * Validates that description and details are non-empty, non-whitespace strings.
  * Empty strings would pass type checks but cause downstream failures in the
  * dev stage which depends on these fields for milestone execution.
+ *
+ * Note: The typeof checks MUST come before trim() calls because:
+ * 1. Non-strings would throw on trim() — so we check typeof first
+ * 2. Once we know they're strings, we check they're not whitespace-only
  */
 function isValidMilestoneObject(obj: unknown): boolean {
   if (typeof obj !== 'object' || obj === null) return false
   const m = obj as Record<string, unknown>
-  // Require non-empty, non-whitespace strings for both description and details.
-  // Empty strings or whitespace-only strings (e.g., ' ') would pass length > 0
-  // but are semantically empty and would cause issues downstream.
+  // First check typeof to ensure we can safely call trim()
   if (typeof m.description !== 'string' || typeof m.details !== 'string') return false
+  // Then check for non-empty, non-whitespace content
   const trimmedDesc = m.description.trim()
   const trimmedDetails = m.details.trim()
   return trimmedDesc.length > 0 && trimmedDetails.length > 0
@@ -280,14 +283,12 @@ function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
 
   if (!hasRequiredFields) return false
 
-  // Check if milestones field is present and valid
-  const milestonesPresent = 'milestones' in bp
+  // Check if milestones field is valid (preferred field name)
   const milestonesValid = Array.isArray(bp.milestones) &&
     bp.milestones.length > 0 &&
     bp.milestones.every(isValidMilestoneObject)
 
-  // Check if steps field is present and valid (backward compat)
-  const stepsPresent = 'steps' in bp
+  // Check if steps field is valid (backward compat alias for milestones)
   const stepsValid = Array.isArray(bp.steps) &&
     bp.steps.length > 0 &&
     bp.steps.every(isValidMilestoneObject)

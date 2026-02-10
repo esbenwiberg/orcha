@@ -135,9 +135,10 @@ export interface StackRunnerResult {
  * 2. If ALL verdicts are 'skip' → return 'skip' (nothing ran)
  * 3. Otherwise → return 'pass' (at least one passed, none failed)
  *
- * Note: With current GateVerdict = 'pass' | 'fail' | 'skip', after checking for
- * 'fail' and confirming not all are 'skip', the remaining verdicts MUST contain
- * at least one 'pass'. The explicit check is kept for clarity and future-proofing.
+ * Why the final return is correct: After filtering out 'fail' (step 1) and
+ * confirming NOT ALL are 'skip' (step 2 returns early if all are skip),
+ * the array must contain at least one non-skip verdict. Since the only
+ * possible non-skip verdict after step 1 is 'pass', we can safely return 'pass'.
  */
 export function aggregateStackVerdicts(verdicts: GateVerdict[]): GateVerdict {
   // Empty array case: treat as 'skip' (nothing to aggregate)

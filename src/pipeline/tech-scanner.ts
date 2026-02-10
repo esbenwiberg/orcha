@@ -380,16 +380,17 @@ function hasPythonDep(content: string, dep: string): boolean {
  * Check if a character code represents a word boundary for dependency matching.
  * Uses character codes instead of regex to prevent ReDoS vulnerabilities.
  *
- * Matches: whitespace, quotes, =, <, >, !, comma, [, ], (, ), newline
+ * Matches: whitespace, quotes, =, <, >, !, comma, [, ], (, ), :, newline
  * Parentheses are needed for requirements.txt syntax like 'pytest>=7.0' or 'package[extra]'
+ * Colon is needed for extras syntax like 'pytest:3.0' or TOML keys
  */
 function isWordBoundaryChar(code: number): boolean {
   // Space (32), Tab (9), Newline (10), Carriage return (13)
   if (code === 32 || code === 9 || code === 10 || code === 13) return true
   // Single quote (39), Double quote (34)
   if (code === 39 || code === 34) return true
-  // = (61), < (60), > (62), ! (33)
-  if (code === 61 || code === 60 || code === 62 || code === 33) return true
+  // = (61), < (60), > (62), ! (33), : (58)
+  if (code === 61 || code === 60 || code === 62 || code === 33 || code === 58) return true
   // Comma (44), [ (91), ] (93), ( (40), ) (41)
   if (code === 44 || code === 91 || code === 93 || code === 40 || code === 41) return true
   return false
