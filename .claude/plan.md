@@ -1,559 +1,403 @@
-# Blueprint: Test Coverage Tracking
+# Blueprint: Mobile UI Redesign
 
 ## Goal
 
-Add test coverage tracking to the Orcha pipeline with an 80% target for new code. The coverage checker runs as a gate agent (like test-runner, lint-runner), reports coverage on newly added lines only, and displays results as a soft warning — never blocking the pipeline.
+Maximize vertical space for terminal content by consolidating UI into the top area: integrate session selector into the tab bar, eliminate both the session info bar and bottom navigation, and ensure key toolbar is always accessible while typing. Total space saved: ~90-110px.
 
 ## Non-Goals
 
-- **Hard gate enforcement** — coverage below 80% does NOT block the pipeline (user requested soft warning)
-- **Full project coverage** — only track coverage for newly added lines in the current commit
-- **Modified line coverage** — exclude lines that were changed (not added) from coverage tracking
-- **Automated test generation** — dev agent writes tests, but we don't auto-generate tests to meet coverage
-- **Coverage for adversary tests** — adversary-generated tests won't count toward the 80% target
-- **Detailed branch/function coverage** — stick to line coverage for simplicity
-- **Coverage trends over time** — just report current coverage per pipeline run
+- Changing the desktop/web dashboard UI
+- Modifying the terminal rendering or WebSocket connection logic
+- Altering the pipeline functionality
+- Changing the underlying data structures or API
 
 ## Acceptance Criteria
 
-- [ ] A `coverage-checker` gate agent runs in parallel with the 7 existing gate agents (becomes 8 total)
-- [ ] Coverage checker detects tech stacks and runs appropriate coverage tools (nyc for Node, pytest-cov for Python, dotnet test --collect for .NET)
-- [ ] Parses git diff to identify newly added lines (lines starting with `+` but not `+++`)
-- [ ] Calculates coverage percentage on new lines only, not modified lines
-- [ ] Returns verdict: `'skip'` (informational only, never blocks pipeline)
-- [ ] Coverage threshold defaults to 80% (configurable via pipeline config)
-- [ ] Web dashboard displays coverage results with color coding: green ≥80%, yellow 60-79%, red <60%
-- [ ] Details include list of uncovered new lines (file:line format)
-- [ ] Dev stage prompts encourage test writing with 80% target
-- [ ] Works with Node.js, Python, and .NET projects
-- [ ] Coverage tool failures (missing dependencies, etc.) result in 'skip' verdict with error details, not pipeline failure
+- [ ] Tabs are positioned at the top of the screen, below the header
+- [ ] Session selector is integrated into the tab bar (shows session name + dropdown)
+- [ ] Session selector shows state dot + session name + dropdown arrow
+- [ ] Tapping session selector opens bottom sheet with all sessions
+- [ ] Session info bar is completely removed (functionality moved to tab bar)
+- [ ] Tab indicator (border/background) clearly shows the active tab/selector
+- [ ] Create (+) button is in the tab bar on the right side
+- [ ] Bottom navigation is completely removed (no more bottom bar)
+- [ ] Session navigation no longer uses swipe gestures
+- [ ] Key toolbar (Esc, Tab, Ctrl, arrows) is directly below tab bar
+- [ ] Key toolbar remains visible while typing in terminal
+- [ ] Key toolbar is sticky/fixed so it doesn't scroll away
+- [ ] All existing functionality (session switching, terminal interaction, create button) continues to work
+- [ ] UI remains responsive and mobile-friendly
+- [ ] Safe area insets for notched phones are preserved
+- [ ] Vertical space is maximized for terminal content (~90-110px saved total)
 
 ## Architecture
 
-### High-Level Flow
+### High-Level Changes
 
+**Before:**
 ```
-gate.ts
-  → detectTechStacks(worktreePath)  (called once)
-  → pass TechStack[] to all runners including coverage-checker
-
-coverage-checker:
-  1. Parse git diff → extract added lines per file
-  2. For each tech stack:
-     - Run coverage tool (nyc/pytest-cov/dotnet test --collect)
-     - Parse coverage report (JSON/XML)
-     - Match covered lines against added lines
-  3. Aggregate coverage across stacks
-  4. Return verdict: 'skip' (informational only)
-```
-
-### Coverage Checker Components
-
-```typescript
-// Main entry point
-runCoverageChecker(
-  worktreePath: string,
-  techStacks: TechStack[],
-  baseCommit?: string
-): Promise<GateResult>
-
-// Git diff parsing
-getNewlyAddedLines(
-  worktreePath: string,
-  baseCommit?: string
-): Map<string, number[]>  // file → [line numbers]
-
-// Per-stack coverage runners
-runNodeCoverage(stack: TechStack): CoverageReport
-runPythonCoverage(stack: TechStack): CoverageReport
-runDotnetCoverage(stack: TechStack): CoverageReport
-
-// Coverage report parsers
-parseNycCoverage(coverageDir: string): Map<string, number[]>  // file → covered lines
-parsePytestCoverage(coverageXml: string): Map<string, number[]>
-parseDotnetCoverage(coverageXml: string): Map<string, number[]>
-
-// Calculate coverage on added lines
-calculateNewLineCoverage(
-  addedLines: Map<string, number[]>,
-  coveredLines: Map<string, number[]>
-): { total: number, covered: number, percentage: number, uncovered: Array<{file: string, line: number}> }
+┌─────────────────────────┐
+│ Header (logo, buttons)  │
+├─────────────────────────┤
+│ Session Info Bar        │
+├─────────────────────────┤
+│ Key Toolbar             │
+├─────────────────────────┤
+│                         │
+│   Terminal Content      │
+│                         │
+├─────────────────────────┤
+│ Bottom Nav:             │
+│ [Sessions] [Pipelines]  │
+│ • • • •   [+]          │
+└─────────────────────────┘
 ```
 
-### GateResult Format
-
-```typescript
-{
-  verdict: 'skip',  // Always skip — informational only
-  checkName: 'coverage-checker',
-  summary: 'New lines coverage: 78.4% (98/125 lines) — below 80% threshold',
-  details: {
-    overallCoverage: 85.2,        // Whole project coverage (optional)
-    newLinesCoverage: 78.4,       // What we track
-    threshold: 80,
-    metThreshold: false,
-    totalNewLines: 125,
-    coveredNewLines: 98,
-    uncoveredLines: [
-      { file: 'src/foo.ts', line: 42 },
-      { file: 'src/bar.ts', line: 18 },
-      { file: 'src/bar.ts', line: 19 },
-    ],
-    perStack: [
-      {
-        type: 'node',
-        path: '.',
-        coverage: 78.4,
-        newLines: 125,
-        coveredLines: 98,
-      }
-    ]
-  },
-  timestamp: '2026-02-10T...'
-}
+**After:**
+```
+┌─────────────────────────┐
+│ Header (logo, buttons)  │
+├─────────────────────────┤
+│ [Session-1▼][Pipelines][+]│ ← Session picker in tab
+├─────────────────────────┤
+│ Esc Tab Ctrl ← ↓ ↑ →   │ ← Sticky key toolbar
+├─────────────────────────┤
+│                         │
+│   Terminal Content      │
+│   (MAXIMUM space!)      │
+│                         │
+│                         │
+│                         │
+└─────────────────────────┘
+    ↑ No bottom nav OR session info bar!
 ```
 
-## Key Files
+### Component Breakdown
 
-### New Files
-- `src/pipeline/gate-agents/coverage-checker.ts` (~300-400 lines)
-  - Main runner: `runCoverageChecker()`
-  - Git diff parser: `getNewlyAddedLines()`
-  - Per-stack coverage runners: `runNodeCoverage()`, `runPythonCoverage()`, `runDotnetCoverage()`
-  - Coverage report parsers: `parseNycCoverage()`, `parsePytestCoverage()`, `parseDotnetCoverage()`
-  - Coverage calculator: `calculateNewLineCoverage()`
+1. **Top Tabs Bar** (relocated + enhanced)
+   - Horizontal tab bar below header
+   - Session selector integrated as first "tab" (when on Sessions view)
+   - Shows current session name with state dot + dropdown arrow
+   - Pipelines tab (when on Pipelines view)
+   - Create (+) button on the right side
+   - Active tab indicated with accent color bottom border
+   - Full-width, fixed position
 
-### Modified Files
-- `src/pipeline/stages/gate.ts` (lines ~113-123)
-  - Add `runCoverageChecker()` to Promise.all
-  - Add to skip check handling
-  - Include coverage result in results array
-- `src/pipeline/prompt-builder.ts` (lines ~327-368, ~383-447)
-  - Add testing guidelines to dev prompts
-  - Mention 80% coverage target
-  - Include blueprint.testStrategy if present
-- `src/pipeline/types.ts`
-  - Add `'gate:coverage-checker'` to `ModelStageKey` union (line ~62)
-  - Add `coverageThreshold?: number` to `PipelineConfig` (line ~99)
-- `src/pipeline/pipeline-config.ts`
-  - Add `'gate:coverage-checker': 'shell'` to default model config
-  - Add `coverageThreshold: 80` to default pipeline config
-- `src/web/public/app.js` (gate results rendering, around line ~1500-2000)
-  - Add coverage-checker display with color coding
-  - Show coverage percentage, threshold comparison
-  - List uncovered lines
+2. **Session Selector Dropdown** (replaces swipe + dots + session info bar)
+   - Integrated into tab bar as the first button
+   - Shows: state dot + session name + "▼"
+   - Tap to open bottom sheet with session list
+   - Each list item shows: state dot, session name, branch, state badge
+   - Tap session to switch
+   - Only visible when on Sessions tab (Pipelines tab shows "Pipelines" instead)
+   - Replaces entire session info bar - saves ~40-50px!
 
-### Dependencies
-- `package.json` — Add `nyc` as devDependency for Node coverage
+3. **Sticky Key Toolbar** (enhanced)
+   - Fixed position directly below tab bar
+   - Always visible, even when mobile keyboard is open
+   - Stays accessible while typing in terminal
+   - Same keys: Esc, Tab, Ctrl, arrow keys
+   - Only visible on Sessions tab
+
+4. **Session Info Bar Removed** (NEW)
+   - Completely eliminated
+   - Functionality moved into tab bar session selector
+   - Saves ~40-50px of vertical space
+
+5. **Bottom Nav Removed**
+   - Completely eliminated
+   - Saves ~50-60px of vertical space
+   - More room for terminal content
+
+**Total space saved: ~90-110px!**
+
+### Data Flow
+
+No changes to data flow. The state management remains the same:
+- `state.activeTab` tracks current tab
+- `state.activeIndex` tracks current session
+- `switchTab()` and `switchToSession()` continue to work as before
+
+### Session Switching Flow
+
+**Old:**
+User swipes left/right on session-info or bottom-nav → `onTouchEnd` → changes `state.activeIndex` → calls `switchToSession()`
+
+**New:**
+User taps session selector → opens bottom sheet → user selects session → calls `switchToSession()`
+
+## Folder/File Layout
+
+All changes are confined to the mobile UI files:
+
+```
+src/web/public/
+├── mobile.html     # HTML structure changes
+├── mobile.css      # Style relocations and new styles
+└── mobile.js       # JS behavior updates
+
+dist/web/public/    # Must be synced per CLAUDE.md
+├── mobile.html
+├── mobile.css
+└── mobile.js
+```
 
 ## Milestones
 
-### M1: Git Diff Parser for Added Lines
+### Milestone 1: Move tabs to top
+**Intent:** Relocate the tab navigation from bottom to top of the screen
 
-**Intent:** Create utility to parse git diff and extract newly added line numbers per file.
-
-**Key files:** `src/pipeline/gate-agents/coverage-checker.ts` (partial implementation)
-
-**Details:**
-1. Create `getNewlyAddedLines(worktreePath: string, baseCommit?: string): Map<string, number[]>`
-2. Use git diff strategy similar to `git-utils.ts`:
-   - Try `baseCommit` if provided
-   - Fall back to `origin/{sourceBranch}`
-   - Fall back to `{sourceBranch}`
-   - Fall back to `HEAD~1`
-3. Run `git diff {base} --unified=0 --no-color` to get minimal diff
-4. Parse output:
-   - Look for `diff --git a/... b/...` lines to track current file
-   - Look for `@@ -X,Y +A,B @@` lines to get added line ranges
-   - Lines starting with `+` (but not `+++`) are added content
-   - Map: `{ 'src/foo.ts': [10, 11, 15, 16, 17, 18], 'src/bar.ts': [42] }`
-5. Exclude binary files, deleted files, and non-code files (e.g., `.json`, `.md`, `.lock` files)
+**Files:**
+- `src/web/public/mobile.html` - Move tab HTML from `#bottom-nav` to after header
+- `src/web/public/mobile.css` - Update tab styles for top placement
+- `src/web/public/mobile.js` - No changes needed (tab switching logic stays the same)
 
 **Verification:**
 ```bash
-# Manual test in a worktree with changes
-cd ~/.orcha/pipelines/test-123/worktree
-git diff HEAD~1 --unified=0 --no-color | grep -E '^(\+|@@|diff)'
-
-# TypeScript compile
-npx tsc --noEmit src/pipeline/gate-agents/coverage-checker.ts
+# Open mobile.html in browser
+# Verify tabs appear at top below header
+# Click Sessions/Pipelines tabs to confirm switching works
+# Check active tab indicator displays correctly
 ```
 
----
+### Milestone 2: Create session selector UI in tab bar
+**Intent:** Build the new session picker integrated into the tab bar, replacing both swipe navigation and session info bar
 
-### M2: Node.js Coverage Runner
-
-**Intent:** Run nyc (Istanbul) on Node projects and parse the coverage report.
-
-**Key files:** `src/pipeline/gate-agents/coverage-checker.ts`, `package.json`
-
-**Details:**
-1. Add `nyc` to devDependencies in `package.json`
-2. Implement `runNodeCoverage(stack: TechStack, worktreePath: string): CoverageReport | null`
-   - Check if stack has test command
-   - Run `npx nyc --reporter=json npm test` in `stack.absolutePath`
-   - Timeout: 5 minutes (same as test-runner)
-   - Handle failures gracefully (return null, log warning)
-3. Implement `parseNycCoverage(coverageDir: string): Map<string, number[]>`
-   - Read `coverage/coverage-final.json`
-   - For each file, extract covered statement line numbers
-   - Istanbul format: `{ 'src/foo.ts': { s: { '0': 1, '1': 0 }, statementMap: { '0': {..., line: 10}, '1': {..., line: 11} } } }`
-   - If `s['0'] > 0`, line 10 is covered
-   - Return: `{ 'src/foo.ts': [10, 12, 13, ...] }`
-4. Handle relative vs absolute paths (coverage reports use absolute, git diff uses relative)
-   - Normalize all paths relative to `worktreePath`
+**Files:**
+- `src/web/public/mobile.html` - Add session selector button in tab bar, remove `#session-info` element
+- `src/web/public/mobile.css` - Style the selector button and bottom sheet
+- `src/web/public/mobile.js` - Implement selector open/close, render session list, update session display
 
 **Verification:**
 ```bash
-npm install
-npx tsc --noEmit src/pipeline/gate-agents/coverage-checker.ts
-
-# Manual test
-cd test-project
-npx nyc --reporter=json npm test
-cat coverage/coverage-final.json | jq 'keys'
+# Check Sessions tab shows: [● Session-1 ▼] format
+# Tap session selector in tab bar
+# Verify bottom sheet opens with session list
+# Check each session shows: dot, name, branch, state badge
+# Verify tap outside closes sheet
+# Confirm current session is highlighted
+# Verify session info bar is completely gone
 ```
 
----
+### Milestone 3: Wire up session switching
+**Intent:** Connect the session selector to the existing session switching logic
 
-### M3: Python Coverage Runner
-
-**Intent:** Run pytest-cov on Python projects and parse coverage.xml.
-
-**Key files:** `src/pipeline/gate-agents/coverage-checker.ts`
-
-**Details:**
-1. Implement `runPythonCoverage(stack: TechStack, worktreePath: string): CoverageReport | null`
-   - Check if pytest is available (from tech scanner)
-   - Run `pytest --cov --cov-report=xml` in `stack.absolutePath`
-   - Coverage report written to `coverage.xml` (Cobertura format)
-   - 5-minute timeout
-   - Return null on failure (missing pytest-cov, etc.)
-2. Implement `parsePytestCoverage(coverageXml: string): Map<string, number[]>`
-   - Parse XML (use Node's built-in XML parser or simple regex)
-   - Cobertura format: `<line number="42" hits="1"/>`
-   - Extract lines where `hits > 0`
-   - Group by file: `{ 'src/foo.py': [10, 15, 20], ... }`
-3. Normalize paths relative to `worktreePath`
+**Files:**
+- `src/web/public/mobile.js` - Add click handlers to switch sessions from selector
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/gate-agents/coverage-checker.ts
-
-# Manual test (requires Python project with pytest-cov)
-cd python-test-project
-pytest --cov --cov-report=xml
-cat coverage.xml | grep '<line'
+# Open session selector
+# Tap different session
+# Verify terminal switches to selected session
+# Check session info bar updates
+# Confirm selector closes after selection
 ```
 
----
+### Milestone 4: Remove swipe navigation
+**Intent:** Clean up the old swipe gesture code and session dots
 
-### M4: .NET Coverage Runner
-
-**Intent:** Run dotnet test with code coverage and parse Cobertura XML.
-
-**Key files:** `src/pipeline/gate-agents/coverage-checker.ts`
-
-**Details:**
-1. Implement `runDotnetCoverage(stack: TechStack, worktreePath: string): CoverageReport | null`
-   - Run `dotnet test --collect:"Code Coverage" --results-directory ./coverage` in `stack.absolutePath`
-   - .NET outputs coverage in Cobertura XML format (or binary .coverage — use Cobertura for simplicity)
-   - 5-minute timeout
-   - Return null on failure
-2. Implement `parseDotnetCoverage(coverageXml: string): Map<string, number[]>`
-   - Same Cobertura parser as Python (reuse logic)
-   - Extract covered lines from `<line number="..." hits="..."/>` where hits > 0
-3. Handle .NET-specific path quirks (absolute Windows-style paths on Windows, Unix paths on Linux)
-   - Normalize to relative paths
+**Files:**
+- `src/web/public/mobile.html` - Remove `#session-dots` element
+- `src/web/public/mobile.css` - Remove swipe/dot related styles
+- `src/web/public/mobile.js` - Remove `setupSwipe()`, `renderDots()` calls
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/gate-agents/coverage-checker.ts
-
-# Manual test (requires .NET project)
-cd dotnet-test-project
-dotnet test --collect:"Code Coverage" --results-directory ./coverage
-ls coverage/*.xml
+# Verify no session dots appear
+# Attempt swipe gesture (should do nothing)
+# Check that all session switching still works via selector
 ```
 
----
+### Milestone 5: Move + button to top and remove bottom nav
+**Intent:** Move create button to tab bar and eliminate bottom navigation entirely
 
-### M5: Coverage Calculator & Main Runner
-
-**Intent:** Wire together git diff parsing, coverage runners, and coverage calculation into the main `runCoverageChecker()` function.
-
-**Key files:** `src/pipeline/gate-agents/coverage-checker.ts`
-
-**Details:**
-1. Implement `calculateNewLineCoverage(addedLines, coveredLines)`:
-   - For each file in `addedLines`, check how many lines are in `coveredLines`
-   - Count: `totalNew`, `coveredNew`, `uncoveredNew`
-   - Percentage: `(coveredNew / totalNew) * 100`
-   - Return uncovered list: `[{ file: 'src/foo.ts', line: 42 }, ...]`
-2. Implement `runCoverageChecker(worktreePath, techStacks, baseCommit)`:
-   - Call `getNewlyAddedLines(worktreePath, baseCommit)` → get `addedLines`
-   - For each stack, call appropriate coverage runner (node/python/dotnet)
-   - Parse coverage report → get `coveredLines`
-   - Call `calculateNewLineCoverage(addedLines, coveredLines)`
-   - Build `GateResult` with verdict: `'skip'`
-   - Summary: `"New lines coverage: X% (Y/Z lines) — {above|below} 80% threshold"`
-   - Details: include per-stack breakdown, uncovered lines list, threshold
-3. Handle edge cases:
-   - No new lines → skip (100% coverage by default)
-   - Coverage tool fails → skip with error details
-   - Multiple stacks → aggregate coverage across stacks
+**Files:**
+- `src/web/public/mobile.html` - Move + button to tab bar, remove `#bottom-nav` element
+- `src/web/public/mobile.css` - Style + button in tab bar, remove bottom nav styles
+- `src/web/public/mobile.js` - Update FAB click handler reference if needed
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/gate-agents/coverage-checker.ts
-
-# Unit test with mock data
-node -e "
-const { calculateNewLineCoverage } = require('./dist/pipeline/gate-agents/coverage-checker.js');
-const added = new Map([['src/foo.ts', [10, 11, 12]]]);
-const covered = new Map([['src/foo.ts', [10, 12]]]);
-const result = calculateNewLineCoverage(added, covered);
-console.log(result);  // Should show 66.7% coverage
-"
+# Check + button appears on right side of tab bar
+# Verify no bottom navigation bar exists
+# Confirm + button creates sessions/pipelines based on active tab
+# Verify increased vertical space for terminal
 ```
 
----
+### Milestone 6: Make key toolbar sticky
+**Intent:** Ensure key toolbar remains visible even when mobile keyboard is open
 
-### M6: Integrate Coverage Checker into Gate Stage
-
-**Intent:** Add coverage-checker to the parallel gate agent execution.
-
-**Key files:** `src/pipeline/stages/gate.ts`, `src/pipeline/types.ts`, `src/pipeline/pipeline-config.ts`
-
-**Details:**
-1. Import `runCoverageChecker` in `gate.ts`
-2. Update the `Promise.all` (line ~113):
-   - Add 8th agent: `runCoverageChecker(run.worktreePath, techStacks, run.baseCommit)`
-   - Add skip check: `skip.has('coverage-checker') ? makeSkippedResult('coverage-checker') : ...`
-3. Update `results` array to include coverage result (line ~123)
-4. Add `'gate:coverage-checker'` to `ModelStageKey` union in `types.ts`
-5. Add `'gate:coverage-checker': 'shell'` to default model config in `pipeline-config.ts`
-6. Add `coverageThreshold?: number` field to `PipelineConfig` interface in `types.ts`
-7. Add `coverageThreshold: 80` to config defaults in `pipeline-config.ts`
-8. Update competing mode gate to also include coverage-checker (line ~200+)
+**Files:**
+- `src/web/public/mobile.css` - Add sticky/fixed positioning to `#key-toolbar`
+- `src/web/public/mobile.html` - Potentially adjust container structure if needed
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/stages/gate.ts
-npx tsc --noEmit src/pipeline/types.ts
-npx tsc --noEmit src/pipeline/pipeline-config.ts
-npm run build
-
-# Run gate on a test pipeline
-orcha pipeline run --stage gate --id test-coverage-123
-cat ~/.orcha/pipelines/test-coverage-123/gate-results/coverage-checker.json
+# Open mobile.html in browser with responsive mode
+# Tap in terminal to bring up virtual keyboard
+# Verify key toolbar stays visible above keyboard
+# Test scrolling terminal - toolbar should stay in place
+# Confirm keys still work (Esc, Tab, Ctrl, arrows)
 ```
 
----
+### Milestone 7: Sync to dist/
+**Intent:** Copy changes to the served directory
 
-### M7: Enhance Dev Stage Prompts
-
-**Intent:** Update dev agent prompts to encourage test writing with 80% coverage target.
-
-**Key files:** `src/pipeline/prompt-builder.ts`
-
-**Details:**
-1. Update `buildDevPrompt()` (line ~327-368):
-   - After existing guidelines, add testing section:
-   ```typescript
-   '',
-   '## Testing Guidelines',
-   '- Write tests for new functionality you add',
-   '- Aim for 80% test coverage on new code',
-   '- Follow existing test patterns in the codebase',
-   '- The gate stage will report coverage metrics (informational, not blocking)',
-   '- Do NOT run tests yourself — the gate handles test execution',
-   ```
-2. Update `buildMilestoneDevPrompt()` (line ~383-447):
-   - Add same testing guidelines
-   - If `blueprint.testStrategy` exists, include it:
-   ```typescript
-   if (blueprint.testStrategy) {
-     sections.push('', '## Test Strategy', blueprint.testStrategy);
-   }
-   ```
-3. Do NOT change existing "Do NOT run tests" instruction (line ~351)
+**Files:**
+- `dist/web/public/mobile.html`
+- `dist/web/public/mobile.css`
+- `dist/web/public/mobile.js`
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/prompt-builder.ts
+cp src/web/public/mobile.html dist/web/public/
+cp src/web/public/mobile.css dist/web/public/
+cp src/web/public/mobile.js dist/web/public/
 
-# Inspect generated prompt (manual check)
-# Run a dev stage and check the agent's prompt includes testing guidelines
+# Restart web server if needed
+# Test on actual mobile device or responsive mode
+# Verify all features work: tab switching, session switching, terminal interaction
+# Test keyboard visibility: key toolbar should stay accessible while typing
 ```
 
----
+## Risks & Unknowns
 
-### M8: Web Dashboard Coverage Display
+### Risk: Session selector UX on small screens
+**Probe:** Review session list bottom sheet design for usability with 5+ sessions
+- Will list scrolling work smoothly?
+- Is each session item height sufficient for touch targets (min 44px)?
 
-**Intent:** Add coverage-checker results to the web dashboard gate results view with color-coded display.
+**Mitigation:** Use touch-friendly sizing (14px font, 48px min height per item)
 
-**Key files:** `src/web/public/app.js`, `src/web/public/style.css`
+### Risk: Loss of quick session switching
+**Probe:** Compare swipe gesture speed vs. selector tap-tap interaction
+- Swipe: ~1 second
+- Selector: tap → select → ~2 seconds
 
-**Details:**
-1. In `app.js`, find gate results rendering (around line ~1500-2000)
-2. Add coverage-checker display logic:
-   - Show verdict as "SKIP ℹ️" (informational badge)
-   - Display coverage percentage with color:
-     - `≥80%` → green text
-     - `60-79%` → yellow text
-     - `<60%` → red text
-   - Show threshold comparison:
-     - `✓ Above 80% threshold` (green)
-     - `⚠️ Below 80% threshold` (yellow/red)
-   - List uncovered lines:
-     ```
-     Uncovered lines:
-       • src/foo.ts:42
-       • src/bar.ts:18-20
-     ```
-3. In `style.css`, add coverage-specific styles:
-   ```css
-   .coverage-good { color: #22c55e; }
-   .coverage-warning { color: #eab308; }
-   .coverage-poor { color: #ef4444; }
-   ```
-4. Handle missing coverage data gracefully (e.g., if coverage tool failed)
+**Mitigation:** Make selector very obvious and easy to tap, minimize steps
 
-**Verification:**
-```bash
-# Copy to dist (remember the build gotcha!)
-cp src/web/public/app.js dist/web/public/
-cp src/web/public/style.css dist/web/public/
+### Risk: Compatibility with existing session state logic
+**Probe:** Verify `state.activeIndex` updates correctly when using selector
+- Check if `renderDots()` calls are still triggered anywhere
+- Ensure terminal connection doesn't break on rapid switching
 
-# Restart web server
-orcha web
+**Mitigation:** Thorough testing of state transitions in milestone 3
 
-# Open dashboard, navigate to a pipeline run with gate results
-# Verify coverage-checker section displays correctly
+### Unknown: Visual hierarchy with tabs at top
+**Question:** Should tabs be inside header or separate row?
+- Option A: Separate row below header (recommended)
+- Option B: Inside header (cramped on small screens)
+
+**Resolution:** Use separate row for clarity and touch target size
+
+### Unknown: Session selector placement
+**Question:** Should selector be:
+- Option A: Integrated into session-info bar (recommended)
+- Option B: Separate bar between tabs and session-info
+- Option C: Dropdown in header
+
+**Resolution:** Option A - keeps related info together, no extra row
+
+### Risk: Sticky toolbar covering content
+**Probe:** Test if sticky key toolbar blocks terminal output
+- Does it overlap important terminal content?
+- Should it be position: sticky (scrolls with content until top) vs. position: fixed (always visible)?
+
+**Mitigation:** Use `position: sticky; top: 0;` so it sticks to top of terminal container but doesn't overlay content unnecessarily
+
+### Risk: + button placement in tab bar
+**Probe:** Will + button fit comfortably on small screens (320px width)?
+- Session selector + Pipelines tab + [+] button all in one row
+- Minimum touch target is 44px
+
+**Mitigation:** Make tabs flexible width (flex: 1), + button fixed 44px width on right
+
+### Risk: Session name truncation in tab bar
+**Probe:** Will long session names fit in the session selector tab?
+- "feature/very-long-branch-name-session-3" might overflow
+- Need to balance readability vs. space
+
+**Mitigation:**
+- Truncate session name with ellipsis if too long
+- Show full name in bottom sheet
+- Max width for session name: ~150-180px on small screens
+- Use `text-overflow: ellipsis; white-space: nowrap; overflow: hidden;`
+
+## Design Notes
+
+### Tab Bar with Session Selector and Create Button
+```html
+<div id="top-tabs">
+  <div id="nav-tabs">
+    <!-- When on Sessions tab: show session selector -->
+    <button class="nav-tab session-selector active" data-tab="sessions">
+      <span class="status-dot working"></span>
+      <span class="session-name">Session-1</span>
+      <span class="selector-arrow">▼</span>
+    </button>
+
+    <!-- When on Pipelines tab: regular tab -->
+    <button class="nav-tab" data-tab="pipelines">Pipelines</button>
+  </div>
+  <button id="create-btn" class="create-btn" title="Create">+</button>
+</div>
 ```
 
----
+**CSS Layout:**
+- Container: `display: flex; justify-content: space-between;`
+- Tabs: `flex: 1; display: flex;`
+- Session selector tab: `flex: 1; display: flex; align-items: center; gap: 6px;`
+- Create button: `width: 44px; height: 44px;` (fixed size)
 
-## Risks & Probes
+**Behavior:**
+- On Sessions tab: First button shows session info + acts as dropdown
+- On Pipelines tab: First button shows "Sessions" text (or is hidden)
+- Session selector updates dynamically when session changes
 
-| Risk | Mitigation |
-|------|------------|
-| **nyc not compatible with test framework** | Check if project uses Jest (has built-in `--coverage`). Adapt Node coverage runner to try `jest --coverage` first, fall back to `nyc npm test`. |
-| **pytest-cov not installed** | Coverage runner returns null (skip verdict) with details: "pytest-cov not found". Gate doesn't fail. |
-| **dotnet code coverage requires vstest** | .NET SDK 6+ includes code coverage. If unavailable, skip with error details. |
-| **Git diff parsing breaks on complex diffs** | Test with merge commits, renames, binary files. Exclude non-code files. Handle edge cases gracefully. |
-| **Coverage report paths don't match git paths** | Normalize all paths relative to `worktreePath`. Handle both Unix and Windows path separators. |
-| **Coverage tool timeout (5 min not enough)** | Make timeout configurable in pipeline config. Default: 5 min (same as test-runner). |
-| **False negatives (new lines not in coverage report)** | Some lines (comments, blank lines) won't be in coverage. Filter added lines to only include code lines (exclude comments, whitespace). |
-| **Coverage calculation on mixed-tech repos** | Aggregate coverage across stacks. Example: 80% Node coverage + 70% Python coverage → overall average weighted by lines. |
-| **Web dashboard rendering breaks with large uncovered line lists** | Limit uncovered lines display to first 50 lines, with "... and N more" if truncated. |
-
----
-
-## Configuration
-
-Users can customize coverage via pipeline config:
-
-```typescript
-// In pipeline-config.ts or user-provided config
-{
-  coverageThreshold: 90,  // Require 90% instead of 80%
-  skipChecks: ['coverage-checker'],  // Disable coverage tracking entirely
+### Sticky Key Toolbar
+```css
+#key-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  /* Rest of existing styles */
 }
 ```
 
-CLI support (future enhancement, not in this blueprint):
-```bash
-orcha pipeline run --coverage-threshold 90
-orcha pipeline run --skip coverage-checker
+This ensures the toolbar sticks to the top of its container when scrolling, and stays above the mobile keyboard when typing.
+
+### Session Selector Bottom Sheet Structure
+```html
+<div id="session-selector-sheet" class="bottom-sheet">
+  <div class="sheet-backdrop"></div>
+  <div class="sheet-content">
+    <h3>Switch Session</h3>
+    <div class="session-list">
+      <button class="session-list-item active" data-index="0">
+        <div class="status-dot working"></div>
+        <div class="session-item-info">
+          <div class="session-item-name">Session 1</div>
+          <div class="session-item-meta">feature/auth • working</div>
+        </div>
+        <div class="session-item-check">✓</div>
+      </button>
+      <!-- More sessions... -->
+    </div>
+  </div>
+</div>
 ```
+
+### CSS Class Naming Conventions
+- Follow existing pattern: `.pl-*` for pipeline, `.nav-*` for navigation
+- Use `.session-selector-*` for new session picker components
+- Maintain existing state classes: `.working`, `.waiting`, `.idle`, etc.
+
+### Color & Spacing Consistency
+- Use existing CSS variables: `--accent-purple`, `--bg-secondary`, etc.
+- Maintain 8px base spacing unit
+- Touch targets minimum 44px (iOS Human Interface Guidelines)
 
 ---
 
-## Design Decisions
-
-### Why 'skip' Verdict Instead of 'pass'/'fail'?
-
-**Rationale:**
-- User wants soft warning, not gate failure
-- Allows coverage < 80% without blocking pipeline
-- Distinguishes from real quality gates (test/lint/build)
-- Can be changed to `'fail'` later if user wants hard enforcement
-
-**Implementation:**
-```typescript
-const verdict = 'skip'  // Always skip, regardless of coverage %
-```
-
-**Future toggle:**
-If user wants hard enforcement, add config:
-```typescript
-const verdict = run.config.enforceCoverage && coverage < threshold ? 'fail' : 'skip'
-```
-
-### Why Track New Lines Only (Not Modified Lines)?
-
-**Rationale:**
-- Focuses on fresh code quality
-- Doesn't penalize refactoring existing code
-- Easier to achieve 80% on new code vs entire changed surface
-- Aligns with user preference from questions
-
-**Implementation:**
-Git diff parsing only extracts lines starting with `+` (additions), not `-` (deletions) or context lines.
-
-### Why Not a Separate Test-Creation Stage?
-
-**Considered:** Add new stage between dev and gate for dedicated test writing.
-
-**Rejected because:**
-- Adds pipeline complexity (extra state, transitions)
-- Separates test context from code (TDD principle: write tests with code)
-- Slower (extra stage = extra latency)
-- User has no strong opinion (answered "don't really have an opinion")
-
-**Chosen approach:** Enhance dev prompts + add gate agent
-- Simpler, faster, tests written with code
-- Coverage tracked as informational metric in gate
-- Can revisit if test quality is insufficient
-
-### Coverage Tool Selection
-
-| Stack | Tool | Format | Pros | Cons |
-|-------|------|--------|------|------|
-| **Node** | nyc (Istanbul) | JSON | Widely used, works with any test runner | Requires separate installation |
-| **Node** | Jest --coverage | JSON | Built-in if using Jest | Only works with Jest |
-| **Python** | pytest-cov | XML (Cobertura) | Standard for pytest projects | Requires pytest-cov plugin |
-| **Python** | coverage.py | XML (Cobertura) | Standalone, no pytest needed | Less common in modern projects |
-| **.NET** | dotnet test --collect | XML (Cobertura) | Built into SDK 6+ | Cobertura conversion may require extra tool |
-
-**Implementation:** Try tool in order of likelihood, fall back gracefully.
-
----
-
-## Open Questions
-
-1. **Should adversary-generated tests count toward coverage?**
-   - **Current decision:** No. Adversary runs after coverage check, focused on bug-finding not coverage.
-   - **Future:** Could track "adversary coverage" separately as a bonus metric.
-
-2. **How to handle flaky coverage tools?**
-   - **Current decision:** Return `verdict: 'skip'` with error details. Don't block pipeline.
-   - **Future:** Add retry logic (up to 2 retries) for transient failures.
-
-3. **Coverage caching between fix loops?**
-   - **Current decision:** Always re-run coverage (simpler). Fix loop may change tests.
-   - **Future:** Cache coverage results keyed by `git rev-parse HEAD`, reuse if SHA unchanged.
-
-4. **Should we track branch/function coverage?**
-   - **Current decision:** Line coverage only (simpler, most tools support).
-   - **Future:** Add branch coverage if line coverage proves insufficient.
-
-5. **What if a file has no tests at all (0% coverage)?**
-   - **Current decision:** Report actual coverage (e.g., 0%). Don't special-case.
-   - **Future:** Add warning: "These files have 0% coverage: ..." to highlight gaps.
-
----
-
-Next: /probe 'M1: Git Diff Parser for Added Lines'
+**Next:** `/probe 'milestone 1 - move tabs to top'`

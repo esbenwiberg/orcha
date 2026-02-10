@@ -240,18 +240,15 @@ html, body {
 }
 
 /* =========================================================================
-   Bottom Navigation with Tabs
+   Top Navigation with Tabs
    ========================================================================= */
 
-#bottom-nav {
+#top-nav {
   display: flex;
   align-items: center;
-  padding: 0 12px 0 0;
   background: var(--bg-secondary);
-  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
-  gap: 8px;
-  position: relative;
 }
 
 #nav-tabs {
@@ -281,6 +278,21 @@ html, body {
 
 .nav-tab:active {
   background: var(--bg-tertiary);
+}
+
+/* =========================================================================
+   Bottom Navigation (session dots and FAB)
+   ========================================================================= */
+
+#bottom-nav {
+  display: flex;
+  align-items: center;
+  padding: 0 12px 0 0;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+  gap: 8px;
+  position: relative;
 }
 
 #session-dots {

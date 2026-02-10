@@ -1,317 +1,365 @@
-# Blueprint: Multi-Tech Stack Runner Support
+# Blueprint: Mobile UI Redesign
 
 ## Goal
 
-Make all pipeline runners (test, lint, build) and the adversary agent tech-agnostic so they work with any repo — TypeScript, .NET, Python, or mixed-tech repos (e.g., a .NET backend with a TypeScript client subfolder). Introduce a shared **tech scanner** that detects what technologies exist at what paths, and feed that into each runner so they know how to test, lint, and build for each detected stack.
+Improve the mobile interface layout by moving tabs to the top, redesigning session navigation to be more intuitive, eliminating the bottom nav entirely, and ensuring key toolbar is always accessible while typing.
 
 ## Non-Goals
 
-- **IDE/editor integration** — out of scope
-- **New gate agents beyond build** (e.g., type-check runner) — future agents can use the scanner later
-- **Auto-installing toolchains** — we detect what's available, we don't install dotnet/python/node for the user
-- **Monorepo sub-project isolation** — we support mixed-tech in one repo, but don't detect and run 5 independent package.json projects separately (scan root + 1 level deep only)
-- **Go/Rust/Java support** — sticking to the three requested stacks (Node, .NET, Python) for now; architecture supports adding more later
+- Changing the desktop/web dashboard UI
+- Modifying the terminal rendering or WebSocket connection logic
+- Altering the pipeline functionality
+- Changing the underlying data structures or API
 
 ## Acceptance Criteria
 
-- [ ] A `detectTechStacks(worktreePath)` function scans a repo and returns an array of detected tech stacks with their root paths and tooling info
-- [ ] Tech stacks detected: TypeScript/JavaScript (package.json), .NET (*.csproj/*.sln), Python (pyproject.toml/setup.py/requirements.txt)
-- [ ] Test runner runs the correct test command for each detected tech (npm test, dotnet test, pytest)
-- [ ] Lint runner runs the correct lint command per tech (eslint for JS/TS, dotnet format --verify-no-changes for .NET, ruff/flake8 for Python)
-- [ ] Changed-file detection in git-utils supports extensions for all three stacks
-- [ ] Adversary agent detects project tech and writes tests in the appropriate language/framework
-- [ ] A build runner gate agent is added that runs build per tech (npm run build, dotnet build, skip for Python unless configured)
-- [ ] Mixed-tech repos (e.g., .NET root + TypeScript in `client/`) get all relevant runners executed
-- [ ] All runners produce the same `GateResult` interface — no type changes needed
-- [ ] Existing JS/TS-only repos continue to work identically (no regression)
-- [ ] Pipeline config gains a `gate:build-runner` model key (value: 'shell')
+- [ ] Tabs (Sessions/Pipelines) are positioned at the top of the screen, below the header
+- [ ] Tab indicator (border/background) clearly shows the active tab
+- [ ] Create (+) button is moved to the top (tab bar area)
+- [ ] Bottom navigation is completely removed (no more bottom bar)
+- [ ] Session navigation no longer uses swipe gestures
+- [ ] Session switcher is easily accessible and intuitive
+- [ ] Key toolbar (Esc, Tab, Ctrl, arrows) remains visible while typing in terminal
+- [ ] Key toolbar is sticky/fixed so it doesn't scroll away
+- [ ] All existing functionality (session switching, terminal interaction, create button) continues to work
+- [ ] UI remains responsive and mobile-friendly
+- [ ] Safe area insets for notched phones are preserved
+- [ ] Vertical space is maximized for terminal content
 
 ## Architecture
 
-### Core Concept: Tech Scanner as Shared Foundation
+### High-Level Changes
 
+**Before:**
 ```
-┌─────────────────────────────────────┐
-│          Tech Scanner               │
-│  detectTechStacks(worktreePath)     │
-│  → TechStack[]                      │
-└──────────┬──────────────────────────┘
-           │
-     ┌─────┴──────┬──────────────┬──────────────┐
-     │            │              │              │
-  test-runner  lint-runner  build-runner  adversary
-  (per stack)  (per stack)  (per stack)  (picks best)
-```
-
-### TechStack Interface
-
-```typescript
-interface TechStack {
-  type: 'node' | 'dotnet' | 'python'
-  /** Relative path from worktree root to the tech root ('' for root, 'client' for subfolder) */
-  rootPath: string
-  /** Absolute path to the tech root directory */
-  absolutePath: string
-  /** What was detected (e.g., 'package.json', 'MyApp.sln', 'pyproject.toml') */
-  detectedVia: string
-  /** Available commands detected */
-  commands: {
-    test?: string       // e.g. 'npm test', 'dotnet test', 'pytest'
-    lint?: string       // e.g. 'npm run lint', 'dotnet format --verify-no-changes', 'ruff check'
-    build?: string      // e.g. 'npm run build', 'dotnet build'
-  }
-  /** File extensions relevant to this stack */
-  lintableExtensions: string[]
-}
+┌─────────────────────────┐
+│ Header (logo, buttons)  │
+├─────────────────────────┤
+│ Session Info Bar        │
+├─────────────────────────┤
+│ Key Toolbar             │
+├─────────────────────────┤
+│                         │
+│   Terminal Content      │
+│                         │
+├─────────────────────────┤
+│ Bottom Nav:             │
+│ [Sessions] [Pipelines]  │
+│ • • • •   [+]          │
+└─────────────────────────┘
 ```
 
-### Design Decision: One Runner Per Concern, Multi-Stack Inside
+**After:**
+```
+┌─────────────────────────┐
+│ Header (logo, buttons)  │
+├─────────────────────────┤
+│ [Sessions][Pipelines][+]│ ← Tabs + create button
+├─────────────────────────┤
+│ Session Selector ▼      │ ← New session picker
+├─────────────────────────┤
+│ Esc Tab Ctrl ← ↓ ↑ →   │ ← Sticky key toolbar
+├─────────────────────────┤
+│                         │
+│   Terminal Content      │
+│   (more vertical space) │
+│                         │
+│                         │
+└─────────────────────────┘
+                  ↑ No bottom nav!
+```
 
-**NOT** per-tech runners (DotnetTestRunner, PythonTestRunner). Instead, each runner (test, lint, build) internally loops over `TechStack[]` and runs the correct command per stack.
+### Component Breakdown
 
-Rationale:
-1. **Simpler gate stage** — still 6+1 agents, no explosion of agents per tech
-2. **Unified GateResult** — one test-runner result aggregates all stacks
-3. **New techs = just add to scanner** — runners don't need new files
-4. **Mixed-tech handling natural** — scanner returns 2 stacks, runner loops both
+1. **Top Tabs Bar** (relocated + enhanced)
+   - Horizontal tab bar below header
+   - Two tabs: Sessions, Pipelines (left-aligned)
+   - Create (+) button on the right side
+   - Active tab indicated with accent color bottom border
+   - Full-width, fixed position
+   - Similar styling to current tabs but relocated
+
+2. **Session Selector** (replaces swipe + dots)
+   - Dropdown/select-style button in session info area
+   - Shows current session name with state dot
+   - Tap to open bottom sheet with session list
+   - Each list item shows: state dot, session name, branch, state badge
+   - Tap session to switch
+   - Only visible on Sessions tab
+
+3. **Sticky Key Toolbar** (enhanced)
+   - Fixed position below session info
+   - Always visible, even when mobile keyboard is open
+   - Stays accessible while typing in terminal
+   - Same keys: Esc, Tab, Ctrl, arrow keys
+   - Only visible on Sessions tab
+
+4. **Bottom Nav Removed**
+   - Completely eliminated
+   - Frees up ~50-60px of vertical space
+   - More room for terminal content
 
 ### Data Flow
 
+No changes to data flow. The state management remains the same:
+- `state.activeTab` tracks current tab
+- `state.activeIndex` tracks current session
+- `switchTab()` and `switchToSession()` continue to work as before
+
+### Session Switching Flow
+
+**Old:**
+User swipes left/right on session-info or bottom-nav → `onTouchEnd` → changes `state.activeIndex` → calls `switchToSession()`
+
+**New:**
+User taps session selector → opens bottom sheet → user selects session → calls `switchToSession()`
+
+## Folder/File Layout
+
+All changes are confined to the mobile UI files:
+
 ```
-gate.ts
-  → detectTechStacks(worktreePath)  (called once)
-  → pass TechStack[] to each runner
+src/web/public/
+├── mobile.html     # HTML structure changes
+├── mobile.css      # Style relocations and new styles
+└── mobile.js       # JS behavior updates
 
-test-runner:  for each stack → run stack.commands.test → aggregate results
-lint-runner:  for each stack → get changed files by stack extensions → run lint → aggregate
-build-runner: for each stack → run stack.commands.build → aggregate
-adversary:    pick primary stack → adjust test patterns/language in prompt
+dist/web/public/    # Must be synced per CLAUDE.md
+├── mobile.html
+├── mobile.css
+└── mobile.js
 ```
-
-## Key Files
-
-### New Files
-- `src/pipeline/tech-scanner.ts` — Tech detection logic + TechStack type
-- `src/pipeline/gate-agents/build-runner.ts` — New build runner gate agent
-
-### Modified Files
-- `src/pipeline/gate-agents/test-runner.ts` — Accept TechStack[], run per-stack
-- `src/pipeline/gate-agents/lint-runner.ts` — Accept TechStack[], lint per-stack with correct tool
-- `src/pipeline/gate-agents/adversary.ts` — Use TechStack to pick language for test generation
-- `src/pipeline/git-utils.ts` — Generalize `getChangedLintableFiles` to accept extensions param
-- `src/pipeline/stages/gate.ts` — Call tech scanner, pass stacks to runners, add build-runner
-- `src/pipeline/types.ts` — Add ModelStageKey for `gate:build-runner`
-- `src/pipeline/pipeline-config.ts` — Add `gate:build-runner: 'shell'` default
 
 ## Milestones
 
-### M1: Tech Scanner
-**Intent:** Create the shared tech detection module that all runners will consume.
+### Milestone 1: Move tabs to top
+**Intent:** Relocate the tab navigation from bottom to top of the screen
 
-**Key files:** `src/pipeline/tech-scanner.ts`
-
-**Details:**
-1. Create `src/pipeline/tech-scanner.ts` with:
-   - `TechStack` interface (type, rootPath, absolutePath, detectedVia, commands, lintableExtensions)
-   - `detectTechStacks(worktreePath: string): TechStack[]` function
-2. Node detection:
-   - Look for `package.json` at root and one level deep (e.g., `client/package.json`)
-   - Exclude `node_modules/` paths
-   - Read scripts to detect test/lint/build commands
-   - Check dependencies for eslint (fallback lint)
-   - Extensions: `.ts`, `.js`, `.tsx`, `.jsx`, `.mjs`, `.cjs`
-3. .NET detection:
-   - Look for `*.sln` at root, then `*.csproj` at root and one level deep
-   - Test command: `dotnet test` (always available with SDK)
-   - Lint: `dotnet format --verify-no-changes`
-   - Build: `dotnet build`
-   - Extensions: `.cs`, `.fs`, `.vb`
-4. Python detection:
-   - Look for `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt` at root
-   - Test: check if pytest is in deps → `pytest`, else `python -m pytest`
-   - Lint: check for ruff → `ruff check .`, else check for flake8 → `flake8`, else skip
-   - Build: `python -m build` only if pyproject.toml has `[build-system]`
-   - Extensions: `.py`, `.pyi`
-5. Return all detected stacks (a mixed repo returns multiple entries)
+**Files:**
+- `src/web/public/mobile.html` - Move tab HTML from `#bottom-nav` to after header
+- `src/web/public/mobile.css` - Update tab styles for top placement
+- `src/web/public/mobile.js` - No changes needed (tab switching logic stays the same)
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/tech-scanner.ts
+# Open mobile.html in browser
+# Verify tabs appear at top below header
+# Click Sessions/Pipelines tabs to confirm switching works
+# Check active tab indicator displays correctly
 ```
 
----
+### Milestone 2: Create session selector UI
+**Intent:** Build the new session picker component to replace swipe navigation
 
-### M2: Generalize git-utils for Multi-Tech Extensions
-**Intent:** Make changed-file detection work with any set of extensions, not just JS/TS.
-
-**Key files:** `src/pipeline/git-utils.ts`
-
-**Details:**
-1. Add a new exported function `getChangedFilesByExtensions(worktreePath, sourceBranch, extensions: string[], baseCommit?)` that accepts a list of extensions (e.g. `['.cs', '.fs']`)
-2. Builds git diff glob patterns from extensions: `'*.cs' '*.fs'`
-3. Uses the same multi-strategy diff approach (baseCommit → origin/branch → branch → HEAD)
-4. Refactor `getChangedLintableFiles` to call the new function with `['.ts', '.js', '.tsx', '.jsx']` (backward compat, same behavior)
+**Files:**
+- `src/web/public/mobile.html` - Add session selector button markup
+- `src/web/public/mobile.css` - Style the selector and bottom sheet
+- `src/web/public/mobile.js` - Implement selector open/close, render session list
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/git-utils.ts
+# Tap session selector
+# Verify bottom sheet opens with session list
+# Check each session shows: dot, name, branch, state
+# Verify tap outside closes sheet
+# Confirm current session is highlighted
 ```
 
----
+### Milestone 3: Wire up session switching
+**Intent:** Connect the session selector to the existing session switching logic
 
-### M3: Multi-Tech Test Runner
-**Intent:** Make test-runner accept TechStack[] and run tests for each detected stack.
-
-**Key files:** `src/pipeline/gate-agents/test-runner.ts`
-
-**Details:**
-1. Change `runTestRunner` signature to `runTestRunner(worktreePath: string, techStacks?: TechStack[])`
-2. If `techStacks` provided and non-empty:
-   - For each stack with `commands.test`, run the command with cwd = `stack.absolutePath`
-   - Collect per-stack results
-3. If `techStacks` not provided (backward compat), fall back to current `detectTestCommand` logic
-4. Aggregate verdict: any fail → 'fail', all skip → 'skip', else 'pass'
-5. Details include per-stack breakdown: `{ stacks: [{ type: 'node', path: '.', status: 'pass', output: '...' }] }`
-6. Preserve existing timeout (5 min per stack)
+**Files:**
+- `src/web/public/mobile.js` - Add click handlers to switch sessions from selector
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/gate-agents/test-runner.ts
+# Open session selector
+# Tap different session
+# Verify terminal switches to selected session
+# Check session info bar updates
+# Confirm selector closes after selection
 ```
 
----
+### Milestone 4: Remove swipe navigation
+**Intent:** Clean up the old swipe gesture code and session dots
 
-### M4: Multi-Tech Lint Runner
-**Intent:** Make lint-runner accept TechStack[] and lint with the correct tool per stack.
-
-**Key files:** `src/pipeline/gate-agents/lint-runner.ts`
-
-**Details:**
-1. Change signature to include `techStacks?: TechStack[]`
-2. If stacks provided, for each stack with `commands.lint`:
-   - Get changed files filtered by stack's `lintableExtensions` (use new `getChangedFilesByExtensions`)
-   - Handle command differences:
-     - **Node:** existing behavior — `npm run lint -- {files}` or `npx eslint {files}`
-     - **.NET:** `dotnet format --verify-no-changes` in stack's absolutePath (no file list — it operates on the project)
-     - **Python:** `ruff check {files}` or `flake8 {files}`
-   - Parse output per-tech (eslint parser for node, generic for others)
-3. If no stacks, fall back to current behavior
-4. Aggregate across stacks (any fail → fail, all skip → skip)
+**Files:**
+- `src/web/public/mobile.html` - Remove `#session-dots` element
+- `src/web/public/mobile.css` - Remove swipe/dot related styles
+- `src/web/public/mobile.js` - Remove `setupSwipe()`, `renderDots()` calls
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/gate-agents/lint-runner.ts
+# Verify no session dots appear
+# Attempt swipe gesture (should do nothing)
+# Check that all session switching still works via selector
 ```
 
----
+### Milestone 5: Move + button to top and remove bottom nav
+**Intent:** Move create button to tab bar and eliminate bottom navigation entirely
 
-### M5: Build Runner Gate Agent
-**Intent:** Add a new shell-only gate agent that runs build commands per tech stack.
-
-**Key files:** `src/pipeline/gate-agents/build-runner.ts`, `src/pipeline/types.ts`, `src/pipeline/pipeline-config.ts`
-
-**Details:**
-1. Create `src/pipeline/gate-agents/build-runner.ts`:
-   - `runBuildRunner(worktreePath: string, techStacks?: TechStack[]): Promise<GateResult>`
-   - For each stack with `commands.build`, run it in `stack.absolutePath`
-   - Timeout: 5 minutes per stack
-   - Any build failure = fail, all skip (no build command) = skip, else pass
-   - Details include per-stack results
-2. Add `'gate:build-runner'` to `ModelStageKey` union in `types.ts`
-3. Add `'gate:build-runner': z.string().optional()` to ModelConfigSchema in `pipeline-config.ts`
-4. Add `'gate:build-runner': 'shell'` to default model config
+**Files:**
+- `src/web/public/mobile.html` - Move + button to tab bar, remove `#bottom-nav` element
+- `src/web/public/mobile.css` - Style + button in tab bar, remove bottom nav styles
+- `src/web/public/mobile.js` - Update FAB click handler reference if needed
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/gate-agents/build-runner.ts
-npx tsc --noEmit src/pipeline/types.ts
-npx tsc --noEmit src/pipeline/pipeline-config.ts
+# Check + button appears on right side of tab bar
+# Verify no bottom navigation bar exists
+# Confirm + button creates sessions/pipelines based on active tab
+# Verify increased vertical space for terminal
 ```
 
----
+### Milestone 6: Make key toolbar sticky
+**Intent:** Ensure key toolbar remains visible even when mobile keyboard is open
 
-### M6: Wire Tech Scanner into Gate Stage
-**Intent:** Connect everything — gate stage calls tech scanner, passes stacks to all runners, adds build-runner to the parallel agent set.
-
-**Key files:** `src/pipeline/stages/gate.ts`
-
-**Details:**
-1. Import `detectTechStacks` from `../tech-scanner.js`
-2. Import `runBuildRunner` from `../gate-agents/build-runner.js`
-3. In `runSingleGateStage`, at the top:
-   - `const techStacks = detectTechStacks(run.worktreePath)`
-4. Update the `Promise.all` to:
-   - Pass `techStacks` to `runTestRunner(run.worktreePath, techStacks)`
-   - Pass `techStacks` to `runLintRunner(run.worktreePath, run.sourceBranch, run.baseCommit, techStacks)`
-   - Add `runBuildRunner(run.worktreePath, techStacks)` with skip check
-5. Update results array to include build result
-6. Same changes in `evaluateCompetitor` for competing mode
-7. Update `GATE_CHECK_NAMES` to include `'build'`
+**Files:**
+- `src/web/public/mobile.css` - Add sticky/fixed positioning to `#key-toolbar`
+- `src/web/public/mobile.html` - Potentially adjust container structure if needed
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/stages/gate.ts
+# Open mobile.html in browser with responsive mode
+# Tap in terminal to bring up virtual keyboard
+# Verify key toolbar stays visible above keyboard
+# Test scrolling terminal - toolbar should stay in place
+# Confirm keys still work (Esc, Tab, Ctrl, arrows)
 ```
 
----
+### Milestone 7: Sync to dist/
+**Intent:** Copy changes to the served directory
 
-### M7: Tech-Aware Adversary
-**Intent:** Make the adversary agent aware of project tech so it writes tests in the right language.
-
-**Key files:** `src/pipeline/gate-agents/adversary.ts`, `src/pipeline/prompt-builder.ts`
-
-**Details:**
-1. Update `runAdversary` to accept `techStacks?: TechStack[]`
-2. Pick the "primary" stack (first one, or the one matching the most changed files)
-3. Update `getTestPatterns` to search for tech-appropriate patterns:
-   - Node: `*.test.ts`, `*.spec.ts`, `*.test.js`, `*.spec.js` (existing)
-   - .NET: `*Tests.cs`, `*Test.cs` in test directories
-   - Python: `test_*.py`, `*_test.py`
-4. Pass tech type to `buildAdversaryPrompt` — add a `techType` param
-5. In the adversary prompt, include the detected tech so Claude writes tests in the right language
-6. Update `executeTests` to use the right runner:
-   - Node: `npx tsx` (existing)
-   - Python: `pytest {testPath}` or `python {testPath}`
-   - .NET: skip adversary test execution for now (known limitation — .NET tests need a project context to compile)
+**Files:**
+- `dist/web/public/mobile.html`
+- `dist/web/public/mobile.css`
+- `dist/web/public/mobile.js`
 
 **Verification:**
 ```bash
-npx tsc --noEmit src/pipeline/gate-agents/adversary.ts
-npx tsc --noEmit src/pipeline/prompt-builder.ts
+cp src/web/public/mobile.html dist/web/public/
+cp src/web/public/mobile.css dist/web/public/
+cp src/web/public/mobile.js dist/web/public/
+
+# Restart web server if needed
+# Test on actual mobile device or responsive mode
+# Verify all features work: tab switching, session switching, terminal interaction
+# Test keyboard visibility: key toolbar should stay accessible while typing
 ```
+
+## Risks & Unknowns
+
+### Risk: Session selector UX on small screens
+**Probe:** Review session list bottom sheet design for usability with 5+ sessions
+- Will list scrolling work smoothly?
+- Is each session item height sufficient for touch targets (min 44px)?
+
+**Mitigation:** Use touch-friendly sizing (14px font, 48px min height per item)
+
+### Risk: Loss of quick session switching
+**Probe:** Compare swipe gesture speed vs. selector tap-tap interaction
+- Swipe: ~1 second
+- Selector: tap → select → ~2 seconds
+
+**Mitigation:** Make selector very obvious and easy to tap, minimize steps
+
+### Risk: Compatibility with existing session state logic
+**Probe:** Verify `state.activeIndex` updates correctly when using selector
+- Check if `renderDots()` calls are still triggered anywhere
+- Ensure terminal connection doesn't break on rapid switching
+
+**Mitigation:** Thorough testing of state transitions in milestone 3
+
+### Unknown: Visual hierarchy with tabs at top
+**Question:** Should tabs be inside header or separate row?
+- Option A: Separate row below header (recommended)
+- Option B: Inside header (cramped on small screens)
+
+**Resolution:** Use separate row for clarity and touch target size
+
+### Unknown: Session selector placement
+**Question:** Should selector be:
+- Option A: Integrated into session-info bar (recommended)
+- Option B: Separate bar between tabs and session-info
+- Option C: Dropdown in header
+
+**Resolution:** Option A - keeps related info together, no extra row
+
+### Risk: Sticky toolbar covering content
+**Probe:** Test if sticky key toolbar blocks terminal output
+- Does it overlap important terminal content?
+- Should it be position: sticky (scrolls with content until top) vs. position: fixed (always visible)?
+
+**Mitigation:** Use `position: sticky; top: 0;` so it sticks to top of terminal container but doesn't overlay content unnecessarily
+
+### Risk: + button placement in tab bar
+**Probe:** Will + button fit comfortably on small screens (320px width)?
+- Sessions + Pipelines tabs + [+] button all in one row
+- Minimum touch target is 44px
+
+**Mitigation:** Make tabs flexible width (flex: 1), + button fixed 44px width on right
+
+## Design Notes
+
+### Tab Bar with Create Button
+```html
+<div id="top-tabs">
+  <div id="nav-tabs">
+    <button class="nav-tab active" data-tab="sessions">Sessions</button>
+    <button class="nav-tab" data-tab="pipelines">Pipelines</button>
+  </div>
+  <button id="create-btn" class="create-btn" title="Create">+</button>
+</div>
+```
+
+**CSS Layout:**
+- Container: `display: flex; justify-content: space-between;`
+- Tabs: `flex: 1; display: flex;`
+- Create button: `width: 44px; height: 44px;` (fixed size)
+
+### Sticky Key Toolbar
+```css
+#key-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  /* Rest of existing styles */
+}
+```
+
+This ensures the toolbar sticks to the top of its container when scrolling, and stays above the mobile keyboard when typing.
+
+### Session Selector Bottom Sheet Structure
+```html
+<div id="session-selector-sheet" class="bottom-sheet">
+  <div class="sheet-backdrop"></div>
+  <div class="sheet-content">
+    <h3>Switch Session</h3>
+    <div class="session-list">
+      <button class="session-list-item active" data-index="0">
+        <div class="status-dot working"></div>
+        <div class="session-item-info">
+          <div class="session-item-name">Session 1</div>
+          <div class="session-item-meta">feature/auth • working</div>
+        </div>
+        <div class="session-item-check">✓</div>
+      </button>
+      <!-- More sessions... -->
+    </div>
+  </div>
+</div>
+```
+
+### CSS Class Naming Conventions
+- Follow existing pattern: `.pl-*` for pipeline, `.nav-*` for navigation
+- Use `.session-selector-*` for new session picker components
+- Maintain existing state classes: `.working`, `.waiting`, `.idle`, etc.
+
+### Color & Spacing Consistency
+- Use existing CSS variables: `--accent-purple`, `--bg-secondary`, etc.
+- Maintain 8px base spacing unit
+- Touch targets minimum 44px (iOS Human Interface Guidelines)
 
 ---
 
-### M8: Full Build Verification
-**Intent:** Ensure everything compiles and existing behavior is preserved.
-
-**Key files:** All modified files
-
-**Details:**
-1. Run `npx tsc --noEmit` — full project must compile clean
-2. Run `npm run build` — dist output must succeed
-3. Manually verify the tech scanner detects Orcha itself as a node project
-4. Review all imports/exports are wired correctly
-5. Verify no regressions: when `detectTechStacks` returns only a node stack, behavior is identical to before
-
-**Verification:**
-```bash
-npx tsc --noEmit
-npm run build
-```
-
-## Risks & Probes
-
-| Risk | Mitigation |
-|------|------------|
-| `dotnet format` may not be available on all machines | Included in .NET 6+ SDK. If command fails, lint runner treats as skip (not fail). |
-| `ruff` or `flake8` not installed in target repo | Scanner checks deps. If neither found, Python lint command is `undefined` → runner skips. |
-| Mixed-tech lint may be noisy | Each linter only runs on its own file extensions. A .cs file never hits eslint. |
-| Adversary test execution for .NET is complex | Start with skip for .NET adversary tests. Known limitation, can enhance later. |
-| `package.json` in subdirectory misdetected | Only scan 1 level deep. Exclude `node_modules/` paths. |
-| Build runner may be slow for large .NET projects | 5 min timeout. Can make configurable later. |
-| Python virtual env not activated | Scanner can check for `.venv/` and prefix commands accordingly. Start simple, enhance if needed. |
-
----
-
-Next: /probe 'M1: Tech Scanner'
+**Next:** `/probe 'milestone 1 - move tabs to top'`
