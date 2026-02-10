@@ -9,6 +9,7 @@ WorkingDirectory=REPLACE_WORKING_DIR
 Environment=PORT=3000
 Environment=NO_OPEN=1
 Environment=NODE_ENV=production
+Environment=PATH=/home/REPLACE_USER/.dotnet:/home/REPLACE_USER/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin
 ExecStartPre=/usr/bin/bash -c 'for i in 1 2 3 4 5 6; do fuser 3000/tcp >/dev/null 2>&1 || exit 0; sleep 2; done'
 ExecStart=/usr/bin/node dist/web/start-server.js
 Restart=always
