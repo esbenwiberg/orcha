@@ -55,6 +55,9 @@ function isValidFilename(filename: string): boolean {
   if (filename.startsWith('/')) return false
   // Reject consecutive slashes (could bypass security checks)
   if (filename.includes('//')) return false
+  // Reject flag-like filenames (e.g., '--verify-no-changes.ts')
+  // These could be interpreted as CLI flags even with execFileSync
+  if (filename.startsWith('--')) return false
   // Only allow whitelisted characters
   return SAFE_FILENAME_RE.test(filename)
 }

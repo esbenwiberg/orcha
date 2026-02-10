@@ -5,11 +5,13 @@
  * Supports custom overrides and default templates.
  */
 
-import { readFile, access } from 'node:fs/promises'
+import { readFile, access, mkdir, writeFile, readdir, rm, cp, unlink, rename } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { join, normalize, relative, isAbsolute } from 'node:path'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import HandlebarsImport from 'handlebars'
 import * as yaml from 'js-yaml'
+import * as tar from 'tar'
 
 // Access Handlebars from default export
 const Handlebars = HandlebarsImport
@@ -323,6 +325,7 @@ function assertSafeTemplateName(templateName: string): void {
  * Load a template by name.
  *
  * Checks custom overrides first, then falls back to defaults.
+ * Validates template structure and Handlebars syntax.
  *
  * @param templateName - Template name (e.g., 'architect' or 'gate/adversary')
  * @returns Parsed template data
@@ -339,22 +342,32 @@ export async function loadTemplate(templateName: string): Promise<TemplateData> 
   // This catches any edge cases the name validation might miss
   const normalizedCustom = normalize(customPath)
   const normalizedDefault = normalize(defaultPath)
+  const normalizedCustomDir = normalize(CUSTOM_PROMPTS_DIR)
+  const normalizedDefaultDir = normalize(DEFAULT_PROMPTS_DIR)
 
-  if (!normalizedCustom.startsWith(CUSTOM_PROMPTS_DIR) || isAbsolute(templateName)) {
+  // Check that the resolved path starts with the expected directory
+  // Use normalized versions of both paths for consistent comparison
+  if (!normalizedCustom.startsWith(normalizedCustomDir + '/') && normalizedCustom !== normalizedCustomDir) {
     throw new Error(`Invalid template path (escapes custom directory): ${templateName}`)
   }
-  if (!normalizedDefault.startsWith(DEFAULT_PROMPTS_DIR) || isAbsolute(templateName)) {
+  if (!normalizedDefault.startsWith(normalizedDefaultDir + '/') && normalizedDefault !== normalizedDefaultDir) {
     throw new Error(`Invalid template path (escapes default directory): ${templateName}`)
   }
 
   // Try custom first
   if (await exists(normalizedCustom)) {
-    return parseYamlTemplate(normalizedCustom)
+    const template = await parseYamlTemplate(normalizedCustom)
+    // Validate template structure and syntax
+    validateTemplate(template)
+    return template
   }
 
   // Fall back to default
   if (await exists(normalizedDefault)) {
-    return parseYamlTemplate(normalizedDefault)
+    const template = await parseYamlTemplate(normalizedDefault)
+    // Validate template structure and syntax
+    validateTemplate(template)
+    return template
   }
 
   throw new Error(
@@ -407,6 +420,7 @@ export function compileTemplate(
  * Checks:
  * - Required fields exist (name, systemPrompt, userPrompt)
  * - Handlebars syntax is valid (can be compiled)
+ * - Test compilation with empty variables to catch syntax errors
  * - Referenced variables exist in the variables schema
  *
  * @param template - Template to validate
@@ -426,7 +440,9 @@ export function validateTemplate(template: TemplateData): void {
 
   // Validate Handlebars syntax by attempting compilation with empty variables
   try {
-    Handlebars.compile(template.systemPrompt)
+    const compiledSystem = Handlebars.compile(template.systemPrompt)
+    // Test execution with empty object to catch runtime errors
+    compiledSystem({})
   } catch (err) {
     if (err instanceof Error) {
       throw new Error(
@@ -437,7 +453,9 @@ export function validateTemplate(template: TemplateData): void {
   }
 
   try {
-    Handlebars.compile(template.userPrompt)
+    const compiledUser = Handlebars.compile(template.userPrompt)
+    // Test execution with empty object to catch runtime errors
+    compiledUser({})
   } catch (err) {
     if (err instanceof Error) {
       throw new Error(
@@ -544,19 +562,13 @@ export async function resetTemplate(templateName: string): Promise<void> {
  * @throws Error if export fails
  */
 export async function exportTemplates(outputPath: string = './orcha-prompts-export.tar.gz'): Promise<void> {
-  const tar = await import('tar')
-  const { writeFile, mkdir } = await import('node:fs/promises')
-  const { tmpdir } = await import('node:os')
-  const { existsSync } = await import('node:fs')
-
   // Check if custom directory exists and has files
   if (!existsSync(CUSTOM_PROMPTS_DIR)) {
     throw new Error('No custom templates to export (custom directory does not exist)')
   }
 
-  const { readdir } = await import('node:fs/promises')
   const files = await readdir(CUSTOM_PROMPTS_DIR, { recursive: true })
-  const yamlFiles = files.filter(f => f.endsWith('.yaml'))
+  const yamlFiles = files.filter(f => typeof f === 'string' && f.endsWith('.yaml'))
 
   if (yamlFiles.length === 0) {
     throw new Error('No custom templates to export (no .yaml files found)')
@@ -579,7 +591,6 @@ export async function exportTemplates(outputPath: string = './orcha-prompts-expo
 
   try {
     // Copy custom directory to temp dir to bundle with manifest
-    const { cp } = await import('node:fs/promises')
     const tempCustomDir = join(tempDir, 'custom')
     await cp(CUSTOM_PROMPTS_DIR, tempCustomDir, { recursive: true })
 
@@ -594,7 +605,6 @@ export async function exportTemplates(outputPath: string = './orcha-prompts-expo
     )
   } finally {
     // Clean up temp directory
-    const { rm } = await import('node:fs/promises')
     await rm(tempDir, { recursive: true, force: true })
   }
 }
@@ -613,11 +623,6 @@ export async function importTemplates(
   inputPath: string,
   confirmOverwrite?: () => Promise<boolean>
 ): Promise<void> {
-  const tar = await import('tar')
-  const { readdir, mkdir, rm } = await import('node:fs/promises')
-  const { existsSync } = await import('node:fs')
-  const { tmpdir } = await import('node:os')
-
   // Check if input file exists
   if (!existsSync(inputPath)) {
     throw new Error(`Import file not found: ${inputPath}`)
@@ -689,7 +694,6 @@ export async function importTemplates(
     let backupDir: string | null = null
     if (existsSync(CUSTOM_PROMPTS_DIR)) {
       backupDir = `${CUSTOM_PROMPTS_DIR}.backup-${Date.now()}`
-      const { rename } = await import('node:fs/promises')
       await rename(CUSTOM_PROMPTS_DIR, backupDir)
     }
 
@@ -698,7 +702,6 @@ export async function importTemplates(
       await mkdir(CUSTOM_PROMPTS_DIR, { recursive: true })
 
       // Copy files from temp to custom directory
-      const { cp } = await import('node:fs/promises')
       await cp(extractedCustomDir, CUSTOM_PROMPTS_DIR, { recursive: true })
 
       // Clean up backup if import succeeded
@@ -711,7 +714,6 @@ export async function importTemplates(
         if (existsSync(CUSTOM_PROMPTS_DIR)) {
           await rm(CUSTOM_PROMPTS_DIR, { recursive: true, force: true })
         }
-        const { rename } = await import('node:fs/promises')
         await rename(backupDir, CUSTOM_PROMPTS_DIR)
       }
       throw new Error(`Failed to import templates: ${(err as Error).message}`)

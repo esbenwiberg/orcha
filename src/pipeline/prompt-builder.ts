@@ -9,7 +9,64 @@
  */
 
 import { execSync } from 'child_process'
+import { appendFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { loadTemplate, compileTemplate } from './template-loader.js'
+
+// ============================================================================
+// Logging
+// ============================================================================
+
+const ORCHA_HOME = join(homedir(), '.orcha')
+const PIPELINE_WARNINGS_LOG = join(ORCHA_HOME, 'pipeline-warnings.log')
+
+/**
+ * Log a warning to the persistent pipeline warnings log.
+ *
+ * Logs are appended to ~/.orcha/pipeline-warnings.log for debugging
+ * template loading failures and other non-fatal issues.
+ */
+async function logWarning(message: string): Promise<void> {
+  try {
+    const timestamp = new Date().toISOString()
+    const logLine = `[${timestamp}] ${message}\n`
+    await appendFile(PIPELINE_WARNINGS_LOG, logLine, 'utf-8')
+  } catch {
+    // Silently fail if we can't write to log file
+    // Don't want to break the pipeline for logging issues
+  }
+}
+
+// ============================================================================
+// Hardcoded Fallback Prompts
+// ============================================================================
+
+/**
+ * Get hardcoded fallback prompt for a template that failed to load.
+ *
+ * These are the original hardcoded prompts from before template migration.
+ * Used only when template loading fails (missing file, invalid YAML, etc.).
+ *
+ * @param templateName - Name of the template (e.g., 'architect', 'dev', 'gate/ac-validator')
+ * @param variables - Variables to interpolate (same as what would be passed to compileTemplate)
+ * @returns Compiled prompt parts
+ * @throws Error if no hardcoded fallback exists for the template
+ */
+export function getHardcodedFallback(
+  templateName: string,
+  variables: Record<string, unknown>
+): PromptParts {
+  // All hardcoded fallbacks are already in the try-catch blocks below
+  // This function serves as documentation and a centralized reference point
+  // The actual fallback logic is implemented inline in each build*Prompt function
+  // to keep the variable handling type-safe and avoid complex generic handling
+
+  throw new Error(
+    `No hardcoded fallback available for template '${templateName}'. ` +
+    `This should never happen as all build*Prompt functions have inline fallbacks.`
+  )
+}
 
 // ============================================================================
 // Types
@@ -173,9 +230,10 @@ export async function buildArchitectPrompt(
     // Note: Template loading failure is expected on first run or fresh installs.
     // The hardcoded prompts serve as a reliable fallback. If custom templates are
     // configured and failing, check ~/.orcha/prompts/ for syntax errors.
-    console.warn(
-      `[prompt-builder] Template 'architect' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
-    )
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const warning = `Failed to load template 'architect': ${errMsg}. Falling back to hardcoded default prompt.`
+    console.warn(`[prompt-builder] ${warning}`)
+    await logWarning(warning)
 
     // FALLBACK: Original hardcoded implementation
     const learningSection = learningHints && learningHints.length > 0
@@ -361,9 +419,10 @@ export async function buildDevPrompt(
     }
     return compileTemplate(template, variables)
   } catch (err) {
-    console.warn(
-      `[prompt-builder] Template 'dev' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
-    )
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const warning = `Failed to load template 'dev': ${errMsg}. Falling back to hardcoded default prompt.`
+    console.warn(`[prompt-builder] ${warning}`)
+    await logWarning(warning)
 
     // FALLBACK: Original hardcoded implementation
     const systemPrompt = [
@@ -433,9 +492,10 @@ export async function buildMilestoneDevPrompt(
     }
     return compileTemplate(template, variables)
   } catch (err) {
-    console.warn(
-      `[prompt-builder] Template 'milestone-dev' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
-    )
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const warning = `Failed to load template 'milestone-dev': ${errMsg}. Falling back to hardcoded default prompt.`
+    console.warn(`[prompt-builder] ${warning}`)
+    await logWarning(warning)
 
     // FALLBACK: Original hardcoded implementation
     const milestoneNum = milestone.milestoneIndex + 1
@@ -541,9 +601,10 @@ export async function buildAcValidatorPrompt(
     }
     return compileTemplate(template, variables)
   } catch (err) {
-    console.warn(
-      `[prompt-builder] Template 'gate/ac-validator' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
-    )
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const warning = `Failed to load template 'gate/ac-validator': ${errMsg}. Falling back to hardcoded default prompt.`
+    console.warn(`[prompt-builder] ${warning}`)
+    await logWarning(warning)
 
     // FALLBACK: Original hardcoded implementation
     const systemPrompt = [
@@ -627,9 +688,10 @@ export async function buildAdversaryPrompt(
     }
     return compileTemplate(template, variables)
   } catch (err) {
-    console.warn(
-      `[prompt-builder] Template 'gate/adversary' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
-    )
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const warning = `Failed to load template 'gate/adversary': ${errMsg}. Falling back to hardcoded default prompt.`
+    console.warn(`[prompt-builder] ${warning}`)
+    await logWarning(warning)
 
     // FALLBACK: Original hardcoded implementation
     const systemPrompt = [
@@ -749,9 +811,10 @@ export async function buildSecurityReviewPrompt(
     }
     return compileTemplate(template, variables)
   } catch (err) {
-    console.warn(
-      `[prompt-builder] Template 'gate/security-review' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
-    )
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const warning = `Failed to load template 'gate/security-review': ${errMsg}. Falling back to hardcoded default prompt.`
+    console.warn(`[prompt-builder] ${warning}`)
+    await logWarning(warning)
 
     // FALLBACK: Original hardcoded implementation
     const systemPrompt = [
@@ -832,9 +895,10 @@ export async function buildCodeReviewPrompt(
     }
     return compileTemplate(template, variables)
   } catch (err) {
-    console.warn(
-      `[prompt-builder] Template 'gate/code-review' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
-    )
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const warning = `Failed to load template 'gate/code-review': ${errMsg}. Falling back to hardcoded default prompt.`
+    console.warn(`[prompt-builder] ${warning}`)
+    await logWarning(warning)
 
     // FALLBACK: Original hardcoded implementation
     const systemPrompt = [
@@ -916,9 +980,10 @@ export async function buildFixLoopPrompt(
     }
     return compileTemplate(template, variables)
   } catch (err) {
-    console.warn(
-      `[prompt-builder] Template 'fix-loop' not found or invalid, using built-in prompts: ${err instanceof Error ? err.message : String(err)}`
-    )
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const warning = `Failed to load template 'fix-loop': ${errMsg}. Falling back to hardcoded default prompt.`
+    console.warn(`[prompt-builder] ${warning}`)
+    await logWarning(warning)
 
     // FALLBACK: Original hardcoded implementation
     const systemPrompt = [

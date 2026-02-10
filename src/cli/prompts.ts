@@ -6,7 +6,7 @@
 
 import chalk from 'chalk'
 import { spawn } from 'node:child_process'
-import { copyFile, mkdir } from 'node:fs/promises'
+import { copyFile, mkdir, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { createInterface } from 'node:readline'
@@ -259,7 +259,6 @@ export async function editPrompt(name: string): Promise<void> {
         await editPrompt(name)
       } else if (answer === '2') {
         // Discard changes
-        const { unlink } = await import('node:fs/promises')
         await unlink(customPath)
         console.log(chalk.yellow('Custom override discarded.'))
       } else {

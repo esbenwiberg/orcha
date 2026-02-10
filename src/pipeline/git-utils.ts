@@ -192,6 +192,12 @@ function assertSafeExtension(ext: string): void {
   if (/[*?[\]{}]/.test(ext)) {
     throw new Error(`Invalid file extension (contains glob metacharacters): ${ext}`)
   }
+  // Explicitly reject shell command separators (defense-in-depth, regex also rejects these)
+  if (/[;|&`$]/.test(ext)) {
+    throw new Error(`Invalid file extension (contains shell metacharacters): ${ext}`)
+  }
+  // SAFE_EXTENSION_RE only allows alphanumeric characters after the dot
+  // This is the primary security check - all characters must be alphanumeric
   if (!SAFE_EXTENSION_RE.test(ext)) {
     throw new Error(`Invalid file extension: ${ext}`)
   }
