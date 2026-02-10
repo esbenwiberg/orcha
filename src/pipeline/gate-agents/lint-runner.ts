@@ -56,9 +56,10 @@ function isValidFilename(filename: string): boolean {
   if (filename.startsWith('/')) return false
   // Reject consecutive slashes (could bypass security checks)
   if (filename.includes('//')) return false
-  // Reject flag-like filenames (e.g., '--verify-no-changes.ts')
+  // Reject flag-like filenames (e.g., '-v.ts' or '--verify-no-changes.ts')
   // These could be interpreted as CLI flags even with execFileSync
-  if (filename.startsWith('--')) return false
+  // Reject both single-dash (-v) and double-dash (--flag) patterns
+  if (filename.startsWith('-')) return false
   // Only allow whitelisted characters
   return SAFE_FILENAME_RE.test(filename)
 }
@@ -67,18 +68,19 @@ function isValidFilename(filename: string): boolean {
  * Prefix a filename with './' if it starts with '-' to prevent flag injection.
  * This ensures filenames like '-file.ts' are passed as './-file.ts'.
  *
- * Note: Filenames that look like full flags (e.g., '--verify-no-changes') are
- * already rejected by isValidFilename() because they contain consecutive hyphens
- * which fail the SAFE_FILENAME_RE. This function handles edge cases like '-file.ts'.
+ * Note: This is now a defense-in-depth function. Filenames starting with '-'
+ * are already rejected by isValidFilename(), so this function should rarely
+ * be triggered in practice. It remains as a safety net for any code paths
+ * that might bypass the validation.
  */
 function prefixIfFlag(filename: string): string {
-  // Double-check: reject anything that looks like a long flag (--something)
-  // This is a defense-in-depth check; isValidFilename should already reject these
-  if (filename.startsWith('--')) {
-    console.warn(`Rejecting flag-like filename: ${filename}`)
+  // Defense-in-depth: reject anything that looks like a flag
+  // isValidFilename() should already reject these, but double-check here
+  if (filename.startsWith('-')) {
+    console.warn(`[lint-runner] Unexpected flag-like filename passed to prefixIfFlag: ${filename}`)
     return '' // Return empty string which will be filtered out
   }
-  return filename.startsWith('-') ? `./${filename}` : filename
+  return filename
 }
 
 /**
@@ -316,13 +318,12 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
  */
 function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
   // Build args array for execFileSync (avoids shell injection)
-  // dotnet format --verify-no-changes --include ./file1.cs --include ./file2.cs
+  // Note: Files starting with '-' are already rejected by isValidFilename() in the caller.
+  // We use '--' separator after options to ensure any edge cases are handled safely.
+  // Format: dotnet format --verify-no-changes --include file1.cs --include file2.cs
   const args: string[] = ['format', '--verify-no-changes']
   for (const file of changedFiles) {
-    // Prefix with './' to prevent flag injection from filenames starting with '-'
-    // e.g., a malicious filename like '--verify-no-changes' becomes './' + '--verify-no-changes'
-    const safeFile = file.startsWith('-') ? `./${file}` : file
-    args.push('--include', safeFile)
+    args.push('--include', file)
   }
 
   const lintCommand = `dotnet ${args.join(' ')}` // For display only

@@ -42,31 +42,11 @@ async function logWarning(message: string): Promise<void> {
 // Hardcoded Fallback Prompts
 // ============================================================================
 
-/**
- * Get hardcoded fallback prompt for a template that failed to load.
- *
- * These are the original hardcoded prompts from before template migration.
- * Used only when template loading fails (missing file, invalid YAML, etc.).
- *
- * @param templateName - Name of the template (e.g., 'architect', 'dev', 'gate/ac-validator')
- * @param variables - Variables to interpolate (same as what would be passed to compileTemplate)
- * @returns Compiled prompt parts
- * @throws Error if no hardcoded fallback exists for the template
- */
-export function getHardcodedFallback(
-  templateName: string,
-  variables: Record<string, unknown>
-): PromptParts {
-  // All hardcoded fallbacks are already in the try-catch blocks below
-  // This function serves as documentation and a centralized reference point
-  // The actual fallback logic is implemented inline in each build*Prompt function
-  // to keep the variable handling type-safe and avoid complex generic handling
-
-  throw new Error(
-    `No hardcoded fallback available for template '${templateName}'. ` +
-    `This should never happen as all build*Prompt functions have inline fallbacks.`
-  )
-}
+// NOTE: Hardcoded fallback prompts are implemented inline in each build*Prompt
+// function's catch block. This keeps variable handling type-safe and avoids
+// complex generic handling. When template loading fails (missing file, invalid
+// YAML, etc.), the function falls back to the original hardcoded prompts that
+// existed before the template migration.
 
 // ============================================================================
 // Types

@@ -236,12 +236,31 @@ function isValidPathspec(pathspec: string): boolean {
 }
 
 /**
+ * Validate a git range argument (e.g., 'abc123..HEAD', 'origin/main...HEAD').
+ * Defense-in-depth: callers should already use assertSafeBranch/assertSafeCommitSha,
+ * but we double-check here.
+ *
+ * Security: Allows only alphanumeric, '.', '/', '-', and '_' characters.
+ * Rejects shell metacharacters, newlines, and null bytes.
+ */
+const SAFE_RANGE_RE = /^[a-zA-Z0-9._/-]+$/
+
+function isValidRangeArg(arg: string): boolean {
+  if (!arg || arg.length === 0) return false
+  if (arg.length > 200) return false // Prevent DoS from very long args
+  if (arg === '--') return false // Standalone -- would confuse arg parsing
+  if (!SAFE_RANGE_RE.test(arg)) return false
+  return true
+}
+
+/**
  * Build git diff args array for execFileSync.
  * Returns args array: ['diff', '--name-only', ...range, '--', ...pathspecs]
  *
  * Security: Uses execFileSync with args array to prevent shell injection.
  * Filters out empty and invalid pathspecs to prevent issues.
  * Validates that no pathspec looks like a git option (starts with '-').
+ * Validates range arguments against safe patterns.
  */
 function buildDiffArgs(range: string[], pathspecs: string[]): string[] {
   // Filter out empty and invalid pathspecs
@@ -259,11 +278,12 @@ function buildDiffArgs(range: string[], pathspecs: string[]): string[] {
     return true
   })
 
-  // Validate range arguments don't contain standalone '--' which could
-  // be misinterpreted when combined with pathspecs
+  // Validate range arguments - filter out any that don't match safe patterns
+  // Callers should already use assertSafeBranch/assertSafeCommitSha, but
+  // we double-check here as defense-in-depth
   const safeRange = range.filter((r) => {
-    if (r === '--') {
-      console.warn(`[git-utils] Rejecting standalone '--' in range arguments`)
+    if (!isValidRangeArg(r)) {
+      console.warn(`[git-utils] Rejecting invalid range argument: ${JSON.stringify(r).slice(0, 50)}`)
       return false
     }
     return true

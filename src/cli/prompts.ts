@@ -367,8 +367,12 @@ export async function diffPrompt(name: string): Promise<void> {
           console.log()
           console.log(output)
           resolve()
+        } else if (code === 2) {
+          // Error from diff command (e.g., file not readable, permission denied)
+          reject(new Error(`diff command encountered an error (exit code 2)`))
         } else {
-          reject(new Error(`diff command failed with exit code ${code}`))
+          // Other unexpected exit codes
+          reject(new Error(`diff command failed with unexpected exit code ${code}`))
         }
       })
 

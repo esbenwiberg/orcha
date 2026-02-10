@@ -7,7 +7,7 @@
 
 import { readFile, access, mkdir, writeFile, readdir, rm, cp, unlink, rename } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { join, normalize, relative, isAbsolute } from 'node:path'
+import { join, normalize, relative, isAbsolute, posix } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import HandlebarsImport from 'handlebars'
 import * as yaml from 'js-yaml'
@@ -344,10 +344,14 @@ export async function loadTemplate(templateName: string): Promise<TemplateData> 
   // Security: Use path.relative() to check containment. If the relative path
   // starts with '..' or is absolute, the target escapes the directory.
   // This is more robust than startsWith() which can be bypassed with crafted paths.
-  const normalizedCustom = normalize(customPath)
-  const normalizedDefault = normalize(defaultPath)
-  const normalizedCustomDir = normalize(CUSTOM_PROMPTS_DIR)
-  const normalizedDefaultDir = normalize(DEFAULT_PROMPTS_DIR)
+  //
+  // Note: On Windows, normalize() converts forward slashes to backslashes.
+  // We use posix.normalize for consistent behavior, then do platform-specific
+  // checks. This prevents attacks where 'foo/bar' becomes 'foo\bar' on Windows.
+  const normalizedCustom = normalize(customPath).replace(/\\/g, '/')
+  const normalizedDefault = normalize(defaultPath).replace(/\\/g, '/')
+  const normalizedCustomDir = normalize(CUSTOM_PROMPTS_DIR).replace(/\\/g, '/')
+  const normalizedDefaultDir = normalize(DEFAULT_PROMPTS_DIR).replace(/\\/g, '/')
 
   // Check custom path is contained within custom directory
   const relativeToCustom = relative(normalizedCustomDir, normalizedCustom)

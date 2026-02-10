@@ -320,14 +320,14 @@ function getTestPatterns(worktreePath: string, techType?: TechStack['type']): st
         const rawContent = (readFileSync(fullPath, 'utf-8') as string)
           .split('\n').slice(0, 30).join('\n')
         // Sanitize content to prevent prompt injection from malicious test files.
-        // Truncate to reasonable size and strip any XML-like tags that could
-        // be interpreted as system instructions.
+        // IMPORTANT: Sanitize FIRST to remove tags, THEN truncate to ensure
+        // malicious content doesn't exceed safe bounds after tag removal.
         const sanitizedContent = rawContent
-          .slice(0, 2000)
           .replace(/<\/?system[^>]*>/gi, '[SANITIZED]')
           .replace(/<\/?assistant[^>]*>/gi, '[SANITIZED]')
           .replace(/<\/?user[^>]*>/gi, '[SANITIZED]')
           .replace(/<\/?human[^>]*>/gi, '[SANITIZED]')
+          .slice(0, 2000)
         patternSamples.push(`--- ${file} ---\n${sanitizedContent}`)
       } catch { /* skip unreadable files */ }
     }
@@ -380,20 +380,23 @@ function getTestRunner(
   testPath: string,
   techType?: TechStack['type'],
 ): { cmd: string; args: string[] } | null {
-  // Security: Validate test path before any processing
-  if (!isSafeTestPath(testPath)) {
+  // Security: Prefix testPath with './' FIRST if it starts with '-' to prevent flag injection.
+  // This must happen BEFORE isSafeTestPath check so that paths like '--help' become
+  // './' + '--help' which is then validated as a path, not interpreted as a flag.
+  // Even though execFileSync with args array prevents shell injection, a path like
+  // '--some-flag' could be interpreted as a CLI flag by the test runner.
+  const prefixedPath = testPath.startsWith('-') ? `./${testPath}` : testPath
+
+  // Security: Validate test path after prefixing
+  if (!isSafeTestPath(prefixedPath)) {
     console.warn(`[adversary] Rejecting unsafe test path: ${JSON.stringify(testPath).slice(0, 100)}`)
     return null
   }
 
-  // Security: Prefix testPath with './' if it starts with '-' to prevent flag injection.
-  // Even though execFileSync with args array prevents shell injection, a path like
-  // '--some-flag' could be interpreted as a CLI flag by the test runner.
-  const safePath = testPath.startsWith('-') ? `./${testPath}` : testPath
-
+  // Use '--' separator for pytest to ensure paths are never interpreted as flags
   switch (techType) {
     case 'python':
-      return { cmd: 'pytest', args: [safePath, '-x', '--tb=short'] }
+      return { cmd: 'pytest', args: ['--', prefixedPath, '-x', '--tb=short'] }
     case 'dotnet':
       // .NET adversary tests cannot be executed standalone — they need a project
       // context to compile. This is a known limitation; the tests are still
@@ -401,7 +404,7 @@ function getTestRunner(
       return null
     case 'node':
     default:
-      return { cmd: 'npx', args: ['tsx', safePath] }
+      return { cmd: 'npx', args: ['tsx', prefixedPath] }
   }
 }
 

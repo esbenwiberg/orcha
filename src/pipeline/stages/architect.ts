@@ -207,6 +207,8 @@ export async function runArchitectStage(
     // Record the stage result
     const completedAt = new Date().toISOString()
     const milestoneCount = getBlueprintMilestones(blueprint).length
+    // Handle singular/plural correctly: "1 milestone" vs "0 milestones" / "2 milestones"
+    // Note: Zero milestones should not occur (validation requires >= 1), but handle gracefully
     const milestoneSuffix = milestoneCount === 1 ? 'milestone' : 'milestones'
     const stageResult: StageResult = {
       stage: 'architect',
