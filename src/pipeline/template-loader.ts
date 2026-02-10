@@ -88,11 +88,16 @@ async function exists(path: string): Promise<boolean> {
 
 /**
  * Parse YAML file content into TemplateData.
+ *
+ * Security: Uses JSON_SCHEMA to restrict YAML to JSON-compatible types only,
+ * preventing arbitrary code execution via malicious YAML tags (e.g., !!python/object).
  */
 async function parseYamlTemplate(path: string): Promise<TemplateData> {
   try {
     const content = await readFile(path, 'utf-8')
-    const data = yaml.load(content) as TemplateData
+    // Use JSON_SCHEMA to restrict to safe JSON-compatible types only.
+    // This prevents arbitrary code execution from malicious YAML tags.
+    const data = yaml.load(content, { schema: yaml.JSON_SCHEMA }) as TemplateData
 
     // Basic validation that required fields exist
     if (!data.name || !data.systemPrompt || !data.userPrompt) {

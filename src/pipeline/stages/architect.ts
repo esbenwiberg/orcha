@@ -76,6 +76,7 @@ export const BLUEPRINT_SCHEMA = {
     },
     milestones: {
       type: 'array' as const,
+      minItems: 1,
       items: {
         type: 'object' as const,
         properties: {
@@ -89,10 +90,11 @@ export const BLUEPRINT_SCHEMA = {
         },
         required: ['description', 'details'],
       },
-      description: 'Ordered implementation milestones. Each milestone should be independently implementable with a focused scope (single responsibility). For large tasks, create discrete milestones that run with fresh context.',
+      description: 'Ordered implementation milestones. Each milestone should be independently implementable with a focused scope (single responsibility). For large tasks, create discrete milestones that run with fresh context. MUST contain at least one milestone.',
     },
     steps: {
       type: 'array' as const,
+      minItems: 1,
       items: {
         type: 'object' as const,
         properties: {
@@ -101,12 +103,12 @@ export const BLUEPRINT_SCHEMA = {
         },
         required: ['description', 'details'],
       },
-      description: '(Deprecated - use milestones instead) Backward compatibility alias for milestones',
+      description: '(Deprecated - use milestones instead) Backward compatibility alias for milestones. MUST contain at least one step.',
     },
   },
   // Schema requires the core fields. For milestones vs steps, we use anyOf to express
-  // "at least one must be present". The isValidBlueprint type guard additionally
-  // enforces that the array is non-empty to prevent silent skips in the dev stage.
+  // "at least one must be present with at least one item". The minItems: 1 on both arrays
+  // ensures the schema enforces non-empty arrays, matching isValidBlueprint's validation.
   required: ['headline', 'shortDescription', 'approach', 'filesToTouch', 'risks', 'testStrategy'],
   anyOf: [
     { required: ['milestones'] },

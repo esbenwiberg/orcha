@@ -23,6 +23,39 @@ import type { TechStack } from '../tech-scanner.js'
 import { getChangedLintableFiles, getChangedFilesByExtensions } from '../git-utils.js'
 
 // ============================================================================
+// Filename Validation
+// ============================================================================
+
+/**
+ * Validate that a filename is safe for use with lint commands.
+ * Rejects filenames with control characters or null bytes that could
+ * cause issues even with execFileSync.
+ *
+ * Security: While execFileSync prevents shell injection, we still validate
+ * filenames to avoid edge cases with control characters.
+ */
+const SAFE_FILENAME_RE = /^[^\x00-\x1f\x7f]+$/
+
+function isValidFilename(filename: string): boolean {
+  // Reject filenames with control characters or null bytes
+  return SAFE_FILENAME_RE.test(filename) && !filename.includes('\x00')
+}
+
+/**
+ * Filter file list to only include valid filenames.
+ * Logs a warning for any rejected filenames.
+ */
+function filterValidFilenames(files: string[]): string[] {
+  return files.filter((f) => {
+    if (!isValidFilename(f)) {
+      console.warn(`Skipping invalid filename in lint: ${JSON.stringify(f)}`)
+      return false
+    }
+    return true
+  })
+}
+
+// ============================================================================
 // Lint-specific result (extends StackRunnerResult with lint fields)
 // ============================================================================
 
@@ -89,12 +122,15 @@ function runMultiStackLint(
     }
 
     // For all stacks, scope to changed files matching stack extensions
-    const changedFiles = getChangedFilesByExtensions(
+    const rawChangedFiles = getChangedFilesByExtensions(
       worktreePath,
       sourceBranch,
       stack.lintableExtensions,
       baseCommit,
     )
+
+    // Filter out any filenames with control characters for security
+    const changedFiles = filterValidFilenames(rawChangedFiles)
 
     if (changedFiles.length === 0) {
       stackResults.push({
@@ -354,7 +390,10 @@ async function runLegacyLint(
   const timestamp = new Date().toISOString()
 
   // Get changed files (only lintable extensions)
-  const changedFiles = getChangedLintableFiles(worktreePath, sourceBranch, baseCommit)
+  const rawChangedFiles = getChangedLintableFiles(worktreePath, sourceBranch, baseCommit)
+
+  // Filter out any filenames with control characters for security
+  const changedFiles = filterValidFilenames(rawChangedFiles)
 
   if (changedFiles.length === 0) {
     return {

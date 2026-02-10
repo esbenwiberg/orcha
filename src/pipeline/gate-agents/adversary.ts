@@ -204,11 +204,25 @@ export async function runAdversary(
 // Test Pattern Discovery
 // ============================================================================
 
+/** Valid tech types for test pattern lookup. */
+const VALID_TECH_TYPES: ReadonlySet<TechStack['type']> = new Set(['node', 'dotnet', 'python'])
+
 /** Find-command fragments for test file patterns by tech type. */
-const TEST_FILE_PATTERNS: Record<TechStack['type'], string> = {
+const TEST_FILE_PATTERNS: Readonly<Record<TechStack['type'], string>> = {
   node: '\\( -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" -o -name "*.spec.js" \\)',
   dotnet: '\\( -name "*Tests.cs" -o -name "*Test.cs" \\)',
   python: '\\( -name "test_*.py" -o -name "*_test.py" \\)',
+}
+
+/**
+ * Validate techType against whitelist to prevent command injection.
+ * Returns a valid tech type or defaults to 'node'.
+ */
+function validateTechType(techType?: TechStack['type']): TechStack['type'] {
+  if (techType && VALID_TECH_TYPES.has(techType)) {
+    return techType
+  }
+  return 'node'
 }
 
 /**
@@ -216,12 +230,16 @@ const TEST_FILE_PATTERNS: Record<TechStack['type'], string> = {
  *
  * @param techType - If provided, searches for tech-appropriate test file patterns.
  *                   Falls back to Node patterns if not specified (backwards compatible).
+ *
+ * Security: techType is validated against a whitelist before use in shell command.
  */
 function getTestPatterns(worktreePath: string, techType?: TechStack['type']): string {
-  const pattern = TEST_FILE_PATTERNS[techType ?? 'node']
+  // Validate techType against whitelist to prevent command injection
+  const validatedType = validateTechType(techType)
+  const pattern = TEST_FILE_PATTERNS[validatedType]
 
   try {
-    // Find test files — static command, no interpolation
+    // Find test files — pattern comes from validated whitelist
     const testFiles = execSync(
       `find . -maxdepth 4 -type f ${pattern} | head -5`,
       { cwd: worktreePath, encoding: 'utf-8', timeout: 5000 },

@@ -5,7 +5,7 @@
  * Used by gate agents and the fix-loop stage.
  */
 
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 
 // ============================================================================
 // Branch Name Validation
@@ -117,27 +117,22 @@ function assertSafeExtension(ext: string): void {
 }
 
 /**
- * Build git pathspec glob patterns from file extensions.
- * e.g. ['.cs', '.fs'] → "'*.cs' '*.fs'"
- *
- * Security: Validates all extensions against a strict pattern before
- * concatenating into shell commands to prevent command injection.
- */
-function buildExtensionGlobs(extensions: string[]): string {
-  // Validate all extensions before building the command
-  for (const ext of extensions) {
-    assertSafeExtension(ext)
-  }
-  return extensions.map((ext) => `'*${ext}'`).join(' ')
-}
-
-/**
  * Build a regex that matches any of the given extensions at the end of a filename.
  * e.g. ['.cs', '.fs'] → /\.(cs|fs)$/
  */
 function buildExtensionRegex(extensions: string[]): RegExp {
   const alts = extensions.map((ext) => ext.replace(/^\./, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
   return new RegExp(`\\.(${alts.join('|')})$`)
+}
+
+/**
+ * Build git diff args array for execFileSync.
+ * Returns args array: ['diff', '--name-only', ...range, '--', ...pathspecs]
+ *
+ * Security: Uses execFileSync with args array to prevent shell injection.
+ */
+function buildDiffArgs(range: string[], pathspecs: string[]): string[] {
+  return ['diff', '--name-only', ...range, '--', ...pathspecs]
 }
 
 /**
@@ -149,6 +144,8 @@ function buildExtensionRegex(extensions: string[]): RegExp {
  * 2. origin/sourceBranch...HEAD (three-dot merge-base)
  * 3. sourceBranch...HEAD (local fallback)
  * 4. HEAD (last resort — filters with regex since pathspec may not apply)
+ *
+ * Security: Uses execFileSync with args array to prevent command injection.
  */
 export function getChangedFilesByExtensions(
   worktreePath: string,
@@ -159,16 +156,19 @@ export function getChangedFilesByExtensions(
   if (extensions.length === 0) return []
 
   const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
-  const globs = buildExtensionGlobs(extensions)
+
+  // Validate extensions and build pathspecs (e.g., ['*.ts', '*.js'])
+  const pathspecs = extensions.map((ext) => {
+    assertSafeExtension(ext)
+    return `*${ext}`
+  })
 
   // Best strategy: diff from exact base commit
   if (baseCommit) {
     assertSafeCommitSha(baseCommit)
     try {
-      const output = execSync(
-        `git diff --name-only ${baseCommit}..HEAD -- ${globs}`,
-        execOpts,
-      ).trim()
+      const args = buildDiffArgs([`${baseCommit}..HEAD`], pathspecs)
+      const output = execFileSync('git', args, execOpts).trim()
       if (output) return output.split('\n').filter(Boolean)
     } catch { /* baseCommit may be unavailable */ }
   }
@@ -176,23 +176,20 @@ export function getChangedFilesByExtensions(
   assertSafeBranch(sourceBranch)
 
   try {
-    const output = execSync(
-      `git diff --name-only origin/${sourceBranch}... -- ${globs}`,
-      execOpts,
-    ).trim()
+    const args = buildDiffArgs([`origin/${sourceBranch}...HEAD`], pathspecs)
+    const output = execFileSync('git', args, execOpts).trim()
     if (output) return output.split('\n').filter(Boolean)
   } catch { /* origin/sourceBranch may not exist */ }
 
   try {
-    const output = execSync(
-      `git diff --name-only ${sourceBranch}... -- ${globs}`,
-      execOpts,
-    ).trim()
+    const args = buildDiffArgs([`${sourceBranch}...HEAD`], pathspecs)
+    const output = execFileSync('git', args, execOpts).trim()
     if (output) return output.split('\n').filter(Boolean)
   } catch { /* sourceBranch may not exist locally */ }
 
   try {
-    const output = execSync('git diff --name-only HEAD', execOpts).trim()
+    const args = buildDiffArgs(['HEAD'], [])
+    const output = execFileSync('git', args, execOpts).trim()
     if (output) {
       const extRegex = buildExtensionRegex(extensions)
       return output.split('\n').filter((f) => extRegex.test(f))
