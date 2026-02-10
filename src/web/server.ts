@@ -2132,7 +2132,7 @@ export class WebDashboardServer {
         if (blueprintText && typeof blueprintText === 'string' && blueprintText.trim().length > 0) {
           let blueprint
           try {
-            blueprint = parseMarkdownBlueprint(blueprintText)
+            blueprint = await parseMarkdownBlueprint(blueprintText)
           } catch (err) {
             res.status(400).json({ error: 'Failed to parse blueprint: ' + (err as Error).message })
             return

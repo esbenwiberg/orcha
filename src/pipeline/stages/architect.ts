@@ -127,34 +127,72 @@ export { isValidBlueprint }
 // ============================================================================
 
 /**
- * Parse a markdown blueprint (like those from /blueprint skill) into BlueprintOutput.
+ * Parse a markdown blueprint using Claude AI for maximum flexibility.
  *
- * Expected format:
- * ```markdown
- * # Blueprint: {title}
- *
- * **Milestones: N**
- *
- * ## Goal
- * {description}
- *
- * ## Acceptance Criteria
- * - [ ] Item 1
- * - [ ] Item 2
- *
- * ## Milestones
- *
- * ### M1: {milestone title}
- *
- * **Intent:** {short description}
- *
- * **Key files:** {files}
- *
- * **Details:**
- * {implementation details}
- * ```
+ * Uses Claude to intelligently extract blueprint structure from any markdown format.
+ * Much more robust than regex-based parsing.
  */
-export function parseMarkdownBlueprint(markdown: string): BlueprintOutput {
+export async function parseMarkdownBlueprint(markdown: string): Promise<BlueprintOutput> {
+  const { runStage } = await import('../stage-runner.js')
+
+  const prompt = `Parse this blueprint markdown and extract the structured information.
+
+${markdown}
+
+Extract:
+- headline: The main title/goal
+- shortDescription: A brief summary (mention milestone count)
+- approach: The high-level implementation approach
+- filesToTouch: Array of file paths mentioned
+- risks: Array of identified risks
+- testStrategy: How to test/verify
+- milestones: Array of implementation steps/phases
+
+Each milestone should have:
+- description: What this milestone accomplishes
+- details: Implementation guidance
+- filesToTouch: Files this milestone touches (optional)
+
+Return as JSON matching the schema.`
+
+  try {
+    const result = await runStage({
+      pipelineId: 'blueprint-parser',
+      stageKey: 'architect',
+      config: {
+        models: { default: 'claude-sonnet-4.5' },
+        budgets: { default: 5.0 }
+      },
+      cwd: process.cwd(),
+      prompt,
+      systemPrompt: 'You are a blueprint parser. Extract structured information from markdown blueprints.',
+      allowedTools: '',
+      outputFormat: 'json',
+      modelOverride: 'claude-sonnet-4.5'
+    })
+
+    if (!result.success) {
+      throw new Error(`Blueprint parsing failed: ${result.stderr}`)
+    }
+
+    const parsed = parseStructuredOutput(result.stdout, isValidBlueprint)
+    if (!parsed) {
+      throw new Error('Parsed blueprint does not match expected schema')
+    }
+
+    return parsed
+  } catch (err) {
+    // Fallback to regex-based parsing
+    console.error('[Blueprint Parser] AI parsing failed, falling back to regex:', err)
+    return parseMarkdownBlueprintFallback(markdown)
+  }
+}
+
+/**
+ * Fallback regex-based parser (original implementation).
+ * Used if AI parsing fails.
+ */
+function parseMarkdownBlueprintFallback(markdown: string): BlueprintOutput {
   const lines = markdown.split('\n')
 
   // Extract title
@@ -213,18 +251,17 @@ export function parseMarkdownBlueprint(markdown: string): BlueprintOutput {
 
   // Extract milestones
   const milestones: BlueprintMilestone[] = []
-  const milestoneRegex = /###\s+M\d+:\s+(.+?)\s*\n+([\s\S]*?)(?=\n###\s+M\d+:|\n##\s+(?!#)|$)/gi
 
-  let milestoneMatch
-  while ((milestoneMatch = milestoneRegex.exec(markdown)) !== null) {
-    const title = milestoneMatch[1].trim()
-    const body = milestoneMatch[2].trim()
+  // Try format 1: ### M1:, ### M2:, etc. (common from /blueprint skill)
+  const m1Regex = /###\s+M\d+:\s+(.+?)\s*\n+([\s\S]*?)(?=\n###\s+M\d+:|\n##\s+(?!#)|$)/gi
+  let m1Match
+  while ((m1Match = m1Regex.exec(markdown)) !== null) {
+    const title = m1Match[1].trim()
+    const body = m1Match[2].trim()
 
-    // Extract intent
     const intentMatch = body.match(/\*\*Intent:\*\*\s+(.+?)(?:\n|$)/i)
     const intent = intentMatch ? intentMatch[1].trim() : ''
 
-    // Extract key files for this milestone
     const keyFilesMatch = body.match(/\*\*Key files:\*\*\s+(.+?)(?:\n|$)/i)
     const milestoneFiles: string[] = []
     if (keyFilesMatch) {
@@ -232,7 +269,6 @@ export function parseMarkdownBlueprint(markdown: string): BlueprintOutput {
       milestoneFiles.push(...files)
     }
 
-    // Extract details
     const detailsMatch = body.match(/\*\*Details:\*\*\s*\n+([\s\S]*?)(?=\n\*\*Verification:|\n###|$)/i)
     const details = detailsMatch ? detailsMatch[1].trim() : body
 
@@ -243,15 +279,60 @@ export function parseMarkdownBlueprint(markdown: string): BlueprintOutput {
     })
   }
 
-  // If no milestones found with M1/M2 format, try generic ### headers
+  // Try format 2: ## Milestone 1:, ## Milestone 2:, etc. (long-form)
   if (milestones.length === 0) {
-    const genericMilestoneRegex = /###\s+(.+?)\s*\n+([\s\S]*?)(?=\n###|\n##\s+(?!#)|$)/gi
+    const m2Regex = /##\s+Milestone\s+\d+:\s+(.+?)\s*\n+([\s\S]*?)(?=\n##\s+Milestone\s+\d+:|\n##\s+(?!Milestone)|$)/gi
+    let m2Match
+    while ((m2Match = m2Regex.exec(markdown)) !== null) {
+      const title = m2Match[1].trim()
+      const body = m2Match[2].trim()
+
+      const intentMatch = body.match(/\*\*Intent:\*\*\s+(.+?)(?:\n|$)/i)
+      const intent = intentMatch ? intentMatch[1].trim() : ''
+
+      const keyFilesMatch = body.match(/\*\*Key files:\*\*\s+(.+?)(?:\n|$)/i)
+      const milestoneFiles: string[] = []
+      if (keyFilesMatch) {
+        const files = keyFilesMatch[1].split(',').map(f => f.trim().replace(/`/g, ''))
+        milestoneFiles.push(...files)
+      }
+
+      const detailsMatch = body.match(/\*\*Details:\*\*\s*\n+([\s\S]*?)(?=\n\*\*|$)/i)
+      const details = detailsMatch ? detailsMatch[1].trim() : body
+
+      milestones.push({
+        description: intent || title,
+        details: details || `Implement: ${title}`,
+        ...(milestoneFiles.length > 0 ? { filesToTouch: milestoneFiles } : {}),
+      })
+    }
+  }
+
+  // Try format 3: ## M1:, ## M2:, etc. (short-form)
+  if (milestones.length === 0) {
+    const m3Regex = /##\s+M\d+:\s+(.+?)\s*\n+([\s\S]*?)(?=\n##\s+M\d+:|\n##\s+(?!M\d)|$)/gi
+    let m3Match
+    while ((m3Match = m3Regex.exec(markdown)) !== null) {
+      const title = m3Match[1].trim()
+      const body = m3Match[2].trim()
+
+      milestones.push({
+        description: title,
+        details: body,
+      })
+    }
+  }
+
+  // Fallback: try generic ### headers under ## Milestones section
+  if (milestones.length === 0) {
+    const genericRegex = /###\s+(.+?)\s*\n+([\s\S]*?)(?=\n###|\n##\s+(?!#)|$)/gi
     let genericMatch
-    while ((genericMatch = genericMilestoneRegex.exec(markdown)) !== null) {
+    while ((genericMatch = genericRegex.exec(markdown)) !== null) {
       const title = genericMatch[1].trim()
       const body = genericMatch[2].trim()
 
-      if (body.length > 0) {
+      // Skip if this looks like a section header (Goal, Architecture, etc)
+      if (body.length > 0 && !title.match(/^(Goal|Architecture|Risks|Test|Non-Goals|Acceptance)/i)) {
         milestones.push({
           description: title,
           details: body,
@@ -295,7 +376,7 @@ export async function loadBlueprintFromFile(blueprintPath: string): Promise<Blue
 
     if (ext === '.md' || ext === '.markdown') {
       // Parse markdown blueprint
-      parsed = parseMarkdownBlueprint(content)
+      parsed = await parseMarkdownBlueprint(content)
     } else if (ext === '.json') {
       // Parse JSON blueprint
       parsed = JSON.parse(content)
@@ -304,7 +385,7 @@ export async function loadBlueprintFromFile(blueprintPath: string): Promise<Blue
       try {
         parsed = JSON.parse(content)
       } catch {
-        parsed = parseMarkdownBlueprint(content)
+        parsed = await parseMarkdownBlueprint(content)
       }
     }
 
