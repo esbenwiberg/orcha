@@ -1995,6 +1995,9 @@ pipelineCmd
       process.exit(1)
     }
 
+    // Ensure Claude Code hooks are installed for status updates
+    await ensureHooksInstalled()
+
     console.log('Creating pipeline run...')
     console.log(`  Description: ${resolvedDescription}`)
     console.log(`  Source branch: ${resolvedSourceBranch}`)
@@ -2172,6 +2175,9 @@ pipelineCmd
   .option('--continue', 'Continue executing the pipeline after approval')
   .action(async (id: string, options: { continue?: boolean }) => {
     try {
+      // Ensure hooks are installed before potentially running stages
+      await ensureHooksInstalled()
+
       let run = await loadPipelineOrThrow(id)
 
       console.log(`Approving checkpoint for pipeline ${run.id} (state: ${run.state})...`)
@@ -2265,6 +2271,9 @@ pipelineCmd
   .option('--continue', 'Continue executing the resumed stage')
   .action(async (id: string, options: { continue?: boolean }) => {
     try {
+      // Ensure hooks are installed before potentially running stages
+      await ensureHooksInstalled()
+
       let run = await loadPipelineOrThrow(id)
 
       console.log(`Resuming pipeline ${run.id} (paused at: ${run.pausedStage})...`)
@@ -2289,6 +2298,9 @@ pipelineCmd
   .option('--continue', 'Continue executing the recovered stage')
   .action(async (id: string, options: { continue?: boolean }) => {
     try {
+      // Ensure hooks are installed before potentially running stages
+      await ensureHooksInstalled()
+
       let run = await loadPipelineOrThrow(id)
 
       if (run.state !== 'error') {

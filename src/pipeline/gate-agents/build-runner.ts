@@ -31,7 +31,7 @@ import type { TechStack } from '../tech-scanner.js'
  */
 const ALLOWED_BUILD_COMMANDS: Readonly<Record<string, Readonly<{ cmd: string; args: readonly string[] }>>> = Object.freeze({
   'npm run build': Object.freeze({ cmd: 'npm', args: Object.freeze(['run', 'build']) }),
-  'dotnet build': Object.freeze({ cmd: 'dotnet', args: Object.freeze(['build']) }),
+  'dotnet build': Object.freeze({ cmd: 'dotnet', args: Object.freeze(['build', '-m:2']) }),
   'python -m build': Object.freeze({ cmd: 'python', args: Object.freeze(['-m', 'build']) }),
 })
 
