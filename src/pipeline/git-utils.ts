@@ -218,15 +218,33 @@ function buildExtensionRegex(extensions: string[]): RegExp {
 }
 
 /**
+ * Validate that a pathspec is safe (no command substitution or shell metacharacters).
+ * Defense-in-depth: even though execFileSync prevents shell injection, we validate
+ * pathspecs to prevent any potential issues with git's pathspec parsing.
+ *
+ * Security: Rejects pathspecs containing:
+ * - Command substitution chars: $, `, |
+ * - Shell separators: ;, &
+ * - Newlines (could affect git argument parsing)
+ */
+function isValidPathspec(pathspec: string): boolean {
+  if (!pathspec || pathspec.length === 0) return false
+  // Reject command substitution and shell metacharacters
+  if (/[$`|;&\n\r]/.test(pathspec)) return false
+  return true
+}
+
+/**
  * Build git diff args array for execFileSync.
  * Returns args array: ['diff', '--name-only', ...range, '--', ...pathspecs]
  *
  * Security: Uses execFileSync with args array to prevent shell injection.
- * Filters out empty pathspecs to prevent 'git diff -- ""' from matching all files.
+ * Filters out empty and invalid pathspecs to prevent issues.
  */
 function buildDiffArgs(range: string[], pathspecs: string[]): string[] {
-  // Filter out empty pathspecs which could cause git to match all files
-  const filteredPathspecs = pathspecs.filter((p) => p && p.length > 0)
+  // Filter out empty and invalid pathspecs
+  // This is defense-in-depth — callers should already validate via assertSafeExtension
+  const filteredPathspecs = pathspecs.filter(isValidPathspec)
   return ['diff', '--name-only', ...range, '--', ...filteredPathspecs]
 }
 

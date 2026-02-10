@@ -338,19 +338,26 @@ export async function loadTemplate(templateName: string): Promise<TemplateData> 
   const customPath = join(CUSTOM_PROMPTS_DIR, `${templateName}.yaml`)
   const defaultPath = join(DEFAULT_PROMPTS_DIR, `${templateName}.yaml`)
 
-  // Defense-in-depth: verify normalized paths are within expected directories
+  // Defense-in-depth: verify resolved paths are within expected directories
   // This catches any edge cases the name validation might miss
+  //
+  // Security: Use path.relative() to check containment. If the relative path
+  // starts with '..' or is absolute, the target escapes the directory.
+  // This is more robust than startsWith() which can be bypassed with crafted paths.
   const normalizedCustom = normalize(customPath)
   const normalizedDefault = normalize(defaultPath)
   const normalizedCustomDir = normalize(CUSTOM_PROMPTS_DIR)
   const normalizedDefaultDir = normalize(DEFAULT_PROMPTS_DIR)
 
-  // Check that the resolved path starts with the expected directory
-  // Use normalized versions of both paths for consistent comparison
-  if (!normalizedCustom.startsWith(normalizedCustomDir + '/') && normalizedCustom !== normalizedCustomDir) {
+  // Check custom path is contained within custom directory
+  const relativeToCustom = relative(normalizedCustomDir, normalizedCustom)
+  if (relativeToCustom.startsWith('..') || isAbsolute(relativeToCustom)) {
     throw new Error(`Invalid template path (escapes custom directory): ${templateName}`)
   }
-  if (!normalizedDefault.startsWith(normalizedDefaultDir + '/') && normalizedDefault !== normalizedDefaultDir) {
+
+  // Check default path is contained within default directory
+  const relativeToDefault = relative(normalizedDefaultDir, normalizedDefault)
+  if (relativeToDefault.startsWith('..') || isAbsolute(relativeToDefault)) {
     throw new Error(`Invalid template path (escapes default directory): ${templateName}`)
   }
 

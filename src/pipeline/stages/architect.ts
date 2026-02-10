@@ -281,14 +281,20 @@ function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
     bp.steps.every(isValidMilestoneObject)
 
   // Schema semantics: anyOf requires at least one of milestones OR steps to be valid.
-  // If BOTH fields are present, at least one must be valid.
-  // If both are present and both are invalid, that's a failure.
-  // If both are present and both are valid, milestones takes precedence (see getBlueprintMilestones
-  // in types.ts which always reads milestones first, falling back to steps only if milestones is empty).
+  // Important: If a field is PRESENT, it MUST be valid (non-empty array with valid objects).
+  // An empty array for a present field is invalid because minItems: 1 in the schema.
+  //
+  // Logic:
+  // - If milestones is present, it must be valid (non-empty with valid objects)
+  // - If steps is present, it must be valid (non-empty with valid objects)
+  // - At least one must be present and valid
+  // - If both are present, both must be valid (we can't ignore an invalid milestones array
+  //   just because steps is valid — the LLM shouldn't output empty arrays)
   if (milestonesPresent && stepsPresent) {
-    // Both fields present — at least one must be valid
-    // Note: At runtime, getBlueprintMilestones enforces milestones > steps precedence
-    return milestonesValid || stepsValid
+    // Both fields present — both must be valid if present
+    // This prevents the case where milestones=[] and steps=[...valid...] passes
+    // when milestones shouldn't be empty if present
+    return milestonesValid && stepsValid
   } else if (milestonesPresent) {
     // Only milestones field present — it must be valid
     return milestonesValid
