@@ -21,6 +21,7 @@ const state = {
   pipelineLogs: {}, // pipelineId -> accumulated log text
   selectedTemplate: null, // Currently selected template name
   monacoEditor: null, // Monaco editor instance
+  originalTemplateContent: null, // Original content for dirty checking
 };
 
 // DOM elements
@@ -1391,6 +1392,19 @@ function initMonaco(container, content, language = 'yaml') {
       minimap: { enabled: false },
       scrollBeyondLastLine: false
     });
+
+    // Add keyboard shortcuts
+    // Cmd/Ctrl+S to save
+    state.monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
+      if (state.selectedTemplate) {
+        saveTemplate(state.selectedTemplate);
+      }
+    });
+
+    // Esc to close (with confirmation if dirty)
+    state.monacoEditor.addCommand(monaco.KeyCode.Escape, function() {
+      closeTemplateEditor();
+    });
   });
 }
 
@@ -1465,6 +1479,8 @@ async function openTemplateEditor(templateName) {
     const editorContainer = document.getElementById('monaco-editor-container');
     if (editorContainer) {
       initMonaco(editorContainer, yamlContent, 'yaml');
+      // Store original content for dirty checking
+      state.originalTemplateContent = yamlContent;
     }
   } catch (err) {
     console.error('Failed to load template:', err);
@@ -1477,8 +1493,19 @@ async function openTemplateEditor(templateName) {
  * Close template editor and return to template list
  */
 function closeTemplateEditor() {
+  // Check for unsaved changes
+  if (state.monacoEditor && state.originalTemplateContent !== null) {
+    const currentContent = state.monacoEditor.getValue();
+    if (currentContent !== state.originalTemplateContent) {
+      if (!confirm('You have unsaved changes. Discard them?')) {
+        return; // User cancelled
+      }
+    }
+  }
+
   disposeMonaco();
   state.selectedTemplate = null;
+  state.originalTemplateContent = null;
   showPromptsEditor(); // Return to template list
 }
 
@@ -1493,6 +1520,14 @@ async function saveTemplate(templateName) {
 
   const content = state.monacoEditor.getValue();
 
+  // Show loading state on Save button
+  const saveBtn = document.querySelector('.template-editor-btn-primary');
+  const originalText = saveBtn ? saveBtn.textContent : 'Save';
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+  }
+
   try {
     const response = await fetch(`/api/prompts/${encodeURIComponent(templateName)}`, {
       method: 'PUT',
@@ -1506,9 +1541,43 @@ async function saveTemplate(templateName) {
     }
 
     showToast('Template saved successfully', 'success');
+
+    // Update original content to reflect saved state
+    state.originalTemplateContent = content;
+
+    // Refresh the template list to update custom indicator
+    // This happens in the background while keeping editor open
+    fetch('/api/prompts')
+      .then(res => res.json())
+      .then(templates => {
+        // Update the badge in the editor header
+        const template = templates.find(t => t.name === templateName);
+        if (template) {
+          const badgeContainer = document.querySelector('.template-editor-title');
+          if (badgeContainer) {
+            const badge = template.hasCustom
+              ? '<span class="template-custom-badge">Custom</span>'
+              : '<span class="template-default-badge">Default</span>';
+            // Update badge only
+            const nameSpan = badgeContainer.querySelector('.template-editor-name');
+            if (nameSpan) {
+              badgeContainer.innerHTML = '';
+              badgeContainer.appendChild(nameSpan);
+              badgeContainer.insertAdjacentHTML('beforeend', badge);
+            }
+          }
+        }
+      })
+      .catch(err => console.error('Failed to refresh template list:', err));
   } catch (err) {
     console.error('Failed to save template:', err);
-    showToast('Failed to save: ' + err.message, 'error');
+    showToast('Save failed: ' + err.message, 'error');
+  } finally {
+    // Restore button state
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = originalText;
+    }
   }
 }
 
@@ -1520,13 +1589,22 @@ async function resetTemplate(templateName) {
     return;
   }
 
+  // Show loading state on Reset button
+  const resetBtn = document.querySelector('.template-editor-btn-secondary:nth-child(2)');
+  const originalText = resetBtn ? resetBtn.textContent : 'Reset to Default';
+  if (resetBtn) {
+    resetBtn.disabled = true;
+    resetBtn.textContent = 'Resetting...';
+  }
+
   try {
     const response = await fetch(`/api/prompts/${encodeURIComponent(templateName)}`, {
       method: 'DELETE'
     });
 
     if (!response.ok) {
-      throw new Error(response.statusText);
+      const error = await response.text();
+      throw new Error(error || response.statusText);
     }
 
     showToast('Template reset to default', 'success');
@@ -1534,7 +1612,13 @@ async function resetTemplate(templateName) {
     openTemplateEditor(templateName);
   } catch (err) {
     console.error('Failed to reset template:', err);
-    showToast('Failed to reset: ' + err.message, 'error');
+    showToast('Reset failed: ' + err.message, 'error');
+  } finally {
+    // Restore button state (if still exists)
+    if (resetBtn && resetBtn.parentNode) {
+      resetBtn.disabled = false;
+      resetBtn.textContent = originalText;
+    }
   }
 }
 
