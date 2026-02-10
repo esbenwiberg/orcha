@@ -56,6 +56,14 @@ function isValidFilename(filename: string): boolean {
 }
 
 /**
+ * Prefix a filename with './' if it starts with '-' to prevent flag injection.
+ * This ensures filenames like '--verify-no-changes' are passed as './' + name.
+ */
+function prefixIfFlag(filename: string): string {
+  return filename.startsWith('-') ? `./${filename}` : filename
+}
+
+/**
  * Filter file list to only include valid filenames.
  * Logs a warning for any rejected filenames.
  */
@@ -207,19 +215,22 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
   let cmd: string
   let args: string[]
 
+  // Prefix filenames with './' if they start with '-' to prevent flag injection
+  const safeFiles = changedFiles.map(prefixIfFlag)
+
   if (stack.commands.lint === 'npm run lint') {
-    // npm run lint -- file1.ts file2.ts --max-warnings 0
+    // npm run lint -- ./file1.ts ./file2.ts --max-warnings 0
     cmd = 'npm'
-    args = ['run', 'lint', '--', ...changedFiles, '--max-warnings', '0']
+    args = ['run', 'lint', '--', ...safeFiles, '--max-warnings', '0']
   } else if (stack.commands.lint === 'npx eslint .') {
-    // npx eslint file1.ts file2.ts --max-warnings 0
+    // npx eslint ./file1.ts ./file2.ts --max-warnings 0
     cmd = 'npx'
-    args = ['eslint', ...changedFiles, '--max-warnings', '0']
+    args = ['eslint', ...safeFiles, '--max-warnings', '0']
   } else {
     // Generic fallback: try to parse the lint command
     // For safety, only support known patterns
     cmd = 'npx'
-    args = ['eslint', ...changedFiles, '--max-warnings', '0']
+    args = ['eslint', ...safeFiles, '--max-warnings', '0']
   }
 
   const lintCommand = `${cmd} ${args.join(' ')}` // For display only
@@ -270,13 +281,19 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
  *
  * Uses execFileSync with args array to avoid shell injection vulnerabilities.
  * Each --include flag is passed as a separate argument.
+ *
+ * Security: File arguments are prefixed with './' to prevent flag injection
+ * (e.g., a file named '--verify-no-changes' would be passed as './' + name).
  */
 function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
   // Build args array for execFileSync (avoids shell injection)
-  // dotnet format --verify-no-changes --include file1.cs --include file2.cs
+  // dotnet format --verify-no-changes --include ./file1.cs --include ./file2.cs
   const args: string[] = ['format', '--verify-no-changes']
   for (const file of changedFiles) {
-    args.push('--include', file)
+    // Prefix with './' to prevent flag injection from filenames starting with '-'
+    // e.g., a malicious filename like '--verify-no-changes' becomes './' + '--verify-no-changes'
+    const safeFile = file.startsWith('-') ? `./${file}` : file
+    args.push('--include', safeFile)
   }
 
   const lintCommand = `dotnet ${args.join(' ')}` // For display only
@@ -332,19 +349,22 @@ function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]
   let cmd: string
   let args: string[]
 
+  // Prefix filenames with './' if they start with '-' to prevent flag injection
+  const safeFiles = changedFiles.map(prefixIfFlag)
+
   const baseLint = stack.commands.lint!
   if (baseLint === 'ruff check .') {
-    // ruff check file1.py file2.py
+    // ruff check ./file1.py ./file2.py
     cmd = 'ruff'
-    args = ['check', ...changedFiles]
+    args = ['check', ...safeFiles]
   } else if (baseLint === 'flake8') {
-    // flake8 file1.py file2.py
+    // flake8 ./file1.py ./file2.py
     cmd = 'flake8'
-    args = [...changedFiles]
+    args = [...safeFiles]
   } else {
     // Generic fallback: assume ruff-like pattern
     cmd = 'ruff'
-    args = ['check', ...changedFiles]
+    args = ['check', ...safeFiles]
   }
 
   const lintCommand = `${cmd} ${args.join(' ')}` // For display only

@@ -92,24 +92,73 @@ async function exists(path: string): Promise<boolean> {
 /**
  * Parse YAML file content into TemplateData.
  *
- * Security: Uses JSON_SCHEMA to restrict YAML to JSON-compatible types only,
- * preventing arbitrary code execution via malicious YAML tags (e.g., !!python/object).
+ * Security: Uses FAILSAFE_SCHEMA (the most restrictive schema) to prevent
+ * arbitrary code execution via malicious YAML tags. FAILSAFE_SCHEMA only
+ * allows strings, arrays, and objects — no special types like !!python/object,
+ * !!js/function, or even !!int/!!float (they remain strings).
  */
 async function parseYamlTemplate(path: string): Promise<TemplateData> {
   try {
     const content = await readFile(path, 'utf-8')
-    // Use JSON_SCHEMA to restrict to safe JSON-compatible types only.
-    // This prevents arbitrary code execution from malicious YAML tags.
-    const data = yaml.load(content, { schema: yaml.JSON_SCHEMA }) as TemplateData
+    // Use FAILSAFE_SCHEMA — the most restrictive schema that only allows
+    // strings, arrays, and plain objects. This completely prevents arbitrary
+    // code execution from malicious YAML tags (e.g., !!python/object, !!js/function).
+    const rawData = yaml.load(content, { schema: yaml.FAILSAFE_SCHEMA })
 
-    // Basic validation that required fields exist
-    if (!data.name || !data.systemPrompt || !data.userPrompt) {
+    // Validate that the parsed data is an object (not null, array, or primitive)
+    if (typeof rawData !== 'object' || rawData === null || Array.isArray(rawData)) {
       throw new Error(
-        `Invalid template at ${path}: missing required fields (name, systemPrompt, userPrompt)`
+        `Invalid template at ${path}: expected an object at root level`
       )
     }
 
-    return data
+    const data = rawData as Record<string, unknown>
+
+    // Validate required fields exist and have correct types
+    if (typeof data.name !== 'string' || !data.name) {
+      throw new Error(
+        `Invalid template at ${path}: missing or invalid required field "name" (expected non-empty string)`
+      )
+    }
+    if (typeof data.systemPrompt !== 'string' || !data.systemPrompt) {
+      throw new Error(
+        `Invalid template at ${path}: missing or invalid required field "systemPrompt" (expected non-empty string)`
+      )
+    }
+    if (typeof data.userPrompt !== 'string' || !data.userPrompt) {
+      throw new Error(
+        `Invalid template at ${path}: missing or invalid required field "userPrompt" (expected non-empty string)`
+      )
+    }
+
+    // Validate optional fields have correct types if present
+    if (data.version !== undefined && typeof data.version !== 'string') {
+      throw new Error(
+        `Invalid template at ${path}: "version" field must be a string`
+      )
+    }
+    if (data.description !== undefined && typeof data.description !== 'string') {
+      throw new Error(
+        `Invalid template at ${path}: "description" field must be a string`
+      )
+    }
+    if (data.variables !== undefined) {
+      if (typeof data.variables !== 'object' || data.variables === null || Array.isArray(data.variables)) {
+        throw new Error(
+          `Invalid template at ${path}: "variables" field must be an object (Record<string, unknown>)`
+        )
+      }
+    }
+
+    // Cast to TemplateData now that we've validated structure
+    return {
+      name: data.name,
+      version: (data.version as string) ?? '',
+      description: (data.description as string) ?? '',
+      variables: (data.variables as Record<string, unknown>) ?? {},
+      systemPrompt: data.systemPrompt,
+      userPrompt: data.userPrompt,
+    }
   } catch (err) {
     if (err instanceof Error) {
       throw new Error(`Failed to parse template at ${path}: ${err.message}`)

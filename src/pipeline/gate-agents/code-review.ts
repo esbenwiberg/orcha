@@ -71,7 +71,7 @@ export async function runCodeReview(
     acceptanceCriteria: run.acceptanceCriteria,
   }
   const diffCtx: DiffContext = { diff }
-  const { systemPrompt, userPrompt } = buildCodeReviewPrompt(workItem, diffCtx)
+  const { systemPrompt, userPrompt } = await buildCodeReviewPrompt(workItem, diffCtx)
 
   try {
     const result = await runStage({

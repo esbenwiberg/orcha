@@ -294,40 +294,51 @@ function readFileSafe(filePath: string): string | null {
   }
 }
 
-/**
- * Escape special regex characters in a string.
- */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-/** Maximum content size to scan for dependencies (1MB). Prevents ReDoS on huge files. */
+/** Maximum content size to scan for dependencies (1MB). Prevents memory exhaustion. */
 const MAX_CONTENT_SIZE = 1024 * 1024
 
 /**
  * Check if a Python dependency name appears in combined project content.
- * Simple substring match — handles pyproject.toml, requirements.txt, setup.py, setup.cfg.
+ * Uses simple string search with boundary validation to avoid ReDoS vulnerabilities.
  *
  * Security:
- * - Validates dep against a safe pattern to prevent regex injection
- * - Limits content size to prevent ReDoS attacks with specially crafted large files
- * - Escapes dep before using in RegExp for defense-in-depth
+ * - Validates dep against a safe pattern to prevent any injection
+ * - Limits content size to prevent memory exhaustion
+ * - Uses indexOf + boundary checks instead of complex regex (prevents ReDoS)
  */
 function hasPythonDep(content: string, dep: string): boolean {
   // Validate dep is a reasonable Python package name (alphanumeric, hyphens, underscores)
-  // This prevents any regex injection even if escapeRegex has edge cases
   if (!/^[a-zA-Z0-9_-]+$/.test(dep)) {
     return false
   }
 
-  // Limit content size to prevent ReDoS attacks
+  // Limit content size to prevent memory exhaustion
   const safeContent = content.length > MAX_CONTENT_SIZE
     ? content.slice(0, MAX_CONTENT_SIZE)
     : content
 
-  // Match the dep name as a word boundary (avoid partial matches like "ruff" in "scruff")
-  // Patterns: "ruff", 'ruff', ruff==, ruff>=, ruff[, ruff\n, ruff (in requirements.txt lines)
-  const escapedDep = escapeRegex(dep)
-  const pattern = new RegExp(`(?:^|['"\\s,])${escapedDep}(?:['"\\s,>=<!\\[\\]]|$)`, 'm')
-  return pattern.test(safeContent)
+  // Use indexOf for O(n) search without regex backtracking risk
+  // Then validate boundaries manually
+  const lowerContent = safeContent.toLowerCase()
+  const lowerDep = dep.toLowerCase()
+
+  let pos = 0
+  while ((pos = lowerContent.indexOf(lowerDep, pos)) !== -1) {
+    // Check character before (must be word boundary)
+    const charBefore = pos > 0 ? lowerContent[pos - 1] : '\n'
+    const isValidBefore = /^[\s'"=<>!,\[\]\n]$/.test(charBefore)
+
+    // Check character after (must be word boundary)
+    const afterPos = pos + lowerDep.length
+    const charAfter = afterPos < lowerContent.length ? lowerContent[afterPos] : '\n'
+    const isValidAfter = /^[\s'"=<>!,\[\]\n]$/.test(charAfter)
+
+    if (isValidBefore && isValidAfter) {
+      return true
+    }
+
+    pos++
+  }
+
+  return false
 }

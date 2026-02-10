@@ -268,15 +268,33 @@ function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
 
   if (!hasRequiredFields) return false
 
-  // Support both 'milestones' (preferred) and 'steps' (backward compat)
-  // Exactly one of these must be present AND non-empty with valid milestone objects
-  const hasMilestones = Array.isArray(bp.milestones) &&
+  // Check if milestones field is present and valid
+  const milestonesPresent = 'milestones' in bp
+  const milestonesValid = Array.isArray(bp.milestones) &&
     bp.milestones.length > 0 &&
     bp.milestones.every(isValidMilestoneObject)
-  const hasSteps = Array.isArray(bp.steps) &&
+
+  // Check if steps field is present and valid (backward compat)
+  const stepsPresent = 'steps' in bp
+  const stepsValid = Array.isArray(bp.steps) &&
     bp.steps.length > 0 &&
     bp.steps.every(isValidMilestoneObject)
 
-  // At least one non-empty array with valid milestone objects must exist
-  return hasMilestones || hasSteps
+  // Schema semantics: anyOf requires at least one of milestones OR steps to be valid.
+  // If BOTH fields are present, at least one must be valid.
+  // If both are present and both are invalid, that's a failure.
+  // If both are present and both are valid, we prefer milestones (this is fine per anyOf).
+  if (milestonesPresent && stepsPresent) {
+    // Both fields present — at least one must be valid
+    return milestonesValid || stepsValid
+  } else if (milestonesPresent) {
+    // Only milestones field present — it must be valid
+    return milestonesValid
+  } else if (stepsPresent) {
+    // Only steps field present — it must be valid
+    return stepsValid
+  }
+
+  // Neither field present — invalid
+  return false
 }

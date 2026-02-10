@@ -134,15 +134,32 @@ function isSafeFilename(filename: string): boolean {
 /**
  * Filter a list of filenames to only include safe ones.
  * Logs a warning for rejected filenames.
+ *
+ * Security: If ANY unsafe filenames are detected, logs a warning but continues
+ * with the safe subset. This prevents a single malicious file from blocking
+ * legitimate operations while still protecting against path traversal attacks.
+ * The warning enables detection of potential attacks in logs.
  */
 function filterSafeFilenames(filenames: string[]): string[] {
-  return filenames.filter((f) => {
-    if (!isSafeFilename(f)) {
-      console.warn(`Skipping unsafe filename from git diff: ${JSON.stringify(f)}`)
-      return false
+  const safeFiles: string[] = []
+  const unsafeFiles: string[] = []
+
+  for (const f of filenames) {
+    if (isSafeFilename(f)) {
+      safeFiles.push(f)
+    } else {
+      unsafeFiles.push(f)
     }
-    return true
-  })
+  }
+
+  if (unsafeFiles.length > 0) {
+    // Log all unsafe filenames for security auditing
+    console.warn(
+      `[git-utils] Filtered ${unsafeFiles.length} unsafe filename(s) from git diff: ${JSON.stringify(unsafeFiles)}`
+    )
+  }
+
+  return safeFiles
 }
 
 /**

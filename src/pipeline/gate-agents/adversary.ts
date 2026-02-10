@@ -94,7 +94,7 @@ export async function runAdversary(
     acceptanceCriteria: run.acceptanceCriteria,
   }
   const diffCtx: DiffContext = { diff }
-  const { systemPrompt, userPrompt } = buildAdversaryPrompt(workItem, diffCtx, testPatterns, primaryTech)
+  const { systemPrompt, userPrompt } = await buildAdversaryPrompt(workItem, diffCtx, testPatterns, primaryTech)
 
   let tempDir: string | null = null
 
@@ -267,9 +267,18 @@ function getTestPatterns(worktreePath: string, techType?: TechStack['type']): st
     for (const file of testFiles.slice(0, 3)) {
       try {
         const fullPath = join(worktreePath, file)
-        const content = (readFileSync(fullPath, 'utf-8') as string)
+        const rawContent = (readFileSync(fullPath, 'utf-8') as string)
           .split('\n').slice(0, 30).join('\n')
-        patternSamples.push(`--- ${file} ---\n${content}`)
+        // Sanitize content to prevent prompt injection from malicious test files.
+        // Truncate to reasonable size and strip any XML-like tags that could
+        // be interpreted as system instructions.
+        const sanitizedContent = rawContent
+          .slice(0, 2000)
+          .replace(/<\/?system[^>]*>/gi, '[SANITIZED]')
+          .replace(/<\/?assistant[^>]*>/gi, '[SANITIZED]')
+          .replace(/<\/?user[^>]*>/gi, '[SANITIZED]')
+          .replace(/<\/?human[^>]*>/gi, '[SANITIZED]')
+        patternSamples.push(`--- ${file} ---\n${sanitizedContent}`)
       } catch { /* skip unreadable files */ }
     }
 
