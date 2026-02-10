@@ -20,6 +20,7 @@ const state = {
   selectedPipeline: null, // Currently selected pipeline ID
   pipelineLogs: {}, // pipelineId -> accumulated log text
   selectedTemplate: null, // Currently selected template name
+  monacoEditor: null, // Monaco editor instance
 };
 
 // DOM elements
@@ -1377,14 +1378,173 @@ async function showPromptsEditor() {
 }
 
 /**
+ * Initialize Monaco editor
+ */
+function initMonaco(container, content, language = 'yaml') {
+  require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
+  require(['vs/editor/editor.main'], function() {
+    state.monacoEditor = monaco.editor.create(container, {
+      value: content,
+      language: language,
+      theme: 'vs-dark',
+      automaticLayout: true,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false
+    });
+  });
+}
+
+/**
+ * Dispose Monaco editor if exists
+ */
+function disposeMonaco() {
+  if (state.monacoEditor) {
+    state.monacoEditor.dispose();
+    state.monacoEditor = null;
+  }
+}
+
+/**
  * Open template editor for a specific template
  */
-function openTemplateEditor(templateName) {
+async function openTemplateEditor(templateName) {
   console.log('Opening editor for template:', templateName);
+
   // Store selected template in state
   state.selectedTemplate = templateName;
-  // TODO: Implement editor UI (milestone 4)
-  showToast('Template editor coming soon', 'info');
+
+  // Dispose any existing editor
+  disposeMonaco();
+
+  const terminalGrid = document.getElementById('terminal-grid');
+  if (!terminalGrid) return;
+
+  // Show loading state
+  terminalGrid.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);font-size:1rem;">Loading template...</div>';
+
+  try {
+    // Fetch template content
+    const response = await fetch(`/api/prompts/${encodeURIComponent(templateName)}`);
+    if (!response.ok) {
+      throw new Error(`Failed to load template: ${response.statusText}`);
+    }
+
+    const template = await response.json();
+
+    // Build YAML content from template object
+    let yamlContent = '';
+    if (template.name) yamlContent += `name: ${template.name}\n`;
+    if (template.version) yamlContent += `version: "${template.version}"\n`;
+    if (template.description) yamlContent += `description: "${template.description}"\n`;
+    yamlContent += '\n';
+    if (template.systemPrompt) yamlContent += `systemPrompt: |\n${indentText(template.systemPrompt, 2)}\n\n`;
+    if (template.userPrompt) yamlContent += `userPrompt: |\n${indentText(template.userPrompt, 2)}\n\n`;
+    if (template.systemPromptSuffix) yamlContent += `systemPromptSuffix: |\n${indentText(template.systemPromptSuffix, 2)}\n\n`;
+    if (template.maxTokens) yamlContent += `maxTokens: ${template.maxTokens}\n`;
+    if (template.temperature !== undefined) yamlContent += `temperature: ${template.temperature}\n`;
+
+    // Create editor UI
+    terminalGrid.innerHTML = `
+      <div class="template-editor-container">
+        <div class="template-editor-header">
+          <div class="template-editor-title">
+            <span class="template-editor-name">${escapeHtml(templateName)}</span>
+            ${template.hasCustom ? '<span class="template-custom-badge">Custom</span>' : '<span class="template-default-badge">Default</span>'}
+          </div>
+          <div class="template-editor-actions">
+            <button class="template-editor-btn template-editor-btn-secondary" onclick="closeTemplateEditor()">Close</button>
+            <button class="template-editor-btn template-editor-btn-secondary" onclick="resetTemplate('${escapeHtml(templateName)}')">Reset to Default</button>
+            <button class="template-editor-btn template-editor-btn-primary" onclick="saveTemplate('${escapeHtml(templateName)}')">Save</button>
+          </div>
+        </div>
+        <div id="monaco-editor-container" class="monaco-editor-container"></div>
+      </div>
+    `;
+
+    // Initialize Monaco editor
+    const editorContainer = document.getElementById('monaco-editor-container');
+    if (editorContainer) {
+      initMonaco(editorContainer, yamlContent, 'yaml');
+    }
+  } catch (err) {
+    console.error('Failed to load template:', err);
+    terminalGrid.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-danger);font-size:1rem;">Failed to load template: ' + escapeHtml(err.message) + '</div>';
+    showToast('Failed to load template: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Close template editor and return to template list
+ */
+function closeTemplateEditor() {
+  disposeMonaco();
+  state.selectedTemplate = null;
+  showPromptsEditor(); // Return to template list
+}
+
+/**
+ * Save template changes
+ */
+async function saveTemplate(templateName) {
+  if (!state.monacoEditor) {
+    showToast('No editor instance found', 'error');
+    return;
+  }
+
+  const content = state.monacoEditor.getValue();
+
+  try {
+    const response = await fetch(`/api/prompts/${encodeURIComponent(templateName)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: content
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(error || response.statusText);
+    }
+
+    showToast('Template saved successfully', 'success');
+  } catch (err) {
+    console.error('Failed to save template:', err);
+    showToast('Failed to save: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Reset template to default
+ */
+async function resetTemplate(templateName) {
+  if (!confirm(`Reset "${templateName}" to default? This will delete your custom version.`)) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/prompts/${encodeURIComponent(templateName)}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      throw new Error(response.statusText);
+    }
+
+    showToast('Template reset to default', 'success');
+    // Reload the editor with default content
+    openTemplateEditor(templateName);
+  } catch (err) {
+    console.error('Failed to reset template:', err);
+    showToast('Failed to reset: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Helper function to indent text for YAML multiline strings
+ */
+function indentText(text, spaces) {
+  if (!text) return '';
+  const indent = ' '.repeat(spaces);
+  return text.split('\n').map(line => indent + line).join('\n');
 }
 
 /**
