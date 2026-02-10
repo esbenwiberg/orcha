@@ -4982,8 +4982,15 @@ function showNewPipelineDialog() {
   }).join('');
 
   overlay.innerHTML = `
-    <div class="new-session-dialog" style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:400px;max-width:500px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+    <div class="new-session-dialog" style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:400px;max-width:600px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
       <h3 style="margin:0 0 16px;font-size:1rem;color:#e0e0e0;">New Pipeline</h3>
+
+      <!-- Mode Toggle -->
+      <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid #333;padding-bottom:8px;">
+        <button class="mode-toggle-btn mode-simple" data-mode="simple" style="background:transparent;border:none;color:#888;font-size:0.85rem;padding:6px 12px;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s;">Simple</button>
+        <button class="mode-toggle-btn mode-blueprint" data-mode="blueprint" style="background:transparent;border:none;color:#888;font-size:0.85rem;padding:6px 12px;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s;">Blueprint</button>
+      </div>
+
       <div style="display:flex;flex-direction:column;gap:12px;">
         <div>
           <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Repository *</label>
@@ -4991,18 +4998,32 @@ function showNewPipelineDialog() {
             ${repoOptions || '<option value="">No repos registered</option>'}
           </select>
         </div>
-        <div>
-          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Title</label>
-          <input type="text" class="pipeline-title" placeholder="Short name (e.g. Auth system)" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+
+        <!-- Simple Mode Fields -->
+        <div class="simple-mode-fields">
+          <div>
+            <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Title</label>
+            <input type="text" class="pipeline-title" placeholder="Short name (e.g. Auth system)" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Description *</label>
+            <textarea class="pipeline-description" rows="3" placeholder="What should be built or fixed?" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+          </div>
+          <div>
+            <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Acceptance Criteria (one per line)</label>
+            <textarea class="pipeline-ac" rows="4" placeholder="GET /health returns 200&#10;Response includes uptime field&#10;Unit test added" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+          </div>
         </div>
-        <div>
-          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Description *</label>
-          <textarea class="pipeline-description" rows="3" placeholder="What should be built or fixed?" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+
+        <!-- Blueprint Mode Fields -->
+        <div class="blueprint-mode-fields" style="display:none;">
+          <div>
+            <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Blueprint Markdown *</label>
+            <div style="font-size:0.7rem;color:#666;margin-bottom:6px;">Paste your /blueprint skill output or markdown blueprint here</div>
+            <textarea class="pipeline-blueprint" rows="15" placeholder="# Blueprint: Add User Authentication&#10;&#10;**Milestones: 3**&#10;&#10;## Goal&#10;Implement JWT authentication...&#10;&#10;## Milestones&#10;&#10;### M1: User Model&#10;**Intent:** Create user model&#10;**Details:**&#10;..." style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.75rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;resize:vertical;font-family:monospace;line-height:1.4;"></textarea>
+          </div>
         </div>
-        <div>
-          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Acceptance Criteria (one per line)</label>
-          <textarea class="pipeline-ac" rows="4" placeholder="GET /health returns 200&#10;Response includes uptime field&#10;Unit test added" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
-        </div>
+
         <div>
           <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Source Branch</label>
           <input type="text" class="pipeline-source-branch" value="main" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
@@ -5020,10 +5041,32 @@ function showNewPipelineDialog() {
   const titleInput = overlay.querySelector('.pipeline-title');
   const descInput = overlay.querySelector('.pipeline-description');
   const acTextarea = overlay.querySelector('.pipeline-ac');
+  const blueprintTextarea = overlay.querySelector('.pipeline-blueprint');
   const branchInput = overlay.querySelector('.pipeline-source-branch');
   const errorEl = overlay.querySelector('.pipeline-dialog-error');
   const createBtn = overlay.querySelector('.pipeline-create-btn');
   const cancelBtn = overlay.querySelector('.pipeline-cancel-btn');
+  const modeToggles = overlay.querySelectorAll('.mode-toggle-btn');
+  const simpleFields = overlay.querySelector('.simple-mode-fields');
+  const blueprintFields = overlay.querySelector('.blueprint-mode-fields');
+
+  let currentMode = 'simple';
+
+  // Mode toggle handler
+  modeToggles.forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentMode = btn.dataset.mode;
+      modeToggles.forEach(b => {
+        b.style.color = b.dataset.mode === currentMode ? '#e0e0e0' : '#888';
+        b.style.borderBottomColor = b.dataset.mode === currentMode ? '#9b59b6' : 'transparent';
+      });
+      simpleFields.style.display = currentMode === 'simple' ? '' : 'none';
+      blueprintFields.style.display = currentMode === 'blueprint' ? '' : 'none';
+    });
+  });
+
+  // Set initial mode
+  modeToggles[0].click();
 
   const closeDialog = () => overlay.remove();
 
@@ -5040,18 +5083,37 @@ function showNewPipelineDialog() {
       return;
     }
 
-    const title = titleInput.value.trim();
-    const description = descInput.value.trim();
-    if (!description) {
-      errorEl.textContent = 'Description is required';
-      errorEl.style.display = '';
-      descInput.focus();
-      return;
-    }
+    let payload;
 
-    const acText = acTextarea.value.trim();
-    const acceptanceCriteria = acText ? acText.split('\n').map(l => l.trim()).filter(Boolean) : [];
-    const sourceBranch = branchInput.value.trim() || 'main';
+    if (currentMode === 'simple') {
+      // Simple mode: description + ACs
+      const title = titleInput.value.trim();
+      const description = descInput.value.trim();
+      if (!description) {
+        errorEl.textContent = 'Description is required';
+        errorEl.style.display = '';
+        descInput.focus();
+        return;
+      }
+
+      const acText = acTextarea.value.trim();
+      const acceptanceCriteria = acText ? acText.split('\n').map(l => l.trim()).filter(Boolean) : [];
+      const sourceBranch = branchInput.value.trim() || 'main';
+
+      payload = { title: title || undefined, description, acceptanceCriteria, sourceBranch, worktreePath };
+    } else {
+      // Blueprint mode: markdown text
+      const blueprintText = blueprintTextarea.value.trim();
+      if (!blueprintText) {
+        errorEl.textContent = 'Blueprint markdown is required';
+        errorEl.style.display = '';
+        blueprintTextarea.focus();
+        return;
+      }
+
+      const sourceBranch = branchInput.value.trim() || 'main';
+      payload = { blueprintText, sourceBranch, worktreePath };
+    }
 
     createBtn.disabled = true;
     createBtn.textContent = 'Starting...';
@@ -5061,7 +5123,7 @@ function showNewPipelineDialog() {
       const res = await fetch('/api/pipelines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title || undefined, description, acceptanceCriteria, sourceBranch, worktreePath }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {

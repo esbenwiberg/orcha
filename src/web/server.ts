@@ -2112,24 +2112,61 @@ export class WebDashboardServer {
     // API: Create a new pipeline run
     this.app.post('/api/pipelines', async (req, res) => {
       try {
-        const { createPipelineRun, executeArchitectStage } = await import('../pipeline/index.js')
+        const { createPipelineRun, executeArchitectStage, importExistingBlueprint } = await import('../pipeline/index.js')
+        const { parseMarkdownBlueprint } = await import('../pipeline/stages/architect.js')
         const { defaultPipelineConfig } = await import('../pipeline/pipeline-config.js')
 
-        const { title, description, acceptanceCriteria, sourceBranch, worktreePath, repoPath } = req.body as {
+        const { title, description, acceptanceCriteria, sourceBranch, worktreePath, repoPath, blueprintText } = req.body as {
           title?: string
           description?: string
           acceptanceCriteria?: string[]
           sourceBranch?: string
           worktreePath?: string
           repoPath?: string
+          blueprintText?: string
         }
 
+        const config = defaultPipelineConfig()
+
+        // Blueprint mode: parse markdown and create pipeline with blueprint
+        if (blueprintText && typeof blueprintText === 'string' && blueprintText.trim().length > 0) {
+          let blueprint
+          try {
+            blueprint = parseMarkdownBlueprint(blueprintText)
+          } catch (err) {
+            res.status(400).json({ error: 'Failed to parse blueprint: ' + (err as Error).message })
+            return
+          }
+
+          // Extract description from blueprint
+          const pipelineDesc = blueprint.shortDescription || blueprint.headline || 'Untitled Blueprint'
+
+          const run = await createPipelineRun({
+            config,
+            description: pipelineDesc,
+            acceptanceCriteria: [],
+            sourceBranch: sourceBranch || 'main',
+            repoPath: repoPath || process.cwd(),
+            ...(worktreePath ? { worktreePath } : {}),
+            title: blueprint.headline,
+          })
+
+          console.log(`[API] Pipeline ${run.id} created from blueprint, importing async`)
+          res.status(202).json(run)
+
+          // Import blueprint asynchronously (non-blocking)
+          importExistingBlueprint(run, blueprint).catch((err: Error) => {
+            console.error(`[API] Pipeline ${run.id} blueprint import failed:`, err.message)
+          })
+          return
+        }
+
+        // Simple mode: description + ACs
         if (!description || typeof description !== 'string' || description.trim().length === 0) {
           res.status(400).json({ error: 'description is required' })
           return
         }
 
-        const config = defaultPipelineConfig()
         const run = await createPipelineRun({
           config,
           description: description.trim(),

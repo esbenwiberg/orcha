@@ -154,7 +154,7 @@ export { isValidBlueprint }
  * {implementation details}
  * ```
  */
-function parseMarkdownBlueprint(markdown: string): BlueprintOutput {
+export function parseMarkdownBlueprint(markdown: string): BlueprintOutput {
   const lines = markdown.split('\n')
 
   // Extract title
