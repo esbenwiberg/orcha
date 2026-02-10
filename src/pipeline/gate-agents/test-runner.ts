@@ -28,11 +28,12 @@ import type { TechStack } from '../tech-scanner.js'
  *
  * Security: Object.freeze() makes this immutable at runtime, preventing
  * prototype pollution attacks that could add malicious commands.
+ * Deep freeze is applied to nested args arrays as well.
  */
-const ALLOWED_TEST_COMMANDS: Record<string, { cmd: string; args: string[] }> = Object.freeze({
-  'npm test': Object.freeze({ cmd: 'npm', args: ['test'] as string[] }),
-  'dotnet test': Object.freeze({ cmd: 'dotnet', args: ['test'] as string[] }),
-  'pytest': Object.freeze({ cmd: 'pytest', args: [] as string[] }),
+const ALLOWED_TEST_COMMANDS: Readonly<Record<string, Readonly<{ cmd: string; args: readonly string[] }>>> = Object.freeze({
+  'npm test': Object.freeze({ cmd: 'npm', args: Object.freeze(['test']) }),
+  'dotnet test': Object.freeze({ cmd: 'dotnet', args: Object.freeze(['test']) }),
+  'pytest': Object.freeze({ cmd: 'pytest', args: Object.freeze([]) }),
 })
 
 // ============================================================================
@@ -99,7 +100,8 @@ function runMultiStackTests(worktreePath: string, techStacks: TechStack[]): Gate
     }
 
     try {
-      const output = execFileSync(allowedCmd.cmd, allowedCmd.args, {
+      // Copy args array since execFileSync may modify it and ours is frozen
+      const output = execFileSync(allowedCmd.cmd, [...allowedCmd.args], {
         cwd: stack.absolutePath,
         encoding: 'utf-8',
         timeout: 300000, // 5 minute timeout per stack
@@ -196,7 +198,8 @@ async function runLegacyTests(worktreePath: string): Promise<GateResult> {
   }
 
   try {
-    const output = execFileSync(allowedCmd.cmd, allowedCmd.args, {
+    // Copy args array since execFileSync may modify it and ours is frozen
+    const output = execFileSync(allowedCmd.cmd, [...allowedCmd.args], {
       cwd: worktreePath,
       encoding: 'utf-8',
       timeout: 300000, // 5 minute timeout for tests

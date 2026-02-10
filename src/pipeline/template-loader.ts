@@ -529,3 +529,203 @@ export async function resetTemplate(templateName: string): Promise<void> {
     throw new Error(`Failed to delete custom override: ${(err as Error).message}`)
   }
 }
+
+// ============================================================================
+// Template Export/Import
+// ============================================================================
+
+/**
+ * Export custom templates to a tarball.
+ *
+ * Creates a gzipped tarball containing all custom template overrides
+ * along with a manifest file containing metadata.
+ *
+ * @param outputPath - Path for output tarball (default: ./orcha-prompts-export.tar.gz)
+ * @throws Error if export fails
+ */
+export async function exportTemplates(outputPath: string = './orcha-prompts-export.tar.gz'): Promise<void> {
+  const tar = await import('tar')
+  const { writeFile, mkdir } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { existsSync } = await import('node:fs')
+
+  // Check if custom directory exists and has files
+  if (!existsSync(CUSTOM_PROMPTS_DIR)) {
+    throw new Error('No custom templates to export (custom directory does not exist)')
+  }
+
+  const { readdir } = await import('node:fs/promises')
+  const files = await readdir(CUSTOM_PROMPTS_DIR, { recursive: true })
+  const yamlFiles = files.filter(f => f.endsWith('.yaml'))
+
+  if (yamlFiles.length === 0) {
+    throw new Error('No custom templates to export (no .yaml files found)')
+  }
+
+  // Create export manifest
+  const manifest = {
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
+    orchaVersion: '0.1.0', // TODO: Read from package.json if needed
+    templateCount: yamlFiles.length,
+    templates: yamlFiles,
+  }
+
+  // Create temporary directory for manifest
+  const tempDir = join(tmpdir(), `orcha-export-${Date.now()}`)
+  await mkdir(tempDir, { recursive: true })
+  const manifestPath = join(tempDir, 'export-manifest.json')
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2))
+
+  try {
+    // Create tarball with custom templates and manifest
+    // We need to change to the parent directory of custom/ to preserve structure
+    const orchaPromptsDir = join(CUSTOM_PROMPTS_DIR, '..')
+    await tar.create(
+      {
+        gzip: true,
+        file: outputPath,
+        cwd: orchaPromptsDir,
+      },
+      ['custom'] // Include entire custom directory
+    )
+
+    // Add manifest to tarball
+    await tar.create(
+      {
+        gzip: true,
+        file: outputPath,
+        cwd: tempDir,
+        append: true,
+      },
+      ['export-manifest.json']
+    )
+  } finally {
+    // Clean up temp directory
+    const { rm } = await import('node:fs/promises')
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Import custom templates from a tarball.
+ *
+ * Extracts templates from a tarball and validates them.
+ * Prompts for confirmation before overwriting existing custom templates.
+ *
+ * @param inputPath - Path to tarball to import
+ * @param confirmOverwrite - Callback to confirm overwriting existing files
+ * @throws Error if import fails or validation fails
+ */
+export async function importTemplates(
+  inputPath: string,
+  confirmOverwrite?: () => Promise<boolean>
+): Promise<void> {
+  const tar = await import('tar')
+  const { readdir, mkdir, rm } = await import('node:fs/promises')
+  const { existsSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+
+  // Check if input file exists
+  if (!existsSync(inputPath)) {
+    throw new Error(`Import file not found: ${inputPath}`)
+  }
+
+  // Create temporary directory for extraction
+  const tempDir = join(tmpdir(), `orcha-import-${Date.now()}`)
+  await mkdir(tempDir, { recursive: true })
+
+  try {
+    // Extract tarball to temp directory
+    await tar.extract({
+      file: inputPath,
+      cwd: tempDir,
+    })
+
+    // Check if custom directory was extracted
+    const extractedCustomDir = join(tempDir, 'custom')
+    if (!existsSync(extractedCustomDir)) {
+      throw new Error('Invalid export: no custom directory found in tarball')
+    }
+
+    // List files that will be imported
+    const files = await readdir(extractedCustomDir, { recursive: true })
+    const yamlFiles = files.filter(f => typeof f === 'string' && f.endsWith('.yaml'))
+
+    if (yamlFiles.length === 0) {
+      throw new Error('Invalid export: no .yaml files found in custom directory')
+    }
+
+    // Check for existing custom templates
+    const existingFiles: string[] = []
+    if (existsSync(CUSTOM_PROMPTS_DIR)) {
+      for (const file of yamlFiles) {
+        const targetPath = join(CUSTOM_PROMPTS_DIR, file)
+        if (existsSync(targetPath)) {
+          existingFiles.push(file)
+        }
+      }
+    }
+
+    // Confirm overwrite if there are existing files
+    if (existingFiles.length > 0 && confirmOverwrite) {
+      const shouldOverwrite = await confirmOverwrite()
+      if (!shouldOverwrite) {
+        throw new Error('Import cancelled by user')
+      }
+    }
+
+    // Validate all templates before importing
+    const invalidTemplates: string[] = []
+    for (const file of yamlFiles) {
+      const filePath = join(extractedCustomDir, file)
+      try {
+        const template = await parseYamlTemplate(filePath)
+        validateTemplate(template)
+      } catch (err) {
+        invalidTemplates.push(`${file}: ${(err as Error).message}`)
+      }
+    }
+
+    if (invalidTemplates.length > 0) {
+      throw new Error(
+        `Template validation failed:\n${invalidTemplates.map(e => `  - ${e}`).join('\n')}`
+      )
+    }
+
+    // Create backup of existing custom directory
+    let backupDir: string | null = null
+    if (existsSync(CUSTOM_PROMPTS_DIR)) {
+      backupDir = `${CUSTOM_PROMPTS_DIR}.backup-${Date.now()}`
+      const { rename } = await import('node:fs/promises')
+      await rename(CUSTOM_PROMPTS_DIR, backupDir)
+    }
+
+    try {
+      // Ensure custom directory exists
+      await mkdir(CUSTOM_PROMPTS_DIR, { recursive: true })
+
+      // Copy files from temp to custom directory
+      const { cp } = await import('node:fs/promises')
+      await cp(extractedCustomDir, CUSTOM_PROMPTS_DIR, { recursive: true })
+
+      // Clean up backup if import succeeded
+      if (backupDir) {
+        await rm(backupDir, { recursive: true, force: true })
+      }
+    } catch (err) {
+      // Rollback: restore backup if it exists
+      if (backupDir) {
+        if (existsSync(CUSTOM_PROMPTS_DIR)) {
+          await rm(CUSTOM_PROMPTS_DIR, { recursive: true, force: true })
+        }
+        const { rename } = await import('node:fs/promises')
+        await rename(backupDir, CUSTOM_PROMPTS_DIR)
+      }
+      throw new Error(`Failed to import templates: ${(err as Error).message}`)
+    }
+  } finally {
+    // Clean up temp directory
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}

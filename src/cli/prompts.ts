@@ -198,6 +198,16 @@ export async function editPrompt(name: string): Promise<void> {
 
     // If custom doesn't exist, copy from default
     if (!existsSync(customPath)) {
+      // Validate that the default template is readable and valid before copying
+      try {
+        await loadTemplate(name)
+      } catch (err) {
+        console.error(chalk.red(`Error: Default template '${name}' is corrupt or unreadable.`))
+        console.error(chalk.dim((err as Error).message))
+        console.log('\nPlease check ~/.orcha/prompts/defaults/ for issues.')
+        process.exit(1)
+      }
+
       console.log(chalk.dim(`Creating custom override for '${name}'...`))
       // Ensure directory exists
       await mkdir(dirname(customPath), { recursive: true })
@@ -293,6 +303,82 @@ export async function resetPrompt(name: string): Promise<void> {
     console.log(chalk.green(`Template '${name}' reset to default.`))
   } catch (err) {
     console.error(chalk.red('Error resetting template:'), (err as Error).message)
+    process.exit(1)
+  }
+}
+
+/**
+ * Show diff between default and custom template.
+ *
+ * Displays a unified diff showing changes made in the custom override.
+ * If no custom override exists, shows a message.
+ *
+ * @param name - Template name (e.g., 'architect', 'gate/adversary')
+ */
+export async function diffPrompt(name: string): Promise<void> {
+  try {
+    const defaultPath = join(DEFAULT_PROMPTS_DIR, `${name}.yaml`)
+    const customPath = join(CUSTOM_PROMPTS_DIR, `${name}.yaml`)
+
+    // Check if default exists
+    if (!existsSync(defaultPath)) {
+      console.error(chalk.red(`Error: Template '${name}' does not exist.`))
+      console.log('\nAvailable templates:')
+      await listPrompts()
+      process.exit(1)
+    }
+
+    // Check if custom exists
+    if (!existsSync(customPath)) {
+      console.log(chalk.yellow(`No custom overrides for '${name}'`))
+      console.log('\nTo create a custom override:')
+      console.log(`  orcha prompts edit ${name}`)
+      return
+    }
+
+    // Run diff command
+    // Use -u for unified format, --color=always for colored output
+    const diffProcess = spawn('diff', ['-u', '--color=always', defaultPath, customPath], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    let output = ''
+    let hasOutput = false
+
+    diffProcess.stdout.on('data', (data) => {
+      output += data.toString()
+      hasOutput = true
+    })
+
+    diffProcess.stderr.on('data', (data) => {
+      // Ignore stderr - diff writes errors here but we handle exit codes
+    })
+
+    await new Promise<void>((resolve, reject) => {
+      diffProcess.on('close', (code) => {
+        // diff exit codes: 0 = no differences, 1 = differences found, 2 = error
+        if (code === 0) {
+          console.log(chalk.dim('No differences between default and custom templates.'))
+          resolve()
+        } else if (code === 1) {
+          // Differences found - this is expected
+          console.log(chalk.bold.cyan(`\nDifferences for '${name}':`))
+          console.log(chalk.dim('Default: ') + defaultPath)
+          console.log(chalk.dim('Custom:  ') + customPath)
+          console.log()
+          console.log(output)
+          resolve()
+        } else {
+          reject(new Error(`diff command failed with exit code ${code}`))
+        }
+      })
+
+      diffProcess.on('error', (err) => {
+        reject(err)
+      })
+    })
+  } catch (err) {
+    console.error(chalk.red('Error comparing templates:'), (err as Error).message)
     process.exit(1)
   }
 }
