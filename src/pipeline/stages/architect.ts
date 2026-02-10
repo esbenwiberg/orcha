@@ -127,77 +127,44 @@ export { isValidBlueprint }
 // ============================================================================
 
 /**
- * Parse a markdown blueprint using Claude AI for maximum flexibility.
+ * Parse a markdown blueprint with MINIMAL parsing + FULL context preservation.
  *
- * Uses Claude to intelligently extract blueprint structure from any markdown format.
- * Much more robust than regex-based parsing.
+ * Philosophy:
+ * - Extract only what's needed for orchestration (title, milestone count/boundaries)
+ * - Preserve ENTIRE raw markdown for agents to interpret
+ * - Keep full milestone text blocks (don't lose context from original blueprint)
+ * - Agents are good at understanding context - don't over-structure
+ *
+ * What we extract:
+ * - headline: For UI display
+ * - milestoneCount: For progress tracking
+ * - milestone boundaries: For iteration
+ * - rawMarkdown: EVERYTHING (diagrams, rationale, architecture, examples)
+ * - milestone.rawText: Full milestone section (not just description/details)
+ *
+ * What we DON'T need to parse perfectly:
+ * - Risks, approach, files - agents can extract from rawMarkdown
+ * - We still extract basic fields for backward compatibility
  */
 export async function parseMarkdownBlueprint(markdown: string): Promise<BlueprintOutput> {
-  const { runStage } = await import('../stage-runner.js')
-
-  const prompt = `Parse this blueprint markdown and extract the structured information.
-
-${markdown}
-
-Extract:
-- headline: The main title/goal
-- shortDescription: A brief summary (mention milestone count)
-- approach: The high-level implementation approach
-- filesToTouch: Array of file paths mentioned
-- risks: Array of identified risks
-- testStrategy: How to test/verify
-- milestones: Array of implementation steps/phases
-
-Each milestone should have:
-- description: What this milestone accomplishes
-- details: Implementation guidance
-- filesToTouch: Files this milestone touches (optional)
-
-Return as JSON matching the schema.`
-
-  try {
-    const result = await runStage({
-      pipelineId: 'blueprint-parser',
-      stageKey: 'architect',
-      config: {
-        models: { default: 'claude-sonnet-4.5' },
-        budgets: { default: 5.0 }
-      },
-      cwd: process.cwd(),
-      prompt,
-      systemPrompt: 'You are a blueprint parser. Extract structured information from markdown blueprints.',
-      allowedTools: '',
-      outputFormat: 'json',
-      modelOverride: 'claude-sonnet-4.5'
-    })
-
-    if (!result.success) {
-      throw new Error(`Blueprint parsing failed: ${result.stderr}`)
-    }
-
-    const parsed = parseStructuredOutput(result.stdout, isValidBlueprint)
-    if (!parsed) {
-      throw new Error('Parsed blueprint does not match expected schema')
-    }
-
-    return parsed
-  } catch (err) {
-    // Fallback to regex-based parsing
-    console.error('[Blueprint Parser] AI parsing failed, falling back to regex:', err)
-    return parseMarkdownBlueprintFallback(markdown)
-  }
-}
-
-/**
- * Fallback regex-based parser (original implementation).
- * Used if AI parsing fails.
- */
-function parseMarkdownBlueprintFallback(markdown: string): BlueprintOutput {
   const lines = markdown.split('\n')
 
-  // Extract title
-  const titleMatch = markdown.match(/^#\s+Blueprint:\s+(.+)$/m)
-  const headline = titleMatch ? titleMatch[1].trim() : 'Untitled Blueprint'
+  // Extract title - handle multiple formats:
+  // 1. "# Blueprint: Title" (explicit)
+  // 2. "# Title Implementation Blueprint" (natural)
+  // 3. "# Title" (generic)
+  let headline = 'Untitled Blueprint'
+  const explicitMatch = markdown.match(/^#\s+Blueprint:\s+(.+)$/m)
+  if (explicitMatch) {
+    headline = explicitMatch[1].trim()
+  } else {
+    const genericMatch = markdown.match(/^#\s+(.+)$/m)
+    if (genericMatch) {
+      headline = genericMatch[1].trim()
+        .replace(/\s+Implementation\s+Blueprint$/i, '') // Clean up "X Implementation Blueprint" -> "X"
+        .replace(/\s+Blueprint$/i, '') // Clean up "X Blueprint" -> "X"
+    }
+  }
 
   // Extract milestone count
   const milestoneCountMatch = markdown.match(/\*\*Milestones:\s+(\d+)\*\*/i)
@@ -250,6 +217,9 @@ function parseMarkdownBlueprintFallback(markdown: string): BlueprintOutput {
   const testStrategy = testStrategyMatch ? 'See milestone verification steps' : 'Manual testing and review'
 
   // Extract milestones
+  // KEY: We preserve the FULL raw text for each milestone (rawText field)
+  // This includes everything: intent, details, verification, key files, etc.
+  // Agents get the complete context, not just extracted fields.
   const milestones: BlueprintMilestone[] = []
 
   // Try format 1: ### M1:, ### M2:, etc. (common from /blueprint skill)
@@ -258,6 +228,7 @@ function parseMarkdownBlueprintFallback(markdown: string): BlueprintOutput {
   while ((m1Match = m1Regex.exec(markdown)) !== null) {
     const title = m1Match[1].trim()
     const body = m1Match[2].trim()
+    const fullMatch = m1Match[0] // PRESERVE FULL TEXT
 
     const intentMatch = body.match(/\*\*Intent:\*\*\s+(.+?)(?:\n|$)/i)
     const intent = intentMatch ? intentMatch[1].trim() : ''
@@ -276,6 +247,7 @@ function parseMarkdownBlueprintFallback(markdown: string): BlueprintOutput {
       description: intent || title,
       details: details || `Implement: ${title}`,
       ...(milestoneFiles.length > 0 ? { filesToTouch: milestoneFiles } : {}),
+      rawText: fullMatch, // FULL milestone section with ALL context
     })
   }
 
@@ -286,6 +258,7 @@ function parseMarkdownBlueprintFallback(markdown: string): BlueprintOutput {
     while ((m2Match = m2Regex.exec(markdown)) !== null) {
       const title = m2Match[1].trim()
       const body = m2Match[2].trim()
+      const fullMatch = m2Match[0] // PRESERVE FULL TEXT
 
       const intentMatch = body.match(/\*\*Intent:\*\*\s+(.+?)(?:\n|$)/i)
       const intent = intentMatch ? intentMatch[1].trim() : ''
@@ -304,6 +277,7 @@ function parseMarkdownBlueprintFallback(markdown: string): BlueprintOutput {
         description: intent || title,
         details: details || `Implement: ${title}`,
         ...(milestoneFiles.length > 0 ? { filesToTouch: milestoneFiles } : {}),
+        rawText: fullMatch, // FULL milestone section with ALL context
       })
     }
   }
@@ -315,10 +289,12 @@ function parseMarkdownBlueprintFallback(markdown: string): BlueprintOutput {
     while ((m3Match = m3Regex.exec(markdown)) !== null) {
       const title = m3Match[1].trim()
       const body = m3Match[2].trim()
+      const fullMatch = m3Match[0] // PRESERVE FULL TEXT
 
       milestones.push({
         description: title,
         details: body,
+        rawText: fullMatch, // FULL milestone section with ALL context
       })
     }
   }
@@ -330,12 +306,14 @@ function parseMarkdownBlueprintFallback(markdown: string): BlueprintOutput {
     while ((genericMatch = genericRegex.exec(markdown)) !== null) {
       const title = genericMatch[1].trim()
       const body = genericMatch[2].trim()
+      const fullMatch = genericMatch[0] // PRESERVE FULL TEXT
 
       // Skip if this looks like a section header (Goal, Architecture, etc)
       if (body.length > 0 && !title.match(/^(Goal|Architecture|Risks|Test|Non-Goals|Acceptance)/i)) {
         milestones.push({
           description: title,
           details: body,
+          rawText: fullMatch, // FULL milestone section with ALL context
         })
       }
     }
@@ -354,6 +332,7 @@ function parseMarkdownBlueprintFallback(markdown: string): BlueprintOutput {
     risks,
     testStrategy,
     milestones,
+    rawMarkdown: markdown, // PRESERVE ENTIRE BLUEPRINT for agents
   }
 }
 

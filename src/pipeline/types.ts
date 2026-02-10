@@ -200,6 +200,12 @@ export interface BlueprintMilestone {
    * Currently unused since all milestones execute sequentially.
    */
   dependsOn?: number[]
+  /**
+   * Optional: Full raw markdown text for this milestone section.
+   * Preserves ALL context from the original blueprint (diagrams, notes, rationale).
+   * When present, agents should prefer this over structured fields for richer context.
+   */
+  rawText?: string
 }
 
 export interface Blueprint {
@@ -217,6 +223,11 @@ export interface Blueprint {
  * Contains the implementation plan as milestones (steps).
  * The 'milestones' field is the canonical name, but 'steps' is supported
  * for backward compatibility with existing blueprints.
+ *
+ * DESIGN: Minimal parsing + full context preservation.
+ * - Structured fields (headline, risks, etc.) are extracted for UI/orchestration
+ * - rawMarkdown preserves the ENTIRE original blueprint for agents
+ * - Agents get full context, not just extracted fields
  */
 export interface BlueprintOutput {
   /** Short title for the plan (e.g. "Add User Authentication"). */
@@ -241,6 +252,12 @@ export interface BlueprintOutput {
    * @deprecated Use 'milestones' instead.
    */
   steps?: Array<{ description: string; details: string }>
+  /**
+   * Full raw markdown content of the blueprint.
+   * Preserves ALL context: diagrams, rationale, architecture notes, examples.
+   * Agents should prefer this over structured fields for maximum context.
+   */
+  rawMarkdown?: string
 }
 
 /**

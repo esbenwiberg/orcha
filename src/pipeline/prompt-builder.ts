@@ -366,13 +366,17 @@ export function buildStagePrompt(
 // ============================================================================
 
 export interface BlueprintContext {
-  /** The blueprint JSON content as a string. */
+  /** The blueprint JSON content as a string (DEPRECATED - use rawMarkdown). */
   blueprintJson: string
+  /** The full raw markdown blueprint (preserves ALL context). Prefer this over blueprintJson. */
+  rawMarkdown?: string
 }
 
 export interface MilestoneContext {
-  /** The full blueprint JSON content as a string (for reference). */
+  /** The full blueprint JSON content as a string (DEPRECATED - use rawMarkdown). */
   blueprintJson: string
+  /** The full raw markdown blueprint (preserves ALL context). Prefer this over blueprintJson. */
+  rawMarkdown?: string
   /** Zero-based index of the current milestone. */
   milestoneIndex: number
   /** Total number of milestones. */
@@ -381,6 +385,8 @@ export interface MilestoneContext {
   milestoneDescription: string
   /** The current milestone's implementation details. */
   milestoneDetails: string
+  /** The full raw text for this milestone section (preserves ALL context). Prefer this over description/details. */
+  milestoneRawText?: string
   /** Optional: files this milestone touches. */
   milestoneFilesToTouch?: string[]
 }
@@ -413,6 +419,10 @@ export async function buildDevPrompt(
     await logWarning(warning)
 
     // FALLBACK: Original hardcoded implementation
+    // Prefer rawMarkdown (full context) over blueprintJson (structured but lossy)
+    const blueprintContent = blueprint.rawMarkdown || blueprint.blueprintJson
+    const blueprintFormat = blueprint.rawMarkdown ? 'Markdown' : 'JSON'
+
     const systemPrompt = [
       'You are a dev agent in the Orcha pipeline.',
       'Your job is to implement the changes described in the blueprint below.',
@@ -426,8 +436,8 @@ export async function buildDevPrompt(
       '- Do NOT commit your changes — the pipeline handles commits automatically.',
       '- If the blueprint is ambiguous, make reasonable decisions and note them.',
       '',
-      '## Blueprint',
-      blueprint.blueprintJson,
+      `## Blueprint (${blueprintFormat})`,
+      blueprintContent,
     ].join('\n')
 
     const acSection = workItem.acceptanceCriteria.length > 0
@@ -497,6 +507,10 @@ export async function buildMilestoneDevPrompt(
       ]
       : []
 
+    // Prefer rawMarkdown (full blueprint context) over blueprintJson
+    const blueprintContent = milestone.rawMarkdown || milestone.blueprintJson
+    const blueprintFormat = milestone.rawMarkdown ? 'Markdown' : 'JSON'
+
     const systemPrompt = [
       'You are a dev agent in the Orcha pipeline.',
       `Your job is to implement the changes described in the blueprint below.`,
@@ -516,20 +530,26 @@ export async function buildMilestoneDevPrompt(
       '- If the milestone is ambiguous, make reasonable decisions and note them.',
       ...filesToTouchSection,
       '',
-      '## Full Blueprint (for reference)',
-      milestone.blueprintJson,
+      `## Full Blueprint (for reference - ${blueprintFormat})`,
+      blueprintContent,
     ].join('\n')
 
     const acSection = workItem.acceptanceCriteria.length > 0
       ? ['', '## Acceptance Criteria (for full task)', ...workItem.acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`)]
       : []
 
+    // If we have rawText, use it (preserves full context from blueprint markdown)
+    // Otherwise fall back to structured fields
+    const milestoneContent = milestone.milestoneRawText || [
+      '## Details',
+      milestone.milestoneDetails,
+    ].join('\n')
+
     const userPrompt = [
       '# Current Milestone',
       `Milestone ${milestoneNum} of ${totalNum}: ${milestone.milestoneDescription}`,
       '',
-      '## Details',
-      milestone.milestoneDetails,
+      milestoneContent,
       '',
       '# Task Context',
       workItem.workItemId ? `Work Item: ${workItem.workItemId}` : '',

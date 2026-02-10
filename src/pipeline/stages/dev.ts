@@ -144,6 +144,9 @@ async function runSingleDevStage(
     const blueprintJson = await readFile(blueprintPath, 'utf-8')
     const blueprint: BlueprintOutput = JSON.parse(blueprintJson)
 
+    // Extract raw markdown for full context (if available)
+    const rawMarkdown = blueprint.rawMarkdown
+
     // Get milestones from blueprint (supports both 'milestones' and 'steps')
     const milestones = getBlueprintMilestones(blueprint)
 
@@ -221,11 +224,13 @@ async function runSingleDevStage(
       // Build milestone-specific prompt (FRESH context for each milestone)
       const milestoneContext: MilestoneContext = {
         blueprintJson,
+        rawMarkdown, // Full blueprint context
         milestoneIndex: i,
         totalMilestones: milestones.length,
         milestoneDescription: milestone.description,
         milestoneDetails: milestone.details,
         milestoneFilesToTouch: milestone.filesToTouch,
+        milestoneRawText: milestone.rawText, // Full milestone section with ALL context
       }
 
       const { systemPrompt, userPrompt } = await buildMilestoneDevPrompt(workItem, codebase, milestoneContext)
@@ -356,8 +361,11 @@ async function runSingleMilestoneDevStage(
   startedAt: string,
 ): Promise<PipelineRun> {
   // Build the dev prompt (full blueprint approach for single milestone)
+  // Extract rawMarkdown from the blueprint for full context
+  const blueprint: BlueprintOutput = JSON.parse(blueprintJson)
   const { systemPrompt, userPrompt } = await buildDevPrompt(workItem, codebase, {
     blueprintJson,
+    rawMarkdown: blueprint.rawMarkdown,
   })
 
   // Run the dev stage (full tool access, no restriction)
@@ -506,6 +514,9 @@ async function runCompetingDevStage(
     const blueprintJson = await readFile(blueprintPath, 'utf-8')
     const blueprint: BlueprintOutput = JSON.parse(blueprintJson)
 
+    // Extract raw markdown for full context (if available)
+    const rawMarkdown = blueprint.rawMarkdown
+
     // Get milestones from blueprint
     const milestones = getBlueprintMilestones(blueprint)
 
@@ -591,11 +602,13 @@ async function runCompetingDevStage(
     // Build milestone context for the first milestone
     const milestoneContext: MilestoneContext = {
       blueprintJson,
+      rawMarkdown, // Full blueprint context
       milestoneIndex: startingMilestoneIndex,
       totalMilestones: milestones.length,
       milestoneDescription: milestone.description,
       milestoneDetails: milestone.details,
       milestoneFilesToTouch: milestone.filesToTouch,
+      milestoneRawText: milestone.rawText, // Full milestone section with ALL context
     }
 
     // Run competing agents on first milestone (worktrees are NOT cleaned up yet)
