@@ -5532,7 +5532,7 @@ async function fetchAndRenderBlueprint(pipelineId) {
       return;
     }
     const bp = await res.json();
-    container.innerHTML = renderBlueprintHtml(bp);
+    container.innerHTML = renderBlueprintHtml(bp, pipelineId);
   } catch (err) {
     console.error('[Blueprint] Failed to load for pipeline ' + pipelineId + ':', err);
     container.textContent = 'Failed to load blueprint: ' + (err.message || err);
@@ -5540,10 +5540,107 @@ async function fetchAndRenderBlueprint(pipelineId) {
 }
 
 /**
+ * Convert blueprint object to markdown format.
+ */
+function blueprintToMarkdown(bp) {
+  let md = '';
+
+  // Title
+  md += '# Blueprint: ' + (bp.headline || 'Untitled') + '\n\n';
+
+  // Milestone count
+  const milestones = bp.milestones || bp.steps || [];
+  md += '**Milestones: ' + milestones.length + '**\n\n';
+
+  // Goal/Approach
+  if (bp.approach) {
+    md += '## Goal\n\n';
+    md += bp.approach + '\n\n';
+  }
+
+  // Files to touch
+  if (bp.filesToTouch && bp.filesToTouch.length > 0) {
+    md += '## Key Files\n\n';
+    for (const f of bp.filesToTouch) {
+      const fname = typeof f === 'string' ? f : (f && (f.path || f.file || ''));
+      md += '- `' + fname + '`\n';
+    }
+    md += '\n';
+  }
+
+  // Risks
+  if (bp.risks && bp.risks.length > 0) {
+    md += '## Risks\n\n';
+    for (const r of bp.risks) {
+      const riskText = typeof r === 'string' ? r : (r && (r.risk || r.description || ''));
+      md += '- ' + riskText + '\n';
+    }
+    md += '\n';
+  }
+
+  // Test strategy
+  if (bp.testStrategy) {
+    md += '## Test Strategy\n\n';
+    md += bp.testStrategy + '\n\n';
+  }
+
+  // Milestones
+  if (milestones.length > 0) {
+    md += '## Milestones\n\n';
+    for (let i = 0; i < milestones.length; i++) {
+      const m = milestones[i];
+      md += '### M' + (i + 1) + ': ' + (m.description || m.title || 'Step ' + (i + 1)) + '\n\n';
+
+      if (m.description && m.title) {
+        md += '**Intent:** ' + m.description + '\n\n';
+      }
+
+      if (m.filesToTouch && m.filesToTouch.length > 0) {
+        md += '**Key files:** ' + m.filesToTouch.map(f => '`' + f + '`').join(', ') + '\n\n';
+      }
+
+      if (m.details) {
+        md += '**Details:**\n\n';
+        md += m.details + '\n\n';
+      }
+    }
+  }
+
+  return md;
+}
+
+/**
+ * Copy blueprint as markdown to clipboard.
+ */
+async function copyBlueprintAsMarkdown(pipelineId) {
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/blueprint');
+    if (!res.ok) {
+      showToast('Failed to load blueprint', 'error');
+      return;
+    }
+    const bp = await res.json();
+    const markdown = blueprintToMarkdown(bp);
+    await navigator.clipboard.writeText(markdown);
+    showToast('Blueprint copied as markdown', 'success');
+  } catch (err) {
+    console.error('[Blueprint] Copy failed:', err);
+    showToast('Failed to copy: ' + err.message, 'error');
+  }
+}
+
+/**
  * Render a blueprint object as structured HTML.
  */
-function renderBlueprintHtml(bp) {
+function renderBlueprintHtml(bp, pipelineId) {
   let html = '<div class="pipeline-blueprint">';
+
+  // Add copy button at the top
+  html += '<div style="margin-bottom:16px;display:flex;justify-content:flex-end;">';
+  html += '<button onclick="copyBlueprintAsMarkdown(\'' + pipelineId + '\')" style="background:#9b59b6;border:none;color:white;font-size:0.75rem;padding:6px 12px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:6px;">';
+  html += '<span>📋</span> Copy as Markdown';
+  html += '</button>';
+  html += '</div>';
 
   // Approach
   if (bp.approach) {
