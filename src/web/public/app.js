@@ -5093,8 +5093,8 @@ function showNewPipelineDialog() {
   });
 
   createBtn.addEventListener('click', async () => {
-    const worktreePath = repoSelect.value;
-    if (!worktreePath) {
+    const repoPath = repoSelect.value;
+    if (!repoPath) {
       errorEl.textContent = 'Please select a repository';
       errorEl.style.display = '';
       return;
@@ -5117,7 +5117,7 @@ function showNewPipelineDialog() {
       const acceptanceCriteria = acText ? acText.split('\n').map(l => l.trim()).filter(Boolean) : [];
       const sourceBranch = branchInput.value.trim() || 'main';
 
-      payload = { title: title || undefined, description, acceptanceCriteria, sourceBranch, worktreePath };
+      payload = { title: title || undefined, description, acceptanceCriteria, sourceBranch, repoPath };
     } else {
       // Blueprint mode: markdown text
       const blueprintText = blueprintTextarea.value.trim();
@@ -5129,7 +5129,7 @@ function showNewPipelineDialog() {
       }
 
       const sourceBranch = branchInput.value.trim() || 'main';
-      payload = { blueprintText, sourceBranch, worktreePath };
+      payload = { blueprintText, sourceBranch, repoPath };
     }
 
     createBtn.disabled = true;
