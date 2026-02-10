@@ -305,6 +305,90 @@ function generateAutoBranch(sessionIndex: number): string {
   return `orcha/session-${sessionIndex + 1}-${timestamp}`
 }
 
+/**
+ * Display blueprint details in a formatted, readable way.
+ * Shows the full blueprint content so users can review before approving.
+ */
+async function displayBlueprintForReview(blueprintPath: string): Promise<void> {
+  try {
+    const { readFile } = await import('fs/promises')
+    const content = await readFile(blueprintPath, 'utf-8')
+    const blueprint = JSON.parse(content)
+
+    console.log('\n' + '='.repeat(80))
+    console.log(chalk.bold.cyan('BLUEPRINT FOR REVIEW'))
+    console.log('='.repeat(80))
+
+    // Title and description
+    console.log(chalk.bold('\n📋 Title:'))
+    console.log(`  ${blueprint.headline}`)
+
+    console.log(chalk.bold('\n📝 Summary:'))
+    console.log(`  ${blueprint.shortDescription}`)
+
+    // Approach
+    if (blueprint.approach) {
+      console.log(chalk.bold('\n🎯 Approach:'))
+      const approachLines = blueprint.approach.split('\n')
+      approachLines.forEach((line: string) => {
+        console.log(`  ${line}`)
+      })
+    }
+
+    // Milestones
+    const milestones = blueprint.milestones || blueprint.steps || []
+    if (milestones.length > 0) {
+      console.log(chalk.bold(`\n🎯 Milestones (${milestones.length}):`))
+      milestones.forEach((milestone: any, index: number) => {
+        console.log(chalk.bold(`\n  M${index + 1}: ${milestone.description}`))
+        if (milestone.details) {
+          const detailLines = milestone.details.split('\n')
+          detailLines.slice(0, 3).forEach((line: string) => {
+            console.log(`      ${line}`)
+          })
+          if (detailLines.length > 3) {
+            console.log(`      ... (${detailLines.length - 3} more lines)`)
+          }
+        }
+        if (milestone.filesToTouch && milestone.filesToTouch.length > 0) {
+          console.log(`      ${chalk.dim('Files:')} ${milestone.filesToTouch.slice(0, 3).join(', ')}${milestone.filesToTouch.length > 3 ? ` + ${milestone.filesToTouch.length - 3} more` : ''}`)
+        }
+      })
+    }
+
+    // Files to touch
+    if (blueprint.filesToTouch && blueprint.filesToTouch.length > 0) {
+      console.log(chalk.bold(`\n📁 Files to touch (${blueprint.filesToTouch.length}):`))
+      const filesToShow = blueprint.filesToTouch.slice(0, 10)
+      filesToShow.forEach((file: string) => {
+        console.log(`  - ${file}`)
+      })
+      if (blueprint.filesToTouch.length > 10) {
+        console.log(`  ... and ${blueprint.filesToTouch.length - 10} more files`)
+      }
+    }
+
+    // Risks
+    if (blueprint.risks && blueprint.risks.length > 0) {
+      console.log(chalk.bold('\n⚠️  Risks:'))
+      blueprint.risks.forEach((risk: string) => {
+        console.log(`  - ${risk}`)
+      })
+    }
+
+    // Test strategy
+    if (blueprint.testStrategy) {
+      console.log(chalk.bold('\n✅ Test Strategy:'))
+      console.log(`  ${blueprint.testStrategy}`)
+    }
+
+    console.log('\n' + '='.repeat(80))
+  } catch (err) {
+    console.error(chalk.yellow(`\n⚠️  Could not display blueprint: ${(err as Error).message}`))
+    console.error(chalk.dim(`Blueprint path: ${blueprintPath}`))
+  }
+}
+
 program
   .name('orcha')
   .description('Parallel AI session orchestrator')
@@ -1976,6 +2060,12 @@ pipelineCmd
         console.log(`  Blueprint: ${run.blueprintPath}`)
       }
       console.log(`  Pipeline dir: ${getPipelineDir(run.id)}`)
+
+      // Display the full blueprint for review
+      if (run.blueprintPath) {
+        await displayBlueprintForReview(run.blueprintPath)
+      }
+
       console.log(`\nPipeline is now at checkpoint:arch.`)
       console.log(`Review the blueprint and proceed with: orcha pipeline approve ${run.id}`)
     } catch (err) {
@@ -2018,6 +2108,11 @@ pipelineCmd
         for (const stage of run.stageHistory) {
           console.log(`    - ${stage.stage}: ${stage.startedAt} -> ${stage.completedAt} (model: ${stage.model || 'N/A'})`)
         }
+      }
+
+      // Display full blueprint details if at a checkpoint
+      if (run.blueprintPath && (run.state === 'checkpoint:arch' || run.state === 'checkpoint:ship')) {
+        await displayBlueprintForReview(run.blueprintPath)
       }
     } else {
       const runs = await listPipelineRuns()
