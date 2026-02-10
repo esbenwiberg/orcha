@@ -5221,6 +5221,17 @@ function renderPipelineDetail(pipelineId) {
   } else {
     html += '<div class="pipeline-detail-title">' + escapeHtml(pipeline.description || 'Pipeline') + '</div>';
   }
+
+  // Add milestone count badge next to title (if available from shortDescription)
+  var milestoneMatch = (pipeline.shortDescription || pipeline.description || '').match(/(\d+)\s+milestone/i);
+  if (milestoneMatch) {
+    var count = parseInt(milestoneMatch[1]);
+    var label = count === 1 ? 'milestone' : 'milestones';
+    html += '<div style="display:inline-block;background:#1a4d2e;color:#4ade80;padding:2px 8px;border-radius:4px;font-size:0.7rem;font-weight:600;margin-left:8px;border:1px solid #22543d;">';
+    html += count + ' ' + label;
+    html += '</div>';
+  }
+
   html += '<div class="pipeline-detail-id">' + pipeline.id + '</div>';
   html += '</div>';
   if (pipeline.usageSnapshot && pipeline.usageSnapshot.totalCostUsd > 0) {
@@ -5562,6 +5573,16 @@ async function fetchAndRenderBlueprint(pipelineId) {
  */
 function renderBlueprintHtml(bp) {
   let html = '<div class="pipeline-blueprint">';
+
+  // Milestone counter badge (prominent)
+  const milestones = bp.milestones || bp.steps || [];
+  const milestoneCount = milestones.length;
+  if (milestoneCount > 0) {
+    const label = milestoneCount === 1 ? 'milestone' : 'milestones';
+    html += '<div style="display:inline-block;background:#1a4d2e;color:#4ade80;padding:6px 12px;border-radius:6px;font-size:0.9rem;font-weight:600;margin-bottom:16px;border:1px solid #22543d;">';
+    html += '<span style="font-size:1.1rem;">' + milestoneCount + '</span> ' + label;
+    html += '</div>';
+  }
 
   // Approach
   if (bp.approach) {
