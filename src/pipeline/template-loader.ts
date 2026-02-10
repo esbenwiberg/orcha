@@ -6,7 +6,7 @@
  */
 
 import { readFile, access } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, normalize, relative, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 import HandlebarsImport from 'handlebars'
 import * as yaml from 'js-yaml'
@@ -21,6 +21,12 @@ const Handlebars = HandlebarsImport
 const ORCHA_HOME = join(homedir(), '.orcha')
 export const CUSTOM_PROMPTS_DIR = join(ORCHA_HOME, 'prompts', 'custom')
 export const DEFAULT_PROMPTS_DIR = join(ORCHA_HOME, 'prompts', 'defaults')
+
+/** Maximum YAML file size to parse (100KB). Prevents memory exhaustion from large files. */
+const MAX_YAML_SIZE = 100 * 1024
+
+/** Maximum string length for any single field in the template. Prevents memory exhaustion. */
+const MAX_FIELD_LENGTH = 50 * 1024
 
 // ============================================================================
 // Types
@@ -100,6 +106,14 @@ async function exists(path: string): Promise<boolean> {
 async function parseYamlTemplate(path: string): Promise<TemplateData> {
   try {
     const content = await readFile(path, 'utf-8')
+
+    // Check file size to prevent memory exhaustion
+    if (content.length > MAX_YAML_SIZE) {
+      throw new Error(
+        `Template file too large (${content.length} bytes, max ${MAX_YAML_SIZE})`
+      )
+    }
+
     // Use FAILSAFE_SCHEMA — the most restrictive schema that only allows
     // strings, arrays, and plain objects. This completely prevents arbitrary
     // code execution from malicious YAML tags (e.g., !!python/object, !!js/function).
@@ -148,6 +162,20 @@ async function parseYamlTemplate(path: string): Promise<TemplateData> {
           `Invalid template at ${path}: "variables" field must be an object (Record<string, unknown>)`
         )
       }
+    }
+
+    // Validate field lengths to prevent memory exhaustion from extremely large strings
+    const systemPromptStr = data.systemPrompt as string
+    const userPromptStr = data.userPrompt as string
+    if (systemPromptStr.length > MAX_FIELD_LENGTH) {
+      throw new Error(
+        `Invalid template at ${path}: "systemPrompt" exceeds max length (${systemPromptStr.length} > ${MAX_FIELD_LENGTH})`
+      )
+    }
+    if (userPromptStr.length > MAX_FIELD_LENGTH) {
+      throw new Error(
+        `Invalid template at ${path}: "userPrompt" exceeds max length (${userPromptStr.length} > ${MAX_FIELD_LENGTH})`
+      )
     }
 
     // Cast to TemplateData now that we've validated structure
@@ -307,21 +335,33 @@ export async function loadTemplate(templateName: string): Promise<TemplateData> 
   const customPath = join(CUSTOM_PROMPTS_DIR, `${templateName}.yaml`)
   const defaultPath = join(DEFAULT_PROMPTS_DIR, `${templateName}.yaml`)
 
+  // Defense-in-depth: verify normalized paths are within expected directories
+  // This catches any edge cases the name validation might miss
+  const normalizedCustom = normalize(customPath)
+  const normalizedDefault = normalize(defaultPath)
+
+  if (!normalizedCustom.startsWith(CUSTOM_PROMPTS_DIR) || isAbsolute(templateName)) {
+    throw new Error(`Invalid template path (escapes custom directory): ${templateName}`)
+  }
+  if (!normalizedDefault.startsWith(DEFAULT_PROMPTS_DIR) || isAbsolute(templateName)) {
+    throw new Error(`Invalid template path (escapes default directory): ${templateName}`)
+  }
+
   // Try custom first
-  if (await exists(customPath)) {
-    return parseYamlTemplate(customPath)
+  if (await exists(normalizedCustom)) {
+    return parseYamlTemplate(normalizedCustom)
   }
 
   // Fall back to default
-  if (await exists(defaultPath)) {
-    return parseYamlTemplate(defaultPath)
+  if (await exists(normalizedDefault)) {
+    return parseYamlTemplate(normalizedDefault)
   }
 
   throw new Error(
     `Template not found: ${templateName}\n` +
     `Searched:\n` +
-    `  - ${customPath}\n` +
-    `  - ${defaultPath}`
+    `  - ${normalizedCustom}\n` +
+    `  - ${normalizedDefault}`
   )
 }
 

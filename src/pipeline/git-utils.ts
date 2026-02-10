@@ -104,7 +104,11 @@ export function getDiff(worktreePath: string, sourceBranch: string, baseCommit?:
 
 // Strict validation pattern for file extensions to prevent command injection.
 // Only allows extensions like .ts, .js, .cs, .py, etc.
+// Rejects: wildcards (*), question marks (?), brackets ([]), and other glob special chars.
 const SAFE_EXTENSION_RE = /^\.[a-zA-Z0-9]+$/
+
+/** Maximum number of unsafe filenames to log (prevents log flooding). */
+const MAX_UNSAFE_FILENAME_WARNINGS = 10
 
 /**
  * Validate that a filename is safe (no path traversal or absolute paths).
@@ -133,7 +137,7 @@ function isSafeFilename(filename: string): boolean {
 
 /**
  * Filter a list of filenames to only include safe ones.
- * Logs a warning for rejected filenames.
+ * Logs a warning for rejected filenames (rate-limited to prevent log flooding).
  *
  * Security: If ANY unsafe filenames are detected, logs a warning but continues
  * with the safe subset. This prevents a single malicious file from blocking
@@ -153,9 +157,12 @@ function filterSafeFilenames(filenames: string[]): string[] {
   }
 
   if (unsafeFiles.length > 0) {
-    // Log all unsafe filenames for security auditing
+    // Rate-limit logging to prevent log flooding from malicious repos with many bad filenames
+    const samplesToLog = unsafeFiles.slice(0, MAX_UNSAFE_FILENAME_WARNINGS)
+    const remaining = unsafeFiles.length - samplesToLog.length
+    const suffix = remaining > 0 ? ` (and ${remaining} more)` : ''
     console.warn(
-      `[git-utils] Filtered ${unsafeFiles.length} unsafe filename(s) from git diff: ${JSON.stringify(unsafeFiles)}`
+      `[git-utils] Filtered ${unsafeFiles.length} unsafe filename(s) from git diff: ${JSON.stringify(samplesToLog)}${suffix}`
     )
   }
 
@@ -163,13 +170,14 @@ function filterSafeFilenames(filenames: string[]): string[] {
 }
 
 /**
- * Validate that an extension is safe for use in shell commands.
+ * Validate that an extension is safe for use in git pathspecs.
  * Throws if the extension doesn't match the safe pattern or is too long.
  *
  * Security:
  * - Length limit prevents memory exhaustion from extremely long strings
- * - Pattern validation ensures only alphanumeric extensions
+ * - Pattern validation ensures only alphanumeric extensions (no wildcards or glob chars)
  * - Must start with '.' to be a valid extension
+ * - Rejects: *, ?, [, ], {, }, and other glob metacharacters
  */
 function assertSafeExtension(ext: string): void {
   // Must start with '.'
@@ -179,6 +187,10 @@ function assertSafeExtension(ext: string): void {
   // Limit extension length to prevent memory issues (10 chars like ".typescript" is more than enough)
   if (ext.length > 10) {
     throw new Error(`File extension too long: ${ext}`)
+  }
+  // Explicitly reject glob metacharacters that could expand to unintended files
+  if (/[*?[\]{}]/.test(ext)) {
+    throw new Error(`Invalid file extension (contains glob metacharacters): ${ext}`)
   }
   if (!SAFE_EXTENSION_RE.test(ext)) {
     throw new Error(`Invalid file extension: ${ext}`)

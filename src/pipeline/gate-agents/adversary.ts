@@ -225,11 +225,15 @@ const TEST_FILE_PATTERNS = Object.freeze({
 
 /**
  * Validate techType against whitelist to prevent command injection.
- * Returns a valid tech type or defaults to 'node'.
+ * Returns a valid tech type or defaults to 'node' with a warning.
  */
 function validateTechType(techType?: TechStack['type']): TechStack['type'] {
   if (techType && VALID_TECH_TYPES.has(techType)) {
     return techType
+  }
+  // Log warning for invalid tech types so configuration errors are visible
+  if (techType !== undefined) {
+    console.warn(`[adversary] Invalid techType "${techType}" — defaulting to 'node'`)
   }
   return 'node'
 }

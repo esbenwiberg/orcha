@@ -123,8 +123,12 @@ function detectNode(worktreePath: string): TechStack[] {
         commands,
         lintableExtensions: ['.ts', '.js', '.tsx', '.jsx', '.mjs', '.cjs'],
       })
-    } catch {
-      // Malformed package.json — skip
+    } catch (err) {
+      // Malformed package.json — skip but log for debugging
+      // This helps detect encoding issues or corrupted files
+      if (process.env.DEBUG) {
+        console.warn(`[tech-scanner] Failed to parse ${pkgPath}: ${(err as Error).message}`)
+      }
     }
   }
 
@@ -297,6 +301,9 @@ function readFileSafe(filePath: string): string | null {
 /** Maximum content size to scan for dependencies (1MB). Prevents memory exhaustion. */
 const MAX_CONTENT_SIZE = 1024 * 1024
 
+/** Maximum iterations for dependency search loop. Prevents O(n²) worst case. */
+const MAX_SEARCH_ITERATIONS = 10000
+
 /**
  * Check if a Python dependency name appears in combined project content.
  * Uses simple string search with boundary validation to avoid ReDoS vulnerabilities.
@@ -323,7 +330,14 @@ function hasPythonDep(content: string, dep: string): boolean {
   const lowerDep = dep.toLowerCase()
 
   let pos = 0
+  let iterations = 0
   while ((pos = lowerContent.indexOf(lowerDep, pos)) !== -1) {
+    // Limit iterations to prevent O(n²) worst case with crafted input
+    if (++iterations > MAX_SEARCH_ITERATIONS) {
+      // Too many iterations — assume not found to avoid DoS
+      return false
+    }
+
     // Check character before (must be word boundary)
     // Using character code checks instead of regex to prevent ReDoS
     const charBefore = pos > 0 ? lowerContent.charCodeAt(pos - 1) : 10 // '\n'

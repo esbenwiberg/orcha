@@ -37,13 +37,11 @@ import { getChangedLintableFiles, getChangedFilesByExtensions } from '../git-uti
  * - Semicolons (shell command separators in some edge cases)
  * - Other potentially problematic characters
  *
- * Allowed: alphanumeric, hyphen, underscore, period, forward slash, at-sign, plus
- * This covers normal file paths like 'src/components/Button.tsx' or '@types/node.d.ts'
+ * Allowed: alphanumeric, hyphen, underscore, period, forward slash
+ * This covers normal file paths like 'src/components/Button.tsx'
+ *
+ * Rejected: '@' and '+' which can be special in some contexts (npm scope, argument parsers)
  */
-// Security: Strict whitelist of allowed characters in filenames.
-// Rejects:
-// - '@' and '+' which can be special in some contexts (npm scope, argument parsers)
-// - Consecutive slashes via separate validation
 const SAFE_FILENAME_RE = /^[a-zA-Z0-9_.\-/]+$/
 
 function isValidFilename(filename: string): boolean {
@@ -63,9 +61,19 @@ function isValidFilename(filename: string): boolean {
 
 /**
  * Prefix a filename with './' if it starts with '-' to prevent flag injection.
- * This ensures filenames like '--verify-no-changes' are passed as './' + name.
+ * This ensures filenames like '-file.ts' are passed as './-file.ts'.
+ *
+ * Note: Filenames that look like full flags (e.g., '--verify-no-changes') are
+ * already rejected by isValidFilename() because they contain consecutive hyphens
+ * which fail the SAFE_FILENAME_RE. This function handles edge cases like '-file.ts'.
  */
 function prefixIfFlag(filename: string): string {
+  // Double-check: reject anything that looks like a long flag (--something)
+  // This is a defense-in-depth check; isValidFilename should already reject these
+  if (filename.startsWith('--')) {
+    console.warn(`Rejecting flag-like filename: ${filename}`)
+    return '' // Return empty string which will be filtered out
+  }
   return filename.startsWith('-') ? `./${filename}` : filename
 }
 
@@ -222,7 +230,18 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
   let args: string[]
 
   // Prefix filenames with './' if they start with '-' to prevent flag injection
-  const safeFiles = changedFiles.map(prefixIfFlag)
+  // Filter out any empty strings (rejected flag-like filenames)
+  const safeFiles = changedFiles.map(prefixIfFlag).filter(Boolean)
+
+  if (safeFiles.length === 0) {
+    return {
+      type: stack.type,
+      path: relPath,
+      status: 'skip',
+      filesChecked: 0,
+      output: 'All files were filtered out as invalid',
+    }
+  }
 
   if (stack.commands.lint === 'npm run lint') {
     // npm run lint -- ./file1.ts ./file2.ts --max-warnings 0
@@ -356,7 +375,18 @@ function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]
   let args: string[]
 
   // Prefix filenames with './' if they start with '-' to prevent flag injection
-  const safeFiles = changedFiles.map(prefixIfFlag)
+  // Filter out any empty strings (rejected flag-like filenames)
+  const safeFiles = changedFiles.map(prefixIfFlag).filter(Boolean)
+
+  if (safeFiles.length === 0) {
+    return {
+      type: stack.type,
+      path: relPath,
+      status: 'skip',
+      filesChecked: 0,
+      output: 'All files were filtered out as invalid',
+    }
+  }
 
   const baseLint = stack.commands.lint!
   if (baseLint === 'ruff check .') {
