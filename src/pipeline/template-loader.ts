@@ -7,7 +7,7 @@
 
 import { readFile, access, mkdir, writeFile, readdir, rm, cp, unlink, rename } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { join, normalize, relative, isAbsolute, resolve } from 'node:path'
+import { join, normalize, relative, isAbsolute, resolve, dirname } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import HandlebarsImport from 'handlebars'
 import * as yaml from 'js-yaml'
@@ -637,6 +637,121 @@ export async function resetTemplate(templateName: string): Promise<void> {
     await unlink(customPath)
   } catch (err) {
     throw new Error(`Failed to delete custom override: ${(err as Error).message}`)
+  }
+}
+
+// ============================================================================
+// Template Saving
+// ============================================================================
+
+/**
+ * Save a custom template override.
+ *
+ * Validates the template name and content before writing to disk.
+ * Creates the custom directory and any subdirectories as needed.
+ *
+ * @param templateName - Template name (e.g., 'architect', 'gate/adversary')
+ * @param content - YAML content as string
+ * @throws Error if validation fails or file write fails
+ */
+export async function saveTemplate(templateName: string, content: string): Promise<void> {
+  // Validate template name to prevent path traversal
+  assertSafeTemplateName(templateName)
+
+  // Validate content size
+  if (content.length > MAX_YAML_SIZE) {
+    throw new Error(
+      `Template content too large (${content.length} bytes, max ${MAX_YAML_SIZE})`
+    )
+  }
+
+  // Parse YAML content
+  let rawData: unknown
+  try {
+    rawData = yaml.load(content, { schema: yaml.FAILSAFE_SCHEMA })
+  } catch (err) {
+    throw new Error(`YAML parse error: ${(err as Error).message}`)
+  }
+
+  // Validate that the parsed data is an object
+  if (typeof rawData !== 'object' || rawData === null || Array.isArray(rawData)) {
+    throw new Error('Invalid template: expected an object at root level')
+  }
+
+  const data = rawData as Record<string, unknown>
+
+  // Validate required fields exist and have correct types
+  if (typeof data.name !== 'string' || !data.name) {
+    throw new Error('Missing or invalid required field "name" (expected non-empty string)')
+  }
+  if (typeof data.systemPrompt !== 'string' || !data.systemPrompt) {
+    throw new Error('Missing or invalid required field "systemPrompt" (expected non-empty string)')
+  }
+  if (typeof data.userPrompt !== 'string' || !data.userPrompt) {
+    throw new Error('Missing or invalid required field "userPrompt" (expected non-empty string)')
+  }
+
+  // Validate optional fields have correct types if present
+  if (data.version !== undefined && typeof data.version !== 'string') {
+    throw new Error('"version" field must be a string')
+  }
+  if (data.description !== undefined && typeof data.description !== 'string') {
+    throw new Error('"description" field must be a string')
+  }
+  if (data.variables !== undefined) {
+    if (typeof data.variables !== 'object' || data.variables === null || Array.isArray(data.variables)) {
+      throw new Error('"variables" field must be an object')
+    }
+    // Validate nested object depth
+    const depthError = validateObjectDepth(data.variables, MAX_OBJECT_DEPTH, new WeakSet())
+    if (depthError) {
+      throw new Error(`"variables" field ${depthError}`)
+    }
+  }
+
+  // Validate field lengths
+  const systemPromptStr = data.systemPrompt as string
+  const userPromptStr = data.userPrompt as string
+  if (systemPromptStr.length > MAX_FIELD_LENGTH) {
+    throw new Error(`"systemPrompt" exceeds max length (${systemPromptStr.length} > ${MAX_FIELD_LENGTH})`)
+  }
+  if (userPromptStr.length > MAX_FIELD_LENGTH) {
+    throw new Error(`"userPrompt" exceeds max length (${userPromptStr.length} > ${MAX_FIELD_LENGTH})`)
+  }
+
+  // Build template data object
+  const template: TemplateData = {
+    name: data.name,
+    version: (data.version as string) ?? '',
+    description: (data.description as string) ?? '',
+    variables: (data.variables as Record<string, unknown>) ?? {},
+    systemPrompt: data.systemPrompt,
+    userPrompt: data.userPrompt,
+  }
+
+  // Validate using existing validateTemplate function
+  validateTemplate(template)
+
+  // Determine output path
+  const customPath = join(CUSTOM_PROMPTS_DIR, `${templateName}.yaml`)
+
+  // Defense-in-depth: verify resolved path is within custom directory
+  const resolvedCustom = resolve(customPath)
+  const resolvedCustomDir = resolve(CUSTOM_PROMPTS_DIR)
+  const relativeToCustom = relative(resolvedCustomDir, resolvedCustom)
+  if (relativeToCustom.startsWith('..') || isAbsolute(relativeToCustom)) {
+    throw new Error('Invalid template path (escapes custom directory)')
+  }
+
+  // Create custom directory and any subdirectories (e.g., gate/)
+  const customDir = dirname(resolvedCustom)
+  await mkdir(customDir, { recursive: true })
+
+  // Write template to file
+  try {
+    await writeFile(resolvedCustom, content, 'utf-8')
+  } catch (err) {
+    throw new Error(`Failed to write template file: ${(err as Error).message}`)
   }
 }
 
