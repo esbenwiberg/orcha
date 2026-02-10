@@ -446,6 +446,31 @@ export interface Fix {
 }
 
 // ============================================================================
+// Competing Fix Results (Milestone 5)
+// ============================================================================
+
+/**
+ * Result from a competing fix strategy.
+ * Used by the competing fix runner to track parallel fix attempts.
+ */
+export interface CompetingFixResult {
+  /** Strategy name that produced this result. */
+  strategyName: string
+  /** Worktree path where this fix was applied. */
+  worktreePath: string
+  /** Git diff produced by this fix. */
+  diff: string
+  /** Gate score after applying this fix (number of passed checks). */
+  gateScore: number
+  /** True if this strategy was selected as the winner. */
+  winner: boolean
+  /** Commit SHA after the fix was applied. */
+  commitSha?: string
+  /** Gate results after this fix (populated after re-gating). */
+  gateResults?: GateResult[]
+}
+
+// ============================================================================
 // Milestone Progress Tracking
 // ============================================================================
 

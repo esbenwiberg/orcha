@@ -2095,6 +2095,18 @@ export class WebDashboardServer {
       }
     })
 
+    // API: Get fix-loop metrics
+    this.app.get('/api/pipelines/metrics', async (_req, res) => {
+      try {
+        const { getMetrics } = await import('../pipeline/learning/fix-success-rate.js')
+        const metrics = await getMetrics()
+        res.json(metrics)
+      } catch (err) {
+        console.error('[API] Pipeline metrics error:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
     // API: Create a new pipeline run
     this.app.post('/api/pipelines', async (req, res) => {
       try {

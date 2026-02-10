@@ -4729,6 +4729,14 @@ function renderPipelineDetail(pipelineId) {
   html += '</div>';
   html += '</div>';
 
+  // Fix-Loop Metrics (populated async)
+  html += '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Fix-Loop Metrics</div>';
+  html += '<div id="metrics-container-' + pipeline.id + '" class="metrics-container">';
+  html += '<div class="timeline-loading">Loading metrics...</div>';
+  html += '</div>';
+  html += '</div>';
+
   // Live Output panel — shows real-time stage logs when a stage is running
   const activeStages = ['architect', 'dev', 'gate', 'fix-loop', 'ship'];
   const isActive = activeStages.includes(pipeline.state);
@@ -4805,6 +4813,9 @@ function renderPipelineDetail(pipelineId) {
 
   // Fetch and render the activity timeline asynchronously
   fetchAndRenderTimeline(pipeline.id);
+
+  // Fetch and render fix-loop metrics
+  fetchAndRenderMetrics(pipeline.id);
 
   // Fetch and render per-stage usage breakdown
   fetchAndRenderStageUsage(pipeline.id);
@@ -5142,6 +5153,111 @@ async function fetchAndRenderTimeline(pipelineId) {
   } catch (err) {
     container.innerHTML = '<div class="timeline-empty">Failed to load activity</div>';
   }
+}
+
+/**
+ * Fetch fix-loop metrics and render charts.
+ */
+async function fetchAndRenderMetrics(pipelineId) {
+  const container = document.getElementById('metrics-container-' + pipelineId);
+  if (!container) return;
+
+  try {
+    const res = await fetch('/api/pipelines/metrics');
+    if (!res.ok) {
+      container.innerHTML = '<div class="timeline-empty">Failed to load metrics</div>';
+      return;
+    }
+    const metrics = await res.json();
+
+    if (!metrics || metrics.totalAttempts === 0) {
+      container.innerHTML = '<div class="timeline-empty">No metrics data yet. Run some pipelines to see metrics.</div>';
+      return;
+    }
+
+    container.innerHTML = renderMetrics(metrics);
+  } catch (err) {
+    container.innerHTML = '<div class="timeline-empty">Failed to load metrics</div>';
+  }
+}
+
+/**
+ * Render fix-loop metrics as HTML with simple text-based charts.
+ */
+function renderMetrics(metrics) {
+  let html = '<div class="metrics-grid">';
+
+  // Summary stats
+  html += '<div class="metrics-summary">';
+  html += '<div class="metric-card">';
+  html += '<div class="metric-label">Total Pipelines</div>';
+  html += '<div class="metric-value">' + metrics.totalPipelines + '</div>';
+  html += '</div>';
+  html += '<div class="metric-card">';
+  html += '<div class="metric-label">Total Attempts</div>';
+  html += '<div class="metric-value">' + metrics.totalAttempts + '</div>';
+  html += '</div>';
+  html += '<div class="metric-card">';
+  html += '<div class="metric-label">Circuit Breaker Triggers</div>';
+  html += '<div class="metric-value">' + metrics.circuitBreakerTriggers + '</div>';
+  html += '</div>';
+  html += '<div class="metric-card">';
+  html += '<div class="metric-label">Avg Time Per Attempt</div>';
+  html += '<div class="metric-value">' + (metrics.averageTimePerAttemptMs / 1000).toFixed(1) + 's</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Attempts Distribution Bar Chart
+  html += '<div class="metrics-chart">';
+  html += '<div class="metrics-chart-title">Attempts Distribution</div>';
+  html += '<div class="bar-chart">';
+  const maxCount = Math.max(
+    metrics.attemptsDistribution['1'] || 0,
+    metrics.attemptsDistribution['2'] || 0,
+    metrics.attemptsDistribution['3'] || 0,
+    metrics.attemptsDistribution['escalated'] || 0
+  );
+  ['1', '2', '3', 'escalated'].forEach(key => {
+    const count = metrics.attemptsDistribution[key] || 0;
+    const width = maxCount > 0 ? (count / maxCount) * 100 : 0;
+    html += '<div class="bar-row">';
+    html += '<div class="bar-label">' + (key === 'escalated' ? 'Escalated' : key + ' attempt' + (key === '1' ? '' : 's')) + '</div>';
+    html += '<div class="bar-container">';
+    html += '<div class="bar-fill" style="width:' + width + '%"></div>';
+    html += '<div class="bar-value">' + count + '</div>';
+    html += '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Success Rate by Pattern
+  html += '<div class="metrics-chart">';
+  html += '<div class="metrics-chart-title">Success Rate by Pattern</div>';
+  const patterns = Object.keys(metrics.successRateByPattern);
+  if (patterns.length === 0) {
+    html += '<div class="timeline-empty">No pattern data yet</div>';
+  } else {
+    html += '<div class="pattern-list">';
+    patterns.forEach(pattern => {
+      const data = metrics.successRateByPattern[pattern];
+      const rate = (data.rate * 100).toFixed(0);
+      html += '<div class="pattern-row">';
+      html += '<div class="pattern-name">' + escapeHtml(pattern) + '</div>';
+      html += '<div class="pattern-stats">';
+      html += '<div class="pattern-bar-container">';
+      html += '<div class="pattern-bar" style="width:' + rate + '%"></div>';
+      html += '</div>';
+      html += '<div class="pattern-rate">' + rate + '% (' + data.successes + '/' + data.attempts + ')</div>';
+      html += '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+
+  html += '</div>'; // end metrics-grid
+  return html;
 }
 
 /**

@@ -4439,3 +4439,148 @@ body {
 .force-ship-modal h3 {
   color: var(--status-error);
 }
+
+/* ========================================================================== */
+/* Fix-Loop Metrics */
+/* ========================================================================== */
+
+.metrics-container {
+  padding: 16px;
+  background: var(--bg-panel);
+  border-radius: 4px;
+}
+
+.metrics-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.metrics-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.metric-card {
+  background: var(--bg-tertiary);
+  padding: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+}
+
+.metric-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.metric-value {
+  font-size: 2rem;
+  font-weight: 600;
+  color: var(--accent-green);
+}
+
+.metrics-chart {
+  background: var(--bg-tertiary);
+  padding: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+}
+
+.metrics-chart-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--text-primary);
+}
+
+.bar-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bar-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bar-label {
+  min-width: 100px;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.bar-container {
+  flex: 1;
+  height: 24px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+  transition: width 0.3s ease;
+}
+
+.bar-value {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pattern-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pattern-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pattern-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pattern-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pattern-bar-container {
+  flex: 1;
+  height: 20px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.pattern-bar {
+  height: 100%;
+  background: var(--accent-green);
+  transition: width 0.3s ease;
+}
+
+.pattern-rate {
+  min-width: 100px;
+  text-align: right;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
