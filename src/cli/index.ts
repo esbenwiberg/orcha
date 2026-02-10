@@ -1706,6 +1706,7 @@ pipelineCmd
   .option('--model-ship <model>', 'Override model for ship stage')
   .option('--max-budget-usd <amount>', 'Override default budget per stage', parseFloat)
   .option('--competing <count>', 'Run N competing dev agents in parallel', parseInt)
+  .option('--strict-gates', 'Block on all severity levels (not just critical)')
   .action(async (options) => {
     const {
       workItem,
@@ -1721,6 +1722,7 @@ pipelineCmd
       modelShip,
       maxBudgetUsd,
       competing,
+      strictGates,
     } = options
 
     // Require at least a description or work item
@@ -1771,6 +1773,11 @@ pipelineCmd
       }
     }
 
+    if (strictGates) {
+      // Strict mode: block on all severities (info is the lowest)
+      configOverrides.severityThreshold = 'info'
+    }
+
     if (maxBudgetUsd !== undefined && isNaN(maxBudgetUsd)) {
       console.error('Error: --max-budget-usd must be a number')
       process.exit(1)
@@ -1787,6 +1794,9 @@ pipelineCmd
           budgets: { ...defaults.budgets, ...((configOverrides.budgets as object) || {}) },
           ...(configOverrides.competingAgents !== undefined
             ? { competingAgents: configOverrides.competingAgents }
+            : {}),
+          ...(configOverrides.severityThreshold !== undefined
+            ? { severityThreshold: configOverrides.severityThreshold }
             : {}),
         }
         config = parsePipelineConfig(merged)

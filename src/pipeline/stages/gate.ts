@@ -27,7 +27,7 @@
 import { writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
 import { execSync } from 'child_process'
-import type { PipelineRun, GateResult, StageResult, CompetingResult } from '../types.js'
+import type { PipelineRun, GateResult, StageResult, CompetingResult, Severity } from '../types.js'
 import { transition, recordStageResult, transitionToError } from '../pipeline-engine.js'
 import { getPipelineDir } from '../pipeline-store.js'
 import { savePipelineRun } from '../pipeline-store.js'
@@ -122,7 +122,7 @@ async function runSingleGateStage(
 
     const results: GateResult[] = [testResult, lintResult, buildResult, acResult, adversaryResult, securityResult, codeReviewResult]
 
-    // Save individual results to disk
+    // Save individual results to disk (before filtering)
     const gateResultsDir = join(getPipelineDir(run.id), 'gate-results')
     await mkdir(gateResultsDir, { recursive: true })
 
@@ -136,8 +136,12 @@ async function runSingleGateStage(
       ),
     )
 
-    // Aggregate verdict
-    const gateOutcome = aggregateVerdicts(results)
+    // Apply severity filtering
+    const severityThreshold = run.config.severityThreshold ?? 'critical'
+    const filteredResults = filterBySeverity(results, severityThreshold)
+
+    // Aggregate verdict (on filtered results)
+    const gateOutcome = aggregateVerdicts(filteredResults)
 
     // Write aggregated verdict
     await writeFile(
@@ -145,7 +149,8 @@ async function runSingleGateStage(
       JSON.stringify({
         passed: gateOutcome.passed,
         summary: gateOutcome.summary,
-        results: results.map((r) => ({
+        severityThreshold,
+        results: filteredResults.map((r) => ({
           checkName: r.checkName,
           verdict: r.verdict,
           summary: r.summary,
@@ -163,7 +168,8 @@ async function runSingleGateStage(
       detail: gateOutcome.summary,
       data: {
         passed: gateOutcome.passed,
-        results: results.map((r) => ({
+        severityThreshold,
+        results: filteredResults.map((r) => ({
           checkName: r.checkName,
           verdict: r.verdict,
           summary: r.summary,
@@ -171,10 +177,10 @@ async function runSingleGateStage(
       },
     }).catch(() => { /* best-effort */ })
 
-    // Update gate results on the pipeline run
+    // Update gate results on the pipeline run (store filtered results)
     run = {
       ...run,
-      gateResults: results,
+      gateResults: filteredResults,
       updatedAt: new Date().toISOString(),
     }
     await savePipelineRun(run)
@@ -289,10 +295,12 @@ async function runCompetingGateStage(
     const winnerCompetitor = competitors.find((c) => c.agentIndex === winner.agentIndex)!
 
     // Write overall verdict
+    const severityThreshold = run.config.severityThreshold ?? 'critical'
     await writeFile(
       join(gateResultsDir, 'verdict.json'),
       JSON.stringify({
         competing: true,
+        severityThreshold,
         winnerAgent: winner.agentIndex,
         winnerScore: winner.score,
         winnerPassed: winner.passed,
@@ -410,10 +418,15 @@ async function evaluateCompetitor(
   ])
 
   const results: GateResult[] = [testResult, lintResult, buildResult, acResult, adversaryResult, securityResult, codeReviewResult]
-  const { passed, summary } = aggregateVerdicts(results)
-  const score = results.filter((r) => r.verdict === 'pass').length
 
-  return { agentIndex: competitor.agentIndex, results, passed, score, summary }
+  // Apply severity filtering
+  const severityThreshold = run.config.severityThreshold ?? 'critical'
+  const filteredResults = filterBySeverity(results, severityThreshold)
+
+  const { passed, summary } = aggregateVerdicts(filteredResults)
+  const score = filteredResults.filter((r) => r.verdict === 'pass').length
+
+  return { agentIndex: competitor.agentIndex, results: filteredResults, passed, score, summary }
 }
 
 /**
@@ -457,6 +470,85 @@ function makeSkippedResult(checkName: string): GateResult {
  * Gate check name mapping (friendly name → agent function key).
  */
 const GATE_CHECK_NAMES = ['test', 'lint', 'build', 'ac-validator', 'adversary', 'security', 'code-review'] as const
+
+// ============================================================================
+// Severity Filtering
+// ============================================================================
+
+/**
+ * Severity ranking for filtering (lower is more severe).
+ */
+const SEVERITY_RANK: Record<Severity, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+  info: 4,
+}
+
+/**
+ * Filter gate results by severity threshold.
+ *
+ * For security and code-review checks:
+ * - Filters findings in details.findings array by severity
+ * - Converts fail to pass if all remaining findings are below threshold
+ *
+ * For other checks (test, lint, build, etc):
+ * - No filtering, returns results unchanged
+ *
+ * @param results - Array of gate results to filter
+ * @param threshold - Minimum severity to block on (default: 'critical')
+ * @returns Filtered gate results
+ */
+function filterBySeverity(results: GateResult[], threshold: Severity = 'critical'): GateResult[] {
+  const thresholdRank = SEVERITY_RANK[threshold]
+
+  return results.map((result) => {
+    // Only filter security and code-review checks (they have severity in findings)
+    if (result.checkName !== 'security' && result.checkName !== 'code-review') {
+      return result
+    }
+
+    // If check passed or was skipped, no filtering needed
+    if (result.verdict !== 'fail') {
+      return result
+    }
+
+    // Filter findings by severity
+    const findings = (result.details?.findings as Array<{ severity: string }> | undefined) ?? []
+    const blockingFindings = findings.filter((f) => {
+      const severity = f.severity as Severity
+      return SEVERITY_RANK[severity] <= thresholdRank
+    })
+
+    // If no blocking findings remain, convert fail to pass
+    if (blockingFindings.length === 0) {
+      const totalFindings = findings.length
+      return {
+        ...result,
+        verdict: 'pass',
+        summary: `${result.summary} (${totalFindings} non-blocking finding(s) below '${threshold}' threshold)`,
+        details: {
+          ...result.details,
+          findings,
+          blockingFindings: 0,
+          filteredByThreshold: threshold,
+        },
+      }
+    }
+
+    // Otherwise keep as fail with updated details
+    return {
+      ...result,
+      details: {
+        ...result.details,
+        findings,
+        blockingFindings: blockingFindings.length,
+        filteredByThreshold: threshold,
+      },
+    }
+  })
+}
 
 // ============================================================================
 // Verdict Aggregation

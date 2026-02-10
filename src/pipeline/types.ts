@@ -98,6 +98,8 @@ export interface PipelineConfig {
   maxFixLoops?: number // Default: 3
   /** Number of competing dev agents (default: 1 = no competition). */
   competingAgents?: number // Default: 1
+  /** Severity threshold for gate filtering (default: 'critical' - only block on critical findings). */
+  severityThreshold?: Severity // Default: 'critical'
 }
 
 // ============================================================================
@@ -105,6 +107,9 @@ export interface PipelineConfig {
 // ============================================================================
 
 export type GateVerdict = 'pass' | 'fail' | 'skip'
+
+/** Severity levels for gate findings (security, code review). */
+export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info'
 
 export interface GateResult {
   verdict: GateVerdict
