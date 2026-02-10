@@ -122,13 +122,15 @@ function installNodeDependencies(stack: TechStack): StackInstallResult {
   }
 
   // Detect package manager
+  // Use --ignore-scripts to skip lifecycle hooks that may fail in automation contexts
+  // (e.g., prepare scripts that reference node_modules/.bin before PATH is set up)
   let installCmd: string
   if (existsSync(join(cwd, 'pnpm-lock.yaml'))) {
-    installCmd = 'pnpm install'
+    installCmd = 'pnpm install --ignore-scripts'
   } else if (existsSync(join(cwd, 'yarn.lock'))) {
-    installCmd = 'yarn install'
+    installCmd = 'yarn install --ignore-scripts'
   } else {
-    installCmd = 'npm install'
+    installCmd = 'npm install --ignore-scripts'
   }
 
   try {
