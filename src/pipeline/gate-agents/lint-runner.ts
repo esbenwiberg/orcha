@@ -40,7 +40,8 @@ import { getChangedLintableFiles, getChangedFilesByExtensions } from '../git-uti
  * Allowed: alphanumeric, hyphen, underscore, period, forward slash, @ (npm scopes)
  * This covers normal file paths like 'src/components/Button.tsx' and '@types/node'
  *
- * Rejected: '+' which can be special in some contexts (argument parsers)
+ * Note: Characters like '+', ';', '|', '&', '`', '$', quotes are implicitly rejected
+ * because they are NOT in the whitelist regex pattern.
  */
 const SAFE_FILENAME_RE = /^[a-zA-Z0-9_.\-/@]+$/
 

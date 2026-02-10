@@ -281,28 +281,24 @@ function isValidBlueprint(obj: unknown): obj is BlueprintOutput {
     bp.steps.every(isValidMilestoneObject)
 
   // Schema semantics: anyOf requires at least one of milestones OR steps to be valid.
-  // Important: If a field is PRESENT, it MUST be valid (non-empty array with valid objects).
-  // An empty array for a present field is invalid because minItems: 1 in the schema.
+  // This matches JSON Schema anyOf: if at least one option is satisfied, validation passes.
   //
   // Logic:
-  // - If milestones is present, it must be valid (non-empty with valid objects)
-  // - If steps is present, it must be valid (non-empty with valid objects)
-  // - At least one must be present and valid
-  // - If both are present, both must be valid (we can't ignore an invalid milestones array
-  //   just because steps is valid — the LLM shouldn't output empty arrays)
-  if (milestonesPresent && stepsPresent) {
-    // Both fields present — both must be valid if present
-    // This prevents the case where milestones=[] and steps=[...valid...] passes
-    // when milestones shouldn't be empty if present
-    return milestonesValid && stepsValid
-  } else if (milestonesPresent) {
-    // Only milestones field present — it must be valid
-    return milestonesValid
-  } else if (stepsPresent) {
-    // Only steps field present — it must be valid
-    return stepsValid
+  // - At least one of milestones or steps must be present AND valid
+  // - A "valid" array means: is an Array, has length > 0, all items pass isValidMilestoneObject
+  // - If a field is present but invalid (empty array or bad items), we still pass if the OTHER field is valid
+  //   (this is standard anyOf behavior - we only need one to match)
+  //
+  // Edge cases:
+  // - milestones=[] and steps=[...valid...] → PASS (steps satisfies anyOf)
+  // - milestones=[...valid...] and steps=[] → PASS (milestones satisfies anyOf)
+  // - milestones=[] and steps=[] → FAIL (neither satisfies)
+  // - neither present → FAIL
+  if (milestonesValid || stepsValid) {
+    // At least one valid array present — anyOf satisfied
+    return true
   }
 
-  // Neither field present — invalid
+  // Neither field is valid (either not present, empty, or has invalid items) — fail
   return false
 }

@@ -189,10 +189,11 @@ function assertSafeExtension(ext: string): void {
     throw new Error(`File extension too long: ${ext}`)
   }
   // Explicitly reject glob metacharacters that could expand to unintended files
+  // Note: Character class uses [][\]{} — the ] is escaped as \], and [ is literal at the start
   if (/[*?[\]{}]/.test(ext)) {
     throw new Error(`Invalid file extension (contains glob metacharacters): ${ext}`)
   }
-  // Explicitly reject shell command separators (defense-in-depth, regex also rejects these)
+  // Explicitly reject shell command separators (defense-in-depth)
   if (/[;|&`$]/.test(ext)) {
     throw new Error(`Invalid file extension (contains shell metacharacters): ${ext}`)
   }
@@ -240,12 +241,35 @@ function isValidPathspec(pathspec: string): boolean {
  *
  * Security: Uses execFileSync with args array to prevent shell injection.
  * Filters out empty and invalid pathspecs to prevent issues.
+ * Validates that no pathspec looks like a git option (starts with '-').
  */
 function buildDiffArgs(range: string[], pathspecs: string[]): string[] {
   // Filter out empty and invalid pathspecs
   // This is defense-in-depth — callers should already validate via assertSafeExtension
   const filteredPathspecs = pathspecs.filter(isValidPathspec)
-  return ['diff', '--name-only', ...range, '--', ...filteredPathspecs]
+
+  // Defense-in-depth: Reject any pathspec that starts with '-' as it could be
+  // misinterpreted as a git option. The '--' separator should prevent this, but
+  // some git versions or edge cases might still be vulnerable.
+  const safePathspecs = filteredPathspecs.filter((p) => {
+    if (p.startsWith('-')) {
+      console.warn(`[git-utils] Rejecting pathspec starting with '-': ${p}`)
+      return false
+    }
+    return true
+  })
+
+  // Validate range arguments don't contain standalone '--' which could
+  // be misinterpreted when combined with pathspecs
+  const safeRange = range.filter((r) => {
+    if (r === '--') {
+      console.warn(`[git-utils] Rejecting standalone '--' in range arguments`)
+      return false
+    }
+    return true
+  })
+
+  return ['diff', '--name-only', ...safeRange, '--', ...safePathspecs]
 }
 
 /**

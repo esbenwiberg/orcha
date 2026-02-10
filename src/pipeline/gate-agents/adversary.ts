@@ -216,12 +216,37 @@ const VALID_TECH_TYPES: ReadonlySet<TechStack['type']> = new Set<TechStack['type
 /**
  * Test file patterns as arrays for execFileSync (avoids shell interpolation).
  * Security: Object.freeze() prevents runtime modification via prototype pollution.
+ *
+ * Additional runtime validation is performed in getTestPatterns() to ensure
+ * patterns match the expected format before being used in execFileSync args.
  */
 const TEST_FILE_PATTERNS = Object.freeze({
   node: Object.freeze(['*.test.ts', '*.spec.ts', '*.test.js', '*.spec.js'] as const),
   dotnet: Object.freeze(['*Tests.cs', '*Test.cs'] as const),
   python: Object.freeze(['test_*.py', '*_test.py'] as const),
 }) satisfies Readonly<Record<TechStack['type'], readonly string[]>>
+
+/**
+ * Validate that a test file pattern is safe for use with find -name.
+ * Pattern must match: *.ext, *pattern.ext, or pattern*.ext
+ *
+ * Security: This validates patterns at runtime to protect against theoretical
+ * prototype pollution that could inject malicious patterns. Patterns must:
+ * - Start with * or alphanumeric/underscore
+ * - Contain only alphanumeric, underscore, period, asterisk
+ * - Not contain shell metacharacters or path separators
+ */
+const SAFE_PATTERN_RE = /^[*a-zA-Z_][a-zA-Z0-9_.*]*$/
+
+function isValidTestPattern(pattern: string): boolean {
+  if (!pattern || pattern.length > 50) return false
+  if (!SAFE_PATTERN_RE.test(pattern)) return false
+  // Reject patterns with path separators
+  if (pattern.includes('/') || pattern.includes('\\')) return false
+  // Reject patterns with shell metacharacters (defense-in-depth)
+  if (/[;|&`$<>]/.test(pattern)) return false
+  return true
+}
 
 /**
  * Validate techType against whitelist to prevent command injection.
@@ -252,13 +277,28 @@ function getTestPatterns(worktreePath: string, techType?: TechStack['type']): st
   const validatedType = validateTechType(techType)
   const patterns = TEST_FILE_PATTERNS[validatedType]
 
+  // Runtime validation of patterns to protect against prototype pollution
+  // Even though TEST_FILE_PATTERNS is frozen, we validate each pattern before use
+  // as defense-in-depth against any theoretical tampering
+  const validatedPatterns = (Array.isArray(patterns) ? patterns : []).filter((p): p is string => {
+    if (typeof p !== 'string' || !isValidTestPattern(p)) {
+      console.warn(`[adversary] Rejecting invalid test pattern: ${JSON.stringify(p)}`)
+      return false
+    }
+    return true
+  })
+
+  if (validatedPatterns.length === 0) {
+    return ''
+  }
+
   try {
     // Build find args safely using execFileSync (no shell interpolation)
     // find . -maxdepth 4 -type f \( -name "*.test.ts" -o -name "*.spec.ts" ... \)
     const findArgs = ['.', '-maxdepth', '4', '-type', 'f', '(']
-    for (let i = 0; i < patterns.length; i++) {
+    for (let i = 0; i < validatedPatterns.length; i++) {
       if (i > 0) findArgs.push('-o')
-      findArgs.push('-name', patterns[i])
+      findArgs.push('-name', validatedPatterns[i])
     }
     findArgs.push(')')
 
@@ -310,19 +350,23 @@ function getTestPatterns(worktreePath: string, techType?: TechStack['type']): st
  * array prevents shell injection, we validate to prevent:
  * - Control characters that could affect terminal output
  * - Newlines that could be interpreted specially by some tools
- * - Flag injection via paths starting with '-'
+ * - Shell metacharacters (defense-in-depth for log parsing and edge cases)
+ * - Flag injection via paths starting with '-' (handled by getTestRunner)
  */
 function isSafeTestPath(testPath: string): boolean {
   // Reject empty paths
   if (!testPath) return false
   // Reject paths that are too long (prevent DoS)
   if (testPath.length > 500) return false
-  // Reject control characters (ASCII 0-31, except tab which is rare but ok)
-  // This catches newlines (\n, \r), null bytes, and other problematic chars
+  // Reject control characters (ASCII 0-31 except tab 0x09)
+  // This catches null bytes (0x00), newlines (\n=0x0a, \r=0x0d), and other problematic chars
   // eslint-disable-next-line no-control-regex
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(testPath)) return false
-  // Reject paths with newlines explicitly (covers \n = 0x0a and \r = 0x0d)
+  // Reject paths with newlines explicitly (belt-and-suspenders for \n = 0x0a and \r = 0x0d)
   if (testPath.includes('\n') || testPath.includes('\r')) return false
+  // Reject shell metacharacters - defense-in-depth even though execFileSync prevents shell injection
+  // These could cause issues in log parsing, error messages, or other downstream processing
+  if (/[;|&`$]/.test(testPath)) return false
   return true
 }
 
