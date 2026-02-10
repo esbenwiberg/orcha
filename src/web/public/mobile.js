@@ -369,10 +369,16 @@ function renderSessionInfo(session) {
       <div class="status-dot ${st}"></div>
       <span class="info-name">${escapeHtml(name)}</span>
       <span class="card-state ${st}">${st}</span>
+      <button class="info-selector-btn" title="Switch session">&#9776;</button>
       <button class="info-menu-btn" title="Session actions">&#8942;</button>
     </div>
     ${session.message ? `<div class="info-message">${escapeHtml(session.message)}</div>` : ''}
   `
+
+  infoEl.querySelector('.info-selector-btn').addEventListener('click', (e) => {
+    e.stopPropagation()
+    openSessionSelector()
+  })
 
   infoEl.querySelector('.info-menu-btn').addEventListener('click', (e) => {
     e.stopPropagation()
@@ -614,6 +620,59 @@ async function toggleNotifications() {
     state.notificationsEnabled = false
     btn.classList.remove('active')
   }
+}
+
+// ============================================================================
+// Session Selector
+// ============================================================================
+
+function openSessionSelector() {
+  if (state.sessions.length <= 1) return
+
+  const sheet = document.getElementById('session-selector-sheet')
+  const listEl = document.getElementById('session-list')
+
+  // Render session list
+  listEl.innerHTML = ''
+  state.sessions.forEach((session, index) => {
+    const name = session.customName || session.id
+    const st = session.state || 'idle'
+    const branch = session.branch || 'main'
+    const isActive = index === state.activeIndex
+
+    const item = document.createElement('button')
+    item.className = 'session-list-item' + (isActive ? ' active' : '')
+    item.innerHTML = `
+      <div class="status-dot ${st}"></div>
+      <div class="session-item-info">
+        <div class="session-item-name">${escapeHtml(name)}</div>
+        <div class="session-item-meta">${escapeHtml(branch)} &middot; ${st}</div>
+      </div>
+      <div class="session-item-check">&#10003;</div>
+    `
+
+    item.addEventListener('click', () => {
+      if (state.activeIndex !== index) {
+        state.activeIndex = index
+        switchToSession(state.sessions[index])
+        renderDots(state.sessions)
+      }
+      closeSessionSelector()
+    })
+
+    listEl.appendChild(item)
+  })
+
+  sheet.classList.remove('hidden')
+
+  // Close on backdrop click
+  const backdrop = sheet.querySelector('.sheet-backdrop')
+  backdrop.addEventListener('click', closeSessionSelector, { once: true })
+}
+
+function closeSessionSelector() {
+  const sheet = document.getElementById('session-selector-sheet')
+  sheet.classList.add('hidden')
 }
 
 // ============================================================================
