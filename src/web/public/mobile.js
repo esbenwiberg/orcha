@@ -300,7 +300,6 @@ function switchTab(tab) {
   const plContainer = document.getElementById('pipeline-list-container')
   const sessionInfo = document.getElementById('session-info')
   const keyToolbar = document.getElementById('key-toolbar')
-  const sessionDots = document.getElementById('session-dots')
 
   // Update tab buttons
   document.querySelectorAll('.nav-tab').forEach(btn => {
@@ -312,7 +311,6 @@ function switchTab(tab) {
     plContainer.classList.add('hidden')
     sessionInfo.style.display = ''
     keyToolbar.style.display = ''
-    sessionDots.style.display = ''
 
     // Reconnect terminal if we have sessions
     if (state.sessions.length > 0) {
@@ -329,7 +327,6 @@ function switchTab(tab) {
     plContainer.classList.remove('hidden')
     sessionInfo.style.display = 'none'
     keyToolbar.style.display = 'none'
-    sessionDots.style.display = 'none'
 
     // Render pipeline list
     renderPipelineList()
@@ -530,25 +527,6 @@ function renderEmpty() {
   document.getElementById('session-info').innerHTML = ''
 }
 
-function renderDots(sessions) {
-  const dotsEl = document.getElementById('session-dots')
-  dotsEl.innerHTML = ''
-
-  sessions.forEach((session, i) => {
-    const dot = document.createElement('button')
-    dot.className = `nav-dot ${session.state || 'idle'}`
-    if (i === state.activeIndex) dot.classList.add('active')
-    dot.title = session.customName || session.id
-    dot.addEventListener('click', () => {
-      if (state.activeIndex !== i) {
-        state.activeIndex = i
-        switchToSession(sessions[i])
-        renderDots(sessions)
-      }
-    })
-    dotsEl.appendChild(dot)
-  })
-}
 
 function switchToSession(session) {
   renderSessionInfo(session)
@@ -655,7 +633,6 @@ function openSessionSelector() {
       if (state.activeIndex !== index) {
         state.activeIndex = index
         switchToSession(state.sessions[index])
-        renderDots(state.sessions)
       }
       closeSessionSelector()
     })
@@ -675,54 +652,6 @@ function closeSessionSelector() {
   sheet.classList.add('hidden')
 }
 
-// ============================================================================
-// Swipe navigation
-// ============================================================================
-
-function setupSwipe() {
-  const targets = [
-    document.getElementById('session-info'),
-    document.getElementById('bottom-nav'),
-  ]
-  let startX = 0, startTime = 0, swiping = false
-
-  function onTouchStart(e) {
-    if (state.sessions.length <= 1) return
-    if (state.activeTab !== 'sessions') return
-    startX = e.touches[0].clientX
-    startTime = Date.now()
-    swiping = true
-  }
-
-  function onTouchEnd(e) {
-    if (!swiping) return
-    swiping = false
-
-    const dx = e.changedTouches[0].clientX - startX
-    const dt = Date.now() - startTime
-    const velocity = Math.abs(dx) / dt
-
-    if (Math.abs(dx) > 50 && velocity > 0.3) {
-      let newIndex = state.activeIndex
-      if (dx < 0 && state.activeIndex < state.sessions.length - 1) {
-        newIndex = state.activeIndex + 1
-      } else if (dx > 0 && state.activeIndex > 0) {
-        newIndex = state.activeIndex - 1
-      }
-      if (newIndex !== state.activeIndex) {
-        state.activeIndex = newIndex
-        switchToSession(state.sessions[state.activeIndex])
-        renderDots(state.sessions)
-      }
-    }
-  }
-
-  targets.forEach(el => {
-    el.addEventListener('touchstart', onTouchStart, { passive: true })
-    el.addEventListener('touchend', onTouchEnd, { passive: true })
-  })
-
-}
 
 // ============================================================================
 // Key toolbar
@@ -2014,9 +1943,6 @@ async function refresh() {
         renderSessionInfo(activeSession)
       }
 
-      if (changed) {
-        renderDots(sessions)
-      }
     }
   } catch (err) {
     console.error('[Mobile] Refresh failed:', err)
@@ -2028,7 +1954,6 @@ async function init() {
     navigator.serviceWorker.register('/sw.js').catch(() => {})
   }
 
-  setupSwipe()
   setupKeyToolbar()
   setupCreateSheet()
   setupPipelineSheet()
