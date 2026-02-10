@@ -98,6 +98,8 @@ export interface PipelineConfig {
   maxFixLoops?: number // Default: 3
   /** Number of competing dev agents (default: 1 = no competition). */
   competingAgents?: number // Default: 1
+  /** Severity threshold for gate filtering (default: 'critical' - only block on critical findings). */
+  severityThreshold?: Severity // Default: 'critical'
 }
 
 // ============================================================================
@@ -105,6 +107,9 @@ export interface PipelineConfig {
 // ============================================================================
 
 export type GateVerdict = 'pass' | 'fail' | 'skip'
+
+/** Severity levels for gate findings (security, code review). */
+export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info'
 
 export interface GateResult {
   verdict: GateVerdict
@@ -306,6 +311,184 @@ export interface CompetingResult {
 }
 
 // ============================================================================
+// Circuit Breaker (Fix Loop)
+// ============================================================================
+
+/** Signature identifying a unique failure pattern in the fix loop. */
+export interface FailureSignature {
+  /** Hash of the failure pattern (e.g. SHA256 of checkName:summary). */
+  hash: string
+  /** Human-readable description of what failed. */
+  description: string
+}
+
+/** Circuit breaker state tracking repeated failures. */
+export interface CircuitBreakerState {
+  /** Map of failure signature hashes to occurrence count. */
+  failureCounts: Record<string, number>
+  /** Timestamp when circuit breaker was last updated. */
+  lastUpdated: string
+}
+
+// ============================================================================
+// Escalation & User Actions
+// ============================================================================
+
+/** User action types for escalated pipelines. */
+export type UserActionType =
+  | 'skip-gate'
+  | 'override-severity'
+  | 'retry-with-feedback'
+  | 'abort'
+  | 'force-ship'
+
+/** A user action on an escalated pipeline. */
+export interface UserAction {
+  type: UserActionType
+  /** Gate name to skip (for skip-gate). */
+  gateName?: string
+  /** New severity threshold (for override-severity). */
+  severityThreshold?: Severity
+  /** User feedback text (for retry-with-feedback). */
+  feedback?: string
+  /** User who performed the action. */
+  user?: string
+  timestamp: string
+}
+
+/** Escalation state tracking. */
+export interface EscalationState {
+  /** Reason for escalation (e.g. "Max fix loops exceeded"). */
+  reason: string
+  /** ISO 8601 timestamp when escalated. */
+  escalatedAt: string
+  /** Fix attempt history with metadata. */
+  attemptHistory: AttemptHistoryEntry[]
+  /** Gate failure report at escalation time. */
+  failureReport?: string
+}
+
+/** Single entry in the fix attempt history. */
+export interface AttemptHistoryEntry {
+  /** Attempt number (1-indexed). */
+  attempt: number
+  /** Commit SHA after this attempt. */
+  commitSha?: string
+  /** Model used for this attempt. */
+  model?: string
+  /** Timestamp when attempt started. */
+  startedAt: string
+  /** Timestamp when attempt completed. */
+  completedAt?: string
+  /** Gate results after this attempt (if re-gated). */
+  gateResults?: GateResult[]
+}
+
+/** Audit log entry for user actions. */
+export interface AuditEntry {
+  /** User action that was performed. */
+  action: UserAction
+  /** Result of the action (success or error). */
+  result: 'success' | 'error'
+  /** Error message if result is 'error'. */
+  error?: string
+  /** Pipeline state after the action. */
+  newState?: PipelineState
+  timestamp: string
+}
+
+// ============================================================================
+// Enhanced Fix Context (Milestone 4)
+// ============================================================================
+
+/** Enhanced context for fix agent with full file contents and history. */
+export interface EnhancedFixContext {
+  /** Full file contents for files mentioned in failures. */
+  fullFileContents: Record<string, string>
+  /** Attempt history summary (what each attempt changed). */
+  attemptHistory: string
+  /** Affected modules (directory tree). */
+  affectedModules: string
+  /** Related files (imports/exports within affected modules). */
+  relatedFiles: string[]
+}
+
+/** Single attempt record in fix-loop history. */
+export interface AttemptHistory {
+  /** Attempt number (1-indexed). */
+  attempt: number
+  /** Gate failure report at this attempt. */
+  failureReport: string
+  /** Git diff produced by this attempt. */
+  diff: string
+  /** Human-readable summary of what changed. */
+  summary: string
+  /** ISO 8601 timestamp. */
+  timestamp: string
+}
+
+/** Failure pattern for learning system. */
+export interface FailurePattern {
+  /** Pattern type (e.g. 'command-injection', 'validation-missing'). */
+  patternType: string
+  /** Unique signature for this pattern (hash of key features). */
+  signature: string
+  /** Check name that failed. */
+  checkName: string
+  /** Programming language (e.g. 'typescript', 'python'). */
+  language?: string
+  /** Keywords extracted from failure. */
+  keywords?: string[]
+  /** Number of times this pattern has occurred. */
+  occurrences?: number
+  /** ISO 8601 timestamp of first occurrence. */
+  firstSeen: string
+  /** ISO 8601 timestamp of last occurrence. */
+  lastSeen: string
+  /** Successful fix for this pattern (if available). */
+  successfulFix?: Fix
+}
+
+/** A successful fix for a failure pattern. */
+export interface Fix {
+  /** Description of what was fixed. */
+  description: string
+  /** Files modified in the fix. */
+  filesModified: string[]
+  /** Git diff of the fix. */
+  diff: string
+  /** Fix approach summary. */
+  approach: string
+  /** ISO 8601 timestamp. */
+  timestamp: string
+}
+
+// ============================================================================
+// Competing Fix Results (Milestone 5)
+// ============================================================================
+
+/**
+ * Result from a competing fix strategy.
+ * Used by the competing fix runner to track parallel fix attempts.
+ */
+export interface CompetingFixResult {
+  /** Strategy name that produced this result. */
+  strategyName: string
+  /** Worktree path where this fix was applied. */
+  worktreePath: string
+  /** Git diff produced by this fix. */
+  diff: string
+  /** Gate score after applying this fix (number of passed checks). */
+  gateScore: number
+  /** True if this strategy was selected as the winner. */
+  winner: boolean
+  /** Commit SHA after the fix was applied. */
+  commitSha?: string
+  /** Gate results after this fix (populated after re-gating). */
+  gateResults?: GateResult[]
+}
+
+// ============================================================================
 // Milestone Progress Tracking
 // ============================================================================
 
@@ -383,6 +566,10 @@ export interface PipelineRun {
   skipChecks?: string[]
   /** User-provided instructions injected into the fix-loop prompt. */
   userInstructions?: string
+  /** Tech stacks that failed dependency installation (e.g. ['node', 'python']). */
+  dependencyFailures?: string[]
+  /** Circuit breaker state for detecting repeated fix-loop failures. */
+  circuitBreakerState?: CircuitBreakerState
 
   // --- Milestone tracking ---
   /**
@@ -412,6 +599,10 @@ export interface PipelineRun {
   // --- Review rounds ---
   /** Number of times the pipeline has been sent back for review feedback or review points. */
   reviewRounds?: number
+
+  // --- Escalation ---
+  /** Escalation state when pipeline is escalated. */
+  escalation?: EscalationState
 
   // --- Error ---
   /** Error message if state === 'error'. */

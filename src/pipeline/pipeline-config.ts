@@ -59,6 +59,7 @@ export const PipelineConfigSchema = z.object({
   }),
   maxFixLoops: z.number().int().nonnegative().default(3),
   competingAgents: z.number().int().min(1).max(10).default(1),
+  severityThreshold: z.enum(['critical', 'high', 'medium', 'low', 'info']).default('critical'),
 })
 
 // ============================================================================

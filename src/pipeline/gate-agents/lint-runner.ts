@@ -126,16 +126,19 @@ interface StackLintResult extends StackRunnerResult {
  * stack that has one configured, scoped to files matching that stack's
  * lintableExtensions. When not provided, falls back to legacy Node.js
  * detection for backward compatibility.
+ *
+ * Skips stacks that failed dependency installation (tracked in dependencyFailures).
  */
 export async function runLintRunner(
   worktreePath: string,
   sourceBranch: string,
   baseCommit?: string,
   techStacks?: TechStack[],
+  dependencyFailures?: string[],
 ): Promise<GateResult> {
   // Multi-tech path: run per-stack lints
   if (techStacks && techStacks.length > 0) {
-    return runMultiStackLint(worktreePath, sourceBranch, baseCommit, techStacks)
+    return runMultiStackLint(worktreePath, sourceBranch, baseCommit, techStacks, dependencyFailures)
   }
 
   // Legacy path: detect from package.json (backward compat)
@@ -149,18 +152,33 @@ export async function runLintRunner(
 /**
  * Run lint for each detected tech stack. Collects per-stack results and
  * aggregates the verdict: any fail → 'fail', all skip → 'skip', else 'pass'.
+ *
+ * Skips stacks that failed dependency installation.
  */
 function runMultiStackLint(
   worktreePath: string,
   sourceBranch: string,
   baseCommit: string | undefined,
   techStacks: TechStack[],
+  dependencyFailures?: string[],
 ): GateResult {
   const timestamp = new Date().toISOString()
   const stackResults: StackLintResult[] = []
+  const failedDeps = new Set(dependencyFailures ?? [])
 
   for (const stack of techStacks) {
     const relPath = relative(worktreePath, stack.absolutePath) || '.'
+
+    // Skip if dependency installation failed for this tech
+    if (failedDeps.has(stack.type)) {
+      stackResults.push({
+        type: stack.type,
+        path: relPath,
+        status: 'skip',
+        output: 'Skipped: dependency installation failed',
+      })
+      continue
+    }
 
     if (!stack.commands.lint) {
       stackResults.push({

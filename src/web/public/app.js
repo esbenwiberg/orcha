@@ -4890,7 +4890,39 @@ function updatePipelineSidebar(pipelines) {
     return;
   }
 
-  for (const pipeline of pipelines) {
+  // Separate escalated pipelines
+  const escalatedPipelines = pipelines.filter(p => p.state === 'escalated');
+  const normalPipelines = pipelines.filter(p => p.state !== 'escalated');
+
+  // Show escalated section if any
+  if (escalatedPipelines.length > 0) {
+    const escalatedHeader = document.createElement('div');
+    escalatedHeader.className = 'pipeline-section-header escalated';
+    escalatedHeader.innerHTML = '<span>Escalated</span><span class="pipeline-count-badge">' + escalatedPipelines.length + '</span>';
+    pipelineListEl.appendChild(escalatedHeader);
+
+    for (const pipeline of escalatedPipelines) {
+      pipelineListEl.appendChild(createPipelineItem(pipeline));
+    }
+  }
+
+  // Show all pipelines section
+  if (normalPipelines.length > 0) {
+    const allHeader = document.createElement('div');
+    allHeader.className = 'pipeline-section-header';
+    allHeader.innerHTML = '<span>All Pipelines</span>';
+    pipelineListEl.appendChild(allHeader);
+
+    for (const pipeline of normalPipelines) {
+      pipelineListEl.appendChild(createPipelineItem(pipeline));
+    }
+  }
+}
+
+/**
+ * Create a pipeline list item
+ */
+function createPipelineItem(pipeline) {
     const item = document.createElement('div');
     item.className = 'pipeline-item';
     if (state.selectedPipeline === pipeline.id) {
@@ -4928,8 +4960,7 @@ function updatePipelineSidebar(pipelines) {
     }
 
     item.addEventListener('click', () => selectPipeline(pipeline.id));
-    pipelineListEl.appendChild(item);
-  }
+    return item;
 }
 
 /**
@@ -5146,6 +5177,9 @@ function renderPipelineDetail(pipelineId) {
   // Gate failure details (shown when gate has failed)
   html += renderGateFailureDetails(pipeline);
 
+  // Escalation section (shown when pipeline is escalated)
+  html += renderEscalationSection(pipeline);
+
   // Two-column layout
   html += '<div class="pipeline-layout">';
 
@@ -5160,6 +5194,14 @@ function renderPipelineDetail(pipelineId) {
   html += '<div class="pipeline-section-title">Activity Timeline</div>';
   html += '<div id="activity-timeline-' + pipeline.id + '" class="activity-timeline">';
   html += '<div class="timeline-loading">Loading activity...</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Fix-Loop Metrics (populated async)
+  html += '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-title">Fix-Loop Metrics</div>';
+  html += '<div id="metrics-container-' + pipeline.id + '" class="metrics-container">';
+  html += '<div class="timeline-loading">Loading metrics...</div>';
   html += '</div>';
   html += '</div>';
 
@@ -5240,8 +5282,16 @@ function renderPipelineDetail(pipelineId) {
   // Fetch and render the activity timeline asynchronously
   fetchAndRenderTimeline(pipeline.id);
 
+  // Fetch and render fix-loop metrics
+  fetchAndRenderMetrics(pipeline.id);
+
   // Fetch and render per-stage usage breakdown
   fetchAndRenderStageUsage(pipeline.id);
+
+  // Fetch and render escalation details if escalated
+  if (pipeline.state === 'escalated') {
+    renderEscalationDetails(pipeline.id);
+  }
 }
 
 /**
@@ -5571,6 +5621,111 @@ async function fetchAndRenderTimeline(pipelineId) {
   } catch (err) {
     container.innerHTML = '<div class="timeline-empty">Failed to load activity</div>';
   }
+}
+
+/**
+ * Fetch fix-loop metrics and render charts.
+ */
+async function fetchAndRenderMetrics(pipelineId) {
+  const container = document.getElementById('metrics-container-' + pipelineId);
+  if (!container) return;
+
+  try {
+    const res = await fetch('/api/pipelines/metrics');
+    if (!res.ok) {
+      container.innerHTML = '<div class="timeline-empty">Failed to load metrics</div>';
+      return;
+    }
+    const metrics = await res.json();
+
+    if (!metrics || metrics.totalAttempts === 0) {
+      container.innerHTML = '<div class="timeline-empty">No metrics data yet. Run some pipelines to see metrics.</div>';
+      return;
+    }
+
+    container.innerHTML = renderMetrics(metrics);
+  } catch (err) {
+    container.innerHTML = '<div class="timeline-empty">Failed to load metrics</div>';
+  }
+}
+
+/**
+ * Render fix-loop metrics as HTML with simple text-based charts.
+ */
+function renderMetrics(metrics) {
+  let html = '<div class="metrics-grid">';
+
+  // Summary stats
+  html += '<div class="metrics-summary">';
+  html += '<div class="metric-card">';
+  html += '<div class="metric-label">Total Pipelines</div>';
+  html += '<div class="metric-value">' + metrics.totalPipelines + '</div>';
+  html += '</div>';
+  html += '<div class="metric-card">';
+  html += '<div class="metric-label">Total Attempts</div>';
+  html += '<div class="metric-value">' + metrics.totalAttempts + '</div>';
+  html += '</div>';
+  html += '<div class="metric-card">';
+  html += '<div class="metric-label">Circuit Breaker Triggers</div>';
+  html += '<div class="metric-value">' + metrics.circuitBreakerTriggers + '</div>';
+  html += '</div>';
+  html += '<div class="metric-card">';
+  html += '<div class="metric-label">Avg Time Per Attempt</div>';
+  html += '<div class="metric-value">' + (metrics.averageTimePerAttemptMs / 1000).toFixed(1) + 's</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Attempts Distribution Bar Chart
+  html += '<div class="metrics-chart">';
+  html += '<div class="metrics-chart-title">Attempts Distribution</div>';
+  html += '<div class="bar-chart">';
+  const maxCount = Math.max(
+    metrics.attemptsDistribution['1'] || 0,
+    metrics.attemptsDistribution['2'] || 0,
+    metrics.attemptsDistribution['3'] || 0,
+    metrics.attemptsDistribution['escalated'] || 0
+  );
+  ['1', '2', '3', 'escalated'].forEach(key => {
+    const count = metrics.attemptsDistribution[key] || 0;
+    const width = maxCount > 0 ? (count / maxCount) * 100 : 0;
+    html += '<div class="bar-row">';
+    html += '<div class="bar-label">' + (key === 'escalated' ? 'Escalated' : key + ' attempt' + (key === '1' ? '' : 's')) + '</div>';
+    html += '<div class="bar-container">';
+    html += '<div class="bar-fill" style="width:' + width + '%"></div>';
+    html += '<div class="bar-value">' + count + '</div>';
+    html += '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '</div>';
+
+  // Success Rate by Pattern
+  html += '<div class="metrics-chart">';
+  html += '<div class="metrics-chart-title">Success Rate by Pattern</div>';
+  const patterns = Object.keys(metrics.successRateByPattern);
+  if (patterns.length === 0) {
+    html += '<div class="timeline-empty">No pattern data yet</div>';
+  } else {
+    html += '<div class="pattern-list">';
+    patterns.forEach(pattern => {
+      const data = metrics.successRateByPattern[pattern];
+      const rate = (data.rate * 100).toFixed(0);
+      html += '<div class="pattern-row">';
+      html += '<div class="pattern-name">' + escapeHtml(pattern) + '</div>';
+      html += '<div class="pattern-stats">';
+      html += '<div class="pattern-bar-container">';
+      html += '<div class="pattern-bar" style="width:' + rate + '%"></div>';
+      html += '</div>';
+      html += '<div class="pattern-rate">' + rate + '% (' + data.successes + '/' + data.attempts + ')</div>';
+      html += '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+
+  html += '</div>'; // end metrics-grid
+  return html;
 }
 
 /**
@@ -6541,6 +6696,351 @@ function toggleShipGateDetail(idx) {
   }
 }
 
+
+// =========================================================================
+// Escalation UI
+// =========================================================================
+
+/**
+ * Fetch escalation details for a pipeline
+ */
+async function fetchEscalationDetails(pipelineId) {
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/escalation');
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Render escalation section (shown when pipeline is escalated)
+ */
+function renderEscalationSection(pipeline) {
+  if (pipeline.state !== 'escalated') return '';
+
+  let html = '<div class="escalation-section">';
+  html += '<div class="escalation-header">';
+  html += '<span class="escalation-icon">⚠️</span>';
+  html += '<div>';
+  html += '<div class="escalation-title">Pipeline Escalated</div>';
+  html += '<div class="escalation-subtitle">Manual intervention required</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Escalation details will be loaded async
+  html += '<div id="escalation-details-' + pipeline.id + '" class="escalation-details">';
+  html += '<div class="escalation-loading">Loading escalation details...</div>';
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Render escalation details after async fetch
+ */
+async function renderEscalationDetails(pipelineId) {
+  const container = document.getElementById('escalation-details-' + pipelineId);
+  if (!container) return;
+
+  const details = await fetchEscalationDetails(pipelineId);
+  if (!details || !details.escalation) {
+    container.innerHTML = '<div class="escalation-error">Failed to load escalation details</div>';
+    return;
+  }
+
+  const { escalation, gateResults, auditTrail } = details;
+
+  let html = '';
+
+  // Escalation reason
+  html += '<div class="escalation-reason">';
+  html += '<strong>Reason:</strong> ' + escapeHtml(escalation.reason);
+  html += '</div>';
+
+  // Action buttons
+  html += '<div class="escalation-actions">';
+  html += '<div class="escalation-actions-title">Choose an action:</div>';
+  html += '<div class="escalation-action-grid">';
+
+  // Skip gate buttons (one per failed check)
+  const failedChecks = gateResults.filter(r => r.verdict === 'fail');
+  failedChecks.forEach(check => {
+    html += '<button class="escalation-btn skip" onclick="escalationAction(\'' + pipelineId + '\', \'skip-gate\', \'' + escapeHtml(check.checkName) + '\')">';
+    html += '✓ Skip ' + escapeHtml(check.checkName);
+    html += '</button>';
+  });
+
+  // Override severity buttons
+  const severities = ['high', 'medium', 'low', 'info'];
+  severities.forEach(sev => {
+    html += '<button class="escalation-btn override" onclick="escalationAction(\'' + pipelineId + '\', \'override-severity\', \'' + sev + '\')">';
+    html += 'Override: ' + sev.toUpperCase();
+    html += '</button>';
+  });
+
+  // Retry with feedback
+  html += '<button class="escalation-btn retry" onclick="showFeedbackModal(\'' + pipelineId + '\')">';
+  html += 'Retry with Feedback...';
+  html += '</button>';
+
+  // Abort
+  html += '<button class="escalation-btn abort" onclick="escalationAction(\'' + pipelineId + '\', \'abort\')">';
+  html += 'Abort Pipeline';
+  html += '</button>';
+
+  // Force ship (with warning)
+  html += '<button class="escalation-btn force-ship" onclick="showForceShipModal(\'' + pipelineId + '\')">';
+  html += '⚠️ Force Ship';
+  html += '</button>';
+
+  html += '</div>';
+  html += '</div>';
+
+  // Failure report (expandable)
+  if (escalation.failureReport) {
+    html += '<div class="escalation-failure-report">';
+    html += '<div class="escalation-section-title" onclick="toggleEscalationSection(\'failure-report-' + pipelineId + '\')">';
+    html += '<span class="expand-arrow">▶</span> Failure Report';
+    html += '</div>';
+    html += '<div class="escalation-collapse" id="failure-report-' + pipelineId + '" style="display:none;">';
+    html += '<pre class="failure-report-text">' + escapeHtml(escalation.failureReport) + '</pre>';
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Attempt history timeline
+  if (escalation.attemptHistory && escalation.attemptHistory.length > 0) {
+    html += '<div class="escalation-attempt-history">';
+    html += '<div class="escalation-section-title" onclick="toggleEscalationSection(\'attempt-history-' + pipelineId + '\')">';
+    html += '<span class="expand-arrow">▶</span> Attempt History (' + escalation.attemptHistory.length + ')';
+    html += '</div>';
+    html += '<div class="escalation-collapse" id="attempt-history-' + pipelineId + '" style="display:none;">';
+    html += '<div class="attempt-timeline">';
+
+    escalation.attemptHistory.forEach((attempt, idx) => {
+      html += '<div class="attempt-item">';
+      html += '<div class="attempt-number">Attempt ' + attempt.attempt + '</div>';
+      html += '<div class="attempt-details">';
+      html += '<div class="attempt-detail-row"><span>Model:</span> ' + escapeHtml(attempt.model || 'unknown') + '</div>';
+      html += '<div class="attempt-detail-row"><span>Commit:</span> <code>' + (attempt.commitSha ? attempt.commitSha.slice(0, 7) : 'N/A') + '</code></div>';
+      if (attempt.completedAt) {
+        html += '<div class="attempt-detail-row"><span>Completed:</span> ' + formatTimestamp(attempt.completedAt) + '</div>';
+      }
+      html += '</div>';
+      html += '</div>';
+    });
+
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Audit trail
+  if (auditTrail && auditTrail.length > 0) {
+    html += '<div class="escalation-audit-trail">';
+    html += '<div class="escalation-section-title" onclick="toggleEscalationSection(\'audit-trail-' + pipelineId + '\')">';
+    html += '<span class="expand-arrow">▶</span> Audit Trail (' + auditTrail.length + ')';
+    html += '</div>';
+    html += '<div class="escalation-collapse" id="audit-trail-' + pipelineId + '" style="display:none;">';
+    html += '<div class="audit-list">';
+
+    auditTrail.reverse().forEach(entry => {
+      const statusClass = entry.result === 'success' ? 'success' : 'error';
+      html += '<div class="audit-entry ' + statusClass + '">';
+      html += '<div class="audit-timestamp">' + formatTimestamp(entry.timestamp) + '</div>';
+      html += '<div class="audit-action">' + escapeHtml(entry.action.type) + '</div>';
+      if (entry.result === 'error') {
+        html += '<div class="audit-error">' + escapeHtml(entry.error || 'Unknown error') + '</div>';
+      } else {
+        html += '<div class="audit-new-state">→ ' + escapeHtml(entry.newState || 'unknown') + '</div>';
+      }
+      html += '</div>';
+    });
+
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+/**
+ * Toggle an escalation collapsible section
+ */
+function toggleEscalationSection(id) {
+  const elem = document.getElementById(id);
+  if (!elem) return;
+  const isHidden = elem.style.display === 'none';
+  elem.style.display = isHidden ? 'block' : 'none';
+
+  // Rotate arrow
+  const title = elem.previousElementSibling;
+  if (title) {
+    const arrow = title.querySelector('.expand-arrow');
+    if (arrow) arrow.innerHTML = isHidden ? '▼' : '▶';
+  }
+}
+
+/**
+ * Process an escalation action
+ */
+async function escalationAction(pipelineId, actionType, param) {
+  const action = {
+    type: actionType,
+    timestamp: new Date().toISOString(),
+  };
+
+  if (actionType === 'skip-gate') {
+    action.gateName = param;
+  } else if (actionType === 'override-severity') {
+    action.severityThreshold = param;
+  }
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/escalation/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(action),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Action failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+
+    showToast('Action executed successfully', 'success');
+
+    // Refresh pipeline details
+    await refreshPipelines();
+    selectPipeline(pipelineId);
+  } catch (err) {
+    console.error('Escalation action error:', err);
+    showToast('Action failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Show modal for retry with feedback
+ */
+function showFeedbackModal(pipelineId) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-dialog">
+      <h3>Retry with Feedback</h3>
+      <p style="color:#aaa;font-size:0.85rem;margin-bottom:12px;">Provide guidance to help the fix agent address the issues.</p>
+      <textarea id="feedback-text" rows="6" placeholder="E.g. Focus on fixing command injection in git-utils.ts" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;resize:vertical;font-family:monospace;"></textarea>
+      <div class="modal-actions">
+        <button class="modal-btn cancel" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="modal-btn confirm" onclick="submitFeedback('${pipelineId}')">Submit</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('feedback-text').focus();
+}
+
+/**
+ * Submit feedback and retry
+ */
+async function submitFeedback(pipelineId) {
+  const feedbackText = document.getElementById('feedback-text').value.trim();
+  if (!feedbackText) {
+    showToast('Please enter feedback', 'error');
+    return;
+  }
+
+  const action = {
+    type: 'retry-with-feedback',
+    feedback: feedbackText,
+    timestamp: new Date().toISOString(),
+  };
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/escalation/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(action),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Retry failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+
+    document.querySelector('.modal-overlay').remove();
+    showToast('Pipeline retry started with feedback', 'success');
+
+    // Refresh pipeline details
+    await refreshPipelines();
+    selectPipeline(pipelineId);
+  } catch (err) {
+    console.error('Feedback submission error:', err);
+    showToast('Retry failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Show confirmation modal for force ship
+ */
+function showForceShipModal(pipelineId) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-dialog force-ship-modal">
+      <h3 style="color:#e74c3c;">⚠️ Force Ship Warning</h3>
+      <p style="color:#aaa;font-size:0.9rem;margin-bottom:16px;">
+        This will <strong>bypass all remaining gate checks</strong> and deploy the code immediately.
+        This action should only be used in exceptional circumstances.
+      </p>
+      <div class="modal-actions">
+        <button class="modal-btn cancel" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="modal-btn force-ship-confirm" onclick="confirmForceShip('${pipelineId}')">Force Ship</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+/**
+ * Confirm and execute force ship
+ */
+async function confirmForceShip(pipelineId) {
+  const action = {
+    type: 'force-ship',
+    timestamp: new Date().toISOString(),
+  };
+
+  try {
+    const res = await fetch('/api/pipelines/' + pipelineId + '/escalation/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(action),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      showToast('Force ship failed: ' + (err.error || 'Unknown error'), 'error');
+      return;
+    }
+
+    document.querySelector('.modal-overlay').remove();
+    showToast('Pipeline force shipped', 'success');
+
+    // Refresh pipeline details
+    await refreshPipelines();
+    selectPipeline(pipelineId);
+  } catch (err) {
+    console.error('Force ship error:', err);
+    showToast('Force ship failed: ' + err.message, 'error');
+  }
+}
 
 // Start app
 init();

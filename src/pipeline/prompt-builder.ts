@@ -568,6 +568,14 @@ export interface FixLoopContext {
   attempt: number
   /** Max fix attempts allowed. */
   maxAttempts: number
+  /** Enhanced context (full file contents, history, affected modules). */
+  enhancedContext?: {
+    fullFileContents: Record<string, string>
+    attemptHistory: string
+    affectedModules: string
+    relatedFiles: string[]
+    successfulFixExamples?: string
+  }
 }
 
 /**
@@ -804,7 +812,7 @@ export async function buildSecurityReviewPrompt(
     console.warn(`[prompt-builder] ${warning}`)
     await logWarning(warning)
 
-    // FALLBACK: Original hardcoded implementation
+    // FALLBACK: Original hardcoded implementation with severity classification
     const systemPrompt = [
       'You are a security review agent in the Orcha pipeline gate.',
       'Your job is to identify security vulnerabilities in the code changes.',
@@ -826,6 +834,18 @@ export async function buildSecurityReviewPrompt(
       '- Be practical: only flag real, exploitable issues — not theoretical concerns.',
       '- Internal helper functions called only by trusted code do NOT need input validation.',
       '- If no security issues found, that is a valid pass.',
+      '',
+      'SEVERITY CLASSIFICATION (CRITICAL):',
+      '- critical: Actively exploitable vulnerabilities with direct user input',
+      '  Examples: Command injection with user input, SQL injection on public API, auth bypass',
+      '- high: Exploitable with specific conditions or attacker control',
+      '  Examples: Prototype pollution IF attacker controls input, XSS on semi-trusted input',
+      '- medium: Defense-in-depth issues, not directly exploitable',
+      '  Examples: Missing validation on internal functions, weak crypto on non-sensitive data',
+      '- low: Theoretical vulnerabilities requiring unlikely conditions',
+      '  Examples: ReDoS on unlikely input patterns, timing attacks on non-sensitive operations',
+      '- info: Best practices, informational suggestions',
+      '  Examples: Could use safer API, consider additional hardening',
       '',
       'Output your verdict as JSON:',
       '{',
@@ -888,7 +908,7 @@ export async function buildCodeReviewPrompt(
     console.warn(`[prompt-builder] ${warning}`)
     await logWarning(warning)
 
-    // FALLBACK: Original hardcoded implementation
+    // FALLBACK: Original hardcoded implementation with severity classification
     const systemPrompt = [
       'You are a code review agent in the Orcha pipeline gate.',
       'Your job is to review the code changes for correctness and quality.',
@@ -908,6 +928,16 @@ export async function buildCodeReviewPrompt(
       '- Do NOT nitpick style, naming, or formatting — lint handles that.',
       '- Do NOT suggest refactors, abstractions, or "improvements".',
       '- If the code is correct and clean, that is a valid pass.',
+      '',
+      'SEVERITY CLASSIFICATION (CRITICAL):',
+      '- critical: Logic errors causing crashes, data corruption, or complete feature failure',
+      '  Examples: Null pointer dereference, type errors, unhandled promise rejections',
+      '- major: Unhandled error cases, resource leaks, race conditions',
+      '  Examples: Missing error handling, unclosed file handles, deadlocks',
+      '- minor: Inefficiencies, code clarity issues that do not affect correctness',
+      '  Examples: Suboptimal algorithms, unclear variable names (only if severely confusing)',
+      '- suggestion: Refactoring ideas, style improvements, abstractions',
+      '  Examples: Could extract this into a helper, consider memoization',
       '',
       'Output your verdict as JSON:',
       '{',
@@ -973,20 +1003,87 @@ export async function buildFixLoopPrompt(
     console.warn(`[prompt-builder] ${warning}`)
     await logWarning(warning)
 
-    // FALLBACK: Original hardcoded implementation
+    // FALLBACK: Enhanced implementation with context builder features
+    const enhancedSections: string[] = []
+
+    // Add enhanced context sections if available
+    if (ctx.enhancedContext) {
+      // Full file contents section
+      if (Object.keys(ctx.enhancedContext.fullFileContents).length > 0) {
+        enhancedSections.push('## Full File Contents (files with failures)')
+        enhancedSections.push('')
+        for (const [filePath, content] of Object.entries(ctx.enhancedContext.fullFileContents)) {
+          enhancedSections.push(`### ${filePath}`)
+          enhancedSections.push('```')
+          // Truncate very large files (keep first 500 lines)
+          const lines = content.split('\n')
+          const truncated = lines.length > 500 ? lines.slice(0, 500).join('\n') + '\n... (truncated)' : content
+          enhancedSections.push(truncated)
+          enhancedSections.push('```')
+          enhancedSections.push('')
+        }
+      }
+
+      // Attempt history section
+      if (ctx.enhancedContext.attemptHistory && ctx.enhancedContext.attemptHistory !== 'No previous fix attempts.') {
+        enhancedSections.push('## Attempt History (what previous fixes tried)')
+        enhancedSections.push('')
+        enhancedSections.push(ctx.enhancedContext.attemptHistory)
+        enhancedSections.push('')
+      }
+
+      // Successful fix examples section
+      if (ctx.enhancedContext.successfulFixExamples) {
+        enhancedSections.push('## Similar Failures Fixed Previously')
+        enhancedSections.push('')
+        enhancedSections.push(ctx.enhancedContext.successfulFixExamples)
+        enhancedSections.push('')
+      }
+
+      // Affected modules section
+      if (ctx.enhancedContext.affectedModules && ctx.enhancedContext.affectedModules !== '(No files identified in failures)') {
+        enhancedSections.push('## Affected Modules (directory tree)')
+        enhancedSections.push('')
+        enhancedSections.push('```')
+        enhancedSections.push(ctx.enhancedContext.affectedModules)
+        enhancedSections.push('```')
+        enhancedSections.push('')
+      }
+
+      // Related files section
+      if (ctx.enhancedContext.relatedFiles && ctx.enhancedContext.relatedFiles.length > 0) {
+        enhancedSections.push('## Related Files (imports/exports in affected modules)')
+        enhancedSections.push('')
+        enhancedSections.push(ctx.enhancedContext.relatedFiles.map((f) => `- ${f}`).join('\n'))
+        enhancedSections.push('')
+      }
+    }
+
     const systemPrompt = [
       'You are a fix agent in the Orcha pipeline.',
       'The dev agent\'s implementation failed the quality gate. Your job is to fix the issues.',
       '',
       'Guidelines:',
       '- Read the failure report carefully — it tells you exactly what went wrong.',
-      '- Fix ONLY the issues identified. Do not refactor or re-implement unrelated code.',
-      '- The existing code changes are already committed. Make targeted fixes on top.',
+      '- You have access to full file contents and previous attempt history below.',
       '- Follow the blueprint and existing code conventions.',
       '- Do NOT run tests — the gate will re-run automatically after your fixes.',
       '- Do NOT commit your changes — the pipeline handles commits automatically.',
       '',
+      '## Scope Permissions',
+      '',
+      'You are NOT limited to "targeted fixes". You may:',
+      '- Refactor functions within affected modules',
+      '- Extract helper functions for repeated patterns',
+      '- Reorganize validation logic',
+      '- Change function signatures if it improves safety',
+      '',
+      'Stay within the affected modules (listed below), but feel free to',
+      'make substantial improvements to the code structure.',
+      '',
       `This is fix attempt ${ctx.attempt} of ${ctx.maxAttempts}.`,
+      '',
+      ...enhancedSections,
       '',
       '## Blueprint',
       ctx.blueprintJson,
@@ -1011,7 +1108,7 @@ export async function buildFixLoopPrompt(
       '',
       '# Instructions',
       'Fix the issues described in the gate failure report above.',
-      'Make targeted changes to resolve each failure.',
+      'You may refactor and improve code structure within affected modules.',
       `Source branch: ${codebase.sourceBranch}`,
     ].join('\n')
 
