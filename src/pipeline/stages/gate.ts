@@ -31,8 +31,10 @@ import type { PipelineRun, GateResult, StageResult, CompetingResult } from '../t
 import { transition, recordStageResult, transitionToError } from '../pipeline-engine.js'
 import { getPipelineDir } from '../pipeline-store.js'
 import { savePipelineRun } from '../pipeline-store.js'
+import { detectTechStacks } from '../tech-scanner.js'
 import { runTestRunner } from '../gate-agents/test-runner.js'
 import { runLintRunner } from '../gate-agents/lint-runner.js'
+import { runBuildRunner } from '../gate-agents/build-runner.js'
 import { runAcValidator } from '../gate-agents/ac-validator.js'
 import { runAdversary } from '../gate-agents/adversary.js'
 import { runSecurityReview } from '../gate-agents/security-review.js'
@@ -97,6 +99,9 @@ async function runSingleGateStage(
   const startedAt = new Date().toISOString()
 
   try {
+    // Detect tech stacks for multi-tech runners
+    const techStacks = detectTechStacks(run.worktreePath)
+
     // Run all gate agents in parallel (respecting skipChecks)
     const agentOpts = {
       modelOverride: opts?.modelOverride,
@@ -104,16 +109,17 @@ async function runSingleGateStage(
     }
     const skip = new Set(run.skipChecks ?? [])
 
-    const [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
-      skip.has('test') ? makeSkippedResult('test') : runTestRunner(run.worktreePath),
-      skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(run.worktreePath, run.sourceBranch, run.baseCommit),
+    const [testResult, lintResult, buildResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
+      skip.has('test') ? makeSkippedResult('test') : runTestRunner(run.worktreePath, techStacks),
+      skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(run.worktreePath, run.sourceBranch, run.baseCommit, techStacks),
+      skip.has('build') ? makeSkippedResult('build') : runBuildRunner(run.worktreePath, techStacks),
       skip.has('ac-validator') ? makeSkippedResult('ac-validator') : runAcValidator(run, agentOpts),
       skip.has('adversary') ? makeSkippedResult('adversary') : runAdversary(run, agentOpts),
       skip.has('security') ? makeSkippedResult('security') : runSecurityReview(run, agentOpts),
       skip.has('code-review') ? makeSkippedResult('code-review') : runCodeReview(run, agentOpts),
     ])
 
-    const results: GateResult[] = [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult]
+    const results: GateResult[] = [testResult, lintResult, buildResult, acResult, adversaryResult, securityResult, codeReviewResult]
 
     // Save individual results to disk
     const gateResultsDir = join(getPipelineDir(run.id), 'gate-results')
@@ -376,6 +382,9 @@ async function evaluateCompetitor(
   competitor: CompetingResult,
   opts?: GateOptions,
 ): Promise<CompetitorEvaluation> {
+  // Detect tech stacks for competitor's worktree
+  const techStacks = detectTechStacks(competitor.worktreePath)
+
   const agentOpts = {
     modelOverride: opts?.modelOverride,
     budgetOverride: opts?.budgetOverride,
@@ -388,16 +397,17 @@ async function evaluateCompetitor(
   }
   const skip = new Set(run.skipChecks ?? [])
 
-  const [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
-    skip.has('test') ? makeSkippedResult('test') : runTestRunner(competitor.worktreePath),
-    skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(competitor.worktreePath, run.sourceBranch, run.baseCommit),
+  const [testResult, lintResult, buildResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
+    skip.has('test') ? makeSkippedResult('test') : runTestRunner(competitor.worktreePath, techStacks),
+    skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(competitor.worktreePath, run.sourceBranch, run.baseCommit, techStacks),
+    skip.has('build') ? makeSkippedResult('build') : runBuildRunner(competitor.worktreePath, techStacks),
     skip.has('ac-validator') ? makeSkippedResult('ac-validator') : runAcValidator(competitorRun, agentOpts),
     skip.has('adversary') ? makeSkippedResult('adversary') : runAdversary(competitorRun, agentOpts),
     skip.has('security') ? makeSkippedResult('security') : runSecurityReview(competitorRun, agentOpts),
     skip.has('code-review') ? makeSkippedResult('code-review') : runCodeReview(competitorRun, agentOpts),
   ])
 
-  const results: GateResult[] = [testResult, lintResult, acResult, adversaryResult, securityResult, codeReviewResult]
+  const results: GateResult[] = [testResult, lintResult, buildResult, acResult, adversaryResult, securityResult, codeReviewResult]
   const { passed, summary } = aggregateVerdicts(results)
   const score = results.filter((r) => r.verdict === 'pass').length
 
@@ -444,7 +454,7 @@ function makeSkippedResult(checkName: string): GateResult {
 /**
  * Gate check name mapping (friendly name → agent function key).
  */
-const GATE_CHECK_NAMES = ['test', 'lint', 'ac-validator', 'adversary', 'security', 'code-review'] as const
+const GATE_CHECK_NAMES = ['test', 'lint', 'build', 'ac-validator', 'adversary', 'security', 'code-review'] as const
 
 // ============================================================================
 // Verdict Aggregation
