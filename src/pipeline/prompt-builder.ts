@@ -466,6 +466,14 @@ export interface FixLoopContext {
   attempt: number
   /** Max fix attempts allowed. */
   maxAttempts: number
+  /** Enhanced context (full file contents, history, affected modules). */
+  enhancedContext?: {
+    fullFileContents: Record<string, string>
+    attemptHistory: string
+    affectedModules: string
+    relatedFiles: string[]
+    successfulFixExamples?: string
+  }
 }
 
 /**
@@ -811,19 +819,86 @@ export function buildFixLoopPrompt(
   codebase: CodebaseContext,
   ctx: FixLoopContext,
 ): PromptParts {
+  const enhancedSections: string[] = []
+
+  // Add enhanced context sections if available
+  if (ctx.enhancedContext) {
+    // Full file contents section
+    if (Object.keys(ctx.enhancedContext.fullFileContents).length > 0) {
+      enhancedSections.push('## Full File Contents (files with failures)')
+      enhancedSections.push('')
+      for (const [filePath, content] of Object.entries(ctx.enhancedContext.fullFileContents)) {
+        enhancedSections.push(`### ${filePath}`)
+        enhancedSections.push('```')
+        // Truncate very large files (keep first 500 lines)
+        const lines = content.split('\n')
+        const truncated = lines.length > 500 ? lines.slice(0, 500).join('\n') + '\n... (truncated)' : content
+        enhancedSections.push(truncated)
+        enhancedSections.push('```')
+        enhancedSections.push('')
+      }
+    }
+
+    // Attempt history section
+    if (ctx.enhancedContext.attemptHistory && ctx.enhancedContext.attemptHistory !== 'No previous fix attempts.') {
+      enhancedSections.push('## Attempt History (what previous fixes tried)')
+      enhancedSections.push('')
+      enhancedSections.push(ctx.enhancedContext.attemptHistory)
+      enhancedSections.push('')
+    }
+
+    // Successful fix examples section
+    if (ctx.enhancedContext.successfulFixExamples) {
+      enhancedSections.push('## Similar Failures Fixed Previously')
+      enhancedSections.push('')
+      enhancedSections.push(ctx.enhancedContext.successfulFixExamples)
+      enhancedSections.push('')
+    }
+
+    // Affected modules section
+    if (ctx.enhancedContext.affectedModules && ctx.enhancedContext.affectedModules !== '(No files identified in failures)') {
+      enhancedSections.push('## Affected Modules (directory tree)')
+      enhancedSections.push('')
+      enhancedSections.push('```')
+      enhancedSections.push(ctx.enhancedContext.affectedModules)
+      enhancedSections.push('```')
+      enhancedSections.push('')
+    }
+
+    // Related files section
+    if (ctx.enhancedContext.relatedFiles && ctx.enhancedContext.relatedFiles.length > 0) {
+      enhancedSections.push('## Related Files (imports/exports in affected modules)')
+      enhancedSections.push('')
+      enhancedSections.push(ctx.enhancedContext.relatedFiles.map((f) => `- ${f}`).join('\n'))
+      enhancedSections.push('')
+    }
+  }
+
   const systemPrompt = [
     'You are a fix agent in the Orcha pipeline.',
     'The dev agent\'s implementation failed the quality gate. Your job is to fix the issues.',
     '',
     'Guidelines:',
     '- Read the failure report carefully — it tells you exactly what went wrong.',
-    '- Fix ONLY the issues identified. Do not refactor or re-implement unrelated code.',
-    '- The existing code changes are already committed. Make targeted fixes on top.',
+    '- You have access to full file contents and previous attempt history below.',
     '- Follow the blueprint and existing code conventions.',
     '- Do NOT run tests — the gate will re-run automatically after your fixes.',
     '- Do NOT commit your changes — the pipeline handles commits automatically.',
     '',
+    '## Scope Permissions',
+    '',
+    'You are NOT limited to "targeted fixes". You may:',
+    '- Refactor functions within affected modules',
+    '- Extract helper functions for repeated patterns',
+    '- Reorganize validation logic',
+    '- Change function signatures if it improves safety',
+    '',
+    'Stay within the affected modules (listed below), but feel free to',
+    'make substantial improvements to the code structure.',
+    '',
     `This is fix attempt ${ctx.attempt} of ${ctx.maxAttempts}.`,
+    '',
+    ...enhancedSections,
     '',
     '## Blueprint',
     ctx.blueprintJson,
@@ -848,7 +923,7 @@ export function buildFixLoopPrompt(
     '',
     '# Instructions',
     'Fix the issues described in the gate failure report above.',
-    'Make targeted changes to resolve each failure.',
+    'You may refactor and improve code structure within affected modules.',
     `Source branch: ${codebase.sourceBranch}`,
   ].join('\n')
 

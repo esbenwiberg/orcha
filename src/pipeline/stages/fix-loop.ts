@@ -26,6 +26,10 @@ import { appendProgress } from '../progress.js'
 import { CircuitBreaker } from '../fix-loop/circuit-breaker.js'
 import { savePipelineRun } from '../pipeline-store.js'
 import { EscalationManager } from '../escalation/escalation-manager.js'
+import { buildEnhancedFixContext } from '../fix-loop/context-builder.js'
+import { AttemptTracker } from '../fix-loop/attempt-tracker.js'
+import { FailurePatternStore, detectPatternType, extractKeywords } from '../learning/failure-patterns.js'
+import { createHash } from 'crypto'
 
 // ============================================================================
 // Types
@@ -142,6 +146,29 @@ export async function runFixLoopStage(
     // Build failure report from gate results
     const failureReport = buildFailureReport(run.gateResults)
 
+    // Build enhanced context for fix agent
+    const enhancedContext = await buildEnhancedFixContext(run, run.gateResults)
+
+    // Load and query failure pattern store
+    const patternStore = new FailurePatternStore()
+    await patternStore.load()
+
+    const patternType = detectPatternType(run.gateResults)
+    const similarPatterns = patternStore.findSimilarPatterns(run.gateResults)
+    const successfulFixes = patternStore.getSuccessfulFixes(patternType)
+
+    // Format successful fix examples for prompt
+    let successfulFixExamples: string | undefined
+    if (successfulFixes.length > 0) {
+      successfulFixExamples = successfulFixes.map((fix, i) => {
+        return [
+          `**Example ${i + 1}**: ${fix.description}`,
+          `- Approach: ${fix.approach}`,
+          `- Files: ${fix.filesModified.join(', ')}`,
+        ].join('\n')
+      }).join('\n\n')
+    }
+
     // Build work item context
     const workItem: WorkItemContext = {
       workItemId: run.workItemId,
@@ -155,13 +182,17 @@ export async function runFixLoopStage(
       sourceBranch: run.sourceBranch,
     }
 
-    // Build the fix prompt
+    // Build the fix prompt with enhanced context
     const { systemPrompt, userPrompt: baseUserPrompt } = buildFixLoopPrompt(workItem, codebase, {
       blueprintJson,
       diff,
       failureReport,
       attempt,
       maxAttempts: maxFixLoops,
+      enhancedContext: {
+        ...enhancedContext,
+        successfulFixExamples,
+      },
     })
 
     // Inject user instructions if provided (from retry-escalated)
@@ -192,6 +223,13 @@ export async function runFixLoopStage(
     // Increment fix loop counter only after the stage ran successfully
     run = await incrementFixLoop(run)
 
+    // Get the diff after fix (before commit)
+    const fixDiff = getDiff(run.worktreePath, run.sourceBranch, run.baseCommit) ?? ''
+
+    // Track this attempt
+    const attemptTracker = new AttemptTracker()
+    attemptTracker.recordAttempt(attempt, failureReport, fixDiff)
+
     // Auto-commit fix changes
     const commitResult = await autoCommitFix(run.worktreePath, attempt)
 
@@ -199,20 +237,44 @@ export async function runFixLoopStage(
     const fixDir = join(getPipelineDir(run.id), 'fix-loops', `attempt-${attempt}`)
     await mkdir(fixDir, { recursive: true })
 
+    const attemptMeta = {
+      attempt,
+      commitSha: commitResult.commitSha,
+      model: result.model,
+      budget: result.budget,
+      failureReport,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      // Gate results will be populated after gate re-runs (not yet available here)
+      attemptSummary: attemptTracker.getHistory()[0]?.summary,
+    }
+
     await writeFile(
       join(fixDir, 'meta.json'),
-      JSON.stringify({
-        attempt,
-        commitSha: commitResult.commitSha,
-        model: result.model,
-        budget: result.budget,
-        failureReport,
-        startedAt,
-        completedAt: new Date().toISOString(),
-        // Gate results will be populated after gate re-runs (not yet available here)
-      }, null, 2),
+      JSON.stringify(attemptMeta, null, 2),
       'utf-8',
     )
+
+    // Record failure pattern for learning (will be marked as successful if next gate passes)
+    // The pattern is recorded now but won't include the successful fix until gate confirms it worked
+    const keywords = extractKeywords(run.gateResults)
+    const signature = createHash('sha256')
+      .update(`${patternType}:${run.gateResults[0]?.checkName}:${run.gateResults[0]?.summary.split('\n')[0]}`)
+      .digest('hex')
+      .slice(0, 16)
+
+    patternStore.recordPattern({
+      patternType,
+      signature,
+      checkName: run.gateResults[0]?.checkName ?? 'unknown',
+      language: detectLanguageFromFiles(Object.keys(enhancedContext.fullFileContents)),
+      keywords,
+      firstSeen: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      // successfulFix will be added later if gate passes
+    })
+
+    await patternStore.save()
 
     // Emit progress for fix-loop completion
     await appendProgress(run.id, {
@@ -323,4 +385,31 @@ async function autoCommitFix(
 
   const commitSha = execSync('git rev-parse HEAD', execOpts).trim()
   return { commitSha }
+}
+
+/**
+ * Detect programming language from file paths.
+ */
+function detectLanguageFromFiles(files: string[]): string | undefined {
+  for (const file of files) {
+    if (file.endsWith('.ts') || file.endsWith('.tsx') || file.endsWith('.js') || file.endsWith('.jsx')) {
+      return 'typescript'
+    }
+    if (file.endsWith('.py')) {
+      return 'python'
+    }
+    if (file.endsWith('.cs') || file.endsWith('.fs')) {
+      return 'csharp'
+    }
+    if (file.endsWith('.go')) {
+      return 'go'
+    }
+    if (file.endsWith('.rs')) {
+      return 'rust'
+    }
+    if (file.endsWith('.java')) {
+      return 'java'
+    }
+  }
+  return undefined
 }
