@@ -578,27 +578,19 @@ export async function exportTemplates(outputPath: string = './orcha-prompts-expo
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2))
 
   try {
-    // Create tarball with custom templates and manifest
-    // We need to change to the parent directory of custom/ to preserve structure
-    const orchaPromptsDir = join(CUSTOM_PROMPTS_DIR, '..')
-    await tar.create(
-      {
-        gzip: true,
-        file: outputPath,
-        cwd: orchaPromptsDir,
-      },
-      ['custom'] // Include entire custom directory
-    )
+    // Copy custom directory to temp dir to bundle with manifest
+    const { cp } = await import('node:fs/promises')
+    const tempCustomDir = join(tempDir, 'custom')
+    await cp(CUSTOM_PROMPTS_DIR, tempCustomDir, { recursive: true })
 
-    // Add manifest to tarball
+    // Create tarball with both custom templates and manifest
     await tar.create(
       {
         gzip: true,
         file: outputPath,
         cwd: tempDir,
-        append: true,
       },
-      ['export-manifest.json']
+      ['custom', 'export-manifest.json']
     )
   } finally {
     // Clean up temp directory

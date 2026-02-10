@@ -68,7 +68,9 @@ import {
 
 import { rm } from 'fs/promises'
 import { existsSync } from 'fs'
-import { listPrompts, showPrompt, editPrompt, resetPrompt } from './prompts.js'
+import { listPrompts, showPrompt, editPrompt, resetPrompt, diffPrompt } from './prompts.js'
+import { exportTemplates, importTemplates } from '../pipeline/template-loader.js'
+import chalk from 'chalk'
 
 const program = new Command()
 
@@ -1720,6 +1722,65 @@ promptsCmd
   .description('Reset a prompt template to default')
   .action(async (name: string) => {
     await resetPrompt(name)
+  })
+
+// orcha prompts diff
+promptsCmd
+  .command('diff <name>')
+  .description('Show differences between default and custom template')
+  .action(async (name: string) => {
+    await diffPrompt(name)
+  })
+
+// orcha prompts export
+promptsCmd
+  .command('export [output-file]')
+  .description('Export custom templates to a tarball')
+  .action(async (outputFile?: string) => {
+    try {
+      const outputPath = outputFile || './orcha-prompts-export.tar.gz'
+      await exportTemplates(outputPath)
+      console.log(chalk.green(`✓ Custom templates exported to: ${outputPath}`))
+    } catch (err) {
+      console.error(chalk.red('Export failed:'), (err as Error).message)
+      process.exit(1)
+    }
+  })
+
+// orcha prompts import
+promptsCmd
+  .command('import <file>')
+  .description('Import custom templates from a tarball')
+  .action(async (file: string) => {
+    try {
+      // Prompt for confirmation if custom templates exist
+      const confirmOverwrite = async (): Promise<boolean> => {
+        const { createInterface } = await import('node:readline')
+        const rl = createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        })
+
+        return new Promise((resolve) => {
+          rl.question(
+            chalk.yellow(
+              'Warning: This will overwrite existing custom templates.\n' +
+              'Continue? (y/N): '
+            ),
+            (answer) => {
+              rl.close()
+              resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes')
+            }
+          )
+        })
+      }
+
+      await importTemplates(file, confirmOverwrite)
+      console.log(chalk.green('✓ Custom templates imported successfully'))
+    } catch (err) {
+      console.error(chalk.red('Import failed:'), (err as Error).message)
+      process.exit(1)
+    }
   })
 
 // =============================================================================
