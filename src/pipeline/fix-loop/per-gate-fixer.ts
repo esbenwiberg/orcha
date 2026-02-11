@@ -32,7 +32,7 @@ import { PerCheckCircuitBreaker } from './circuit-breaker.js'
  * AI-based checks (code-review, security) come later.
  */
 const FIX_PRIORITY = [
-  'test',
+  'test-runner',
   'build',
   'lint',
   'code-review',
@@ -156,22 +156,23 @@ export async function runPerGateFixes(
       budgetOverride: opts.budgetOverride ?? resolveBudget(run.config, 'fix'),
     })
 
+    // Auto-commit after this check's fix — even if the agent exited non-zero,
+    // it may have made partial changes worth keeping
+    const commitResult = await autoCommitPerGateFix(run.worktreePath, checkName, opts.attempt)
+
     if (!result.success) {
       // Log the failure but continue to next check (best-effort per-gate fixing)
       await appendProgress(run.id, {
         type: 'stage-error',
         stage: 'fix-loop',
-        title: `Fix for ${checkName} failed (exit code ${result.exitCode})`,
+        title: `Fix for ${checkName} exited non-zero (exit code ${result.exitCode})`,
         detail: result.stderr.slice(0, 500),
-        data: { checkName, exitCode: result.exitCode },
+        data: { checkName, exitCode: result.exitCode, commitSha: commitResult.commitSha },
       }).catch(() => { /* best-effort */ })
 
       skippedChecks.push(checkName)
       continue
     }
-
-    // Auto-commit after this check's fix
-    const commitResult = await autoCommitPerGateFix(run.worktreePath, checkName, opts.attempt)
 
     // Emit progress for this check's fix completion
     await appendProgress(run.id, {

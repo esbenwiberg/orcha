@@ -31,9 +31,9 @@ export class PerCheckCircuitBreaker {
   private state: PerCheckBreakerState
 
   constructor(state?: PerCheckBreakerState) {
-    this.state = state ?? {
-      lastFailureHash: {},
-      consecutiveCount: {},
+    this.state = {
+      lastFailureHash: state?.lastFailureHash ?? {},
+      consecutiveCount: state?.consecutiveCount ?? {},
     }
   }
 
@@ -97,6 +97,6 @@ export class PerCheckCircuitBreaker {
  * (timestamps, process IDs, etc.) that appear later in the output.
  */
 function hashOutput(rawOutput: string): string {
-  const truncated = rawOutput.slice(0, HASH_INPUT_LIMIT)
+  const truncated = (rawOutput ?? '').slice(0, HASH_INPUT_LIMIT)
   return createHash('sha256').update(truncated).digest('hex').slice(0, 16)
 }

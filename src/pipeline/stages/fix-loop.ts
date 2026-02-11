@@ -112,18 +112,18 @@ export async function runFixLoopStage(
     run = updatedRun
 
     // -----------------------------------------------------------------------
-    // 6. If all checks were skipped / circuit-broken, escalate
+    // 6. If ALL checks are circuit-broken, escalate (no point retrying)
+    //    If checks just failed (exit code 1), still go to gate — the agent
+    //    may have made partial fixes even when exiting non-zero.
     // -----------------------------------------------------------------------
-    if (fixedChecks.length === 0) {
-      const reason = circuitBrokenChecks.length > 0
-        ? `Circuit breaker: all failed checks have repeated failure patterns (${circuitBrokenChecks.join(', ')})`
-        : `All failed checks skipped by fix errors: ${skippedChecks.join(', ')}`
+    if (fixedChecks.length === 0 && circuitBrokenChecks.length === failed.length) {
+      const reason = `Circuit breaker: all failed checks have repeated failure patterns (${circuitBrokenChecks.join(', ')})`
 
       await appendProgress(run.id, {
         type: 'info',
         stage: 'fix-loop',
-        title: 'All failed checks skipped — escalating',
-        detail: `Skipped: ${skippedChecks.join(', ')}`,
+        title: 'All checks circuit-broken — escalating',
+        detail: `Circuit-broken: ${circuitBrokenChecks.join(', ')}`,
       }).catch(() => { /* best-effort */ })
 
       const escalationManager = new EscalationManager()
@@ -132,6 +132,17 @@ export async function runFixLoopStage(
       run = (await loadPipelineRun(run.id))!
       run = await transition(run, 'escalated')
       return run
+    }
+
+    if (fixedChecks.length === 0) {
+      // Fix agents ran but none succeeded — still go to gate.
+      // The agents may have made partial progress.
+      await appendProgress(run.id, {
+        type: 'info',
+        stage: 'fix-loop',
+        title: `Fix agents exited non-zero — retrying via gate`,
+        detail: `Skipped: ${skippedChecks.join(', ')}`,
+      }).catch(() => { /* best-effort */ })
     }
 
     // -----------------------------------------------------------------------
