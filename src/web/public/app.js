@@ -5952,11 +5952,19 @@ function renderTimelineEntries(entries, pipelineId) {
     }
   }
 
-  // Newest first — reverse chronological
-  const reversed = entriesToRender.slice().reverse();
+  // Newest first — explicit sort by timestamp (descending)
+  const sorted = entriesToRender.slice().sort((a, b) => {
+    const timeA = new Date(a.timestamp || 0).getTime();
+    const timeB = new Date(b.timestamp || 0).getTime();
+    // Handle invalid dates (NaN) by treating them as oldest
+    if (isNaN(timeA)) return 1;
+    if (isNaN(timeB)) return -1;
+    return timeB - timeA; // Descending order (newest first)
+  });
+
   let html = '';
-  for (let i = 0; i < reversed.length; i++) {
-    const entry = reversed[i];
+  for (let i = 0; i < sorted.length; i++) {
+    const entry = sorted[i];
     const isNewest = (i === 0);
     html += renderTimelineEntry(entry, isNewest);
   }
