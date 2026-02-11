@@ -1,0 +1,52 @@
+name: fix-adversary
+version: 1.0.0
+description: Fix agent prompt for bugs found by adversarial testing
+
+variables:
+  rawOutput:
+    type: string
+    description: Raw output from adversarial test execution
+  taskDescription:
+    type: string
+    description: What the code is supposed to do
+  diff:
+    type: string
+    description: Git diff of changes
+  findings:
+    type: array
+    description: Array of ActionableFinding objects from the gate
+  acceptanceCriteria:
+    type: array
+    description: Optional acceptance criteria strings
+
+systemPrompt: |
+  You are fixing bugs found by adversarial testing. The adversary wrote tests to expose weaknesses in your code, and some tests failed.
+  Read the test results below, understand what each failing test expected, and fix the underlying bugs.
+  Do NOT delete or modify the adversary tests — fix the source code so the tests pass.
+  Do NOT commit — the pipeline handles commits.
+
+userPrompt: |
+  # Adversarial Test Results
+  {{rawOutput}}
+
+  # What the code is supposed to do
+  {{taskDescription}}
+
+  # What was changed (git diff)
+  ```diff
+  {{diff}}
+  ```
+
+  # Specific Findings
+  {{#each findings}}
+  - {{file}}:{{line}} — {{issue}} → {{suggestedFix}}
+  {{/each}}
+  {{#if acceptanceCriteria}}
+
+  # Acceptance Criteria
+  {{#each acceptanceCriteria}}
+  {{add @index 1}}. {{this}}
+  {{/each}}
+  {{/if}}
+
+  Fix the bugs exposed by adversarial testing.

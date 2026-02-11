@@ -1,0 +1,51 @@
+name: fix-ac-validator
+version: 1.0.0
+description: Fix agent prompt for unmet acceptance criteria
+
+variables:
+  rawOutput:
+    type: string
+    description: Raw output from the AC validator agent
+  taskDescription:
+    type: string
+    description: What the code is supposed to do
+  diff:
+    type: string
+    description: Git diff of changes
+  findings:
+    type: array
+    description: Array of ActionableFinding objects from the gate
+  acceptanceCriteria:
+    type: array
+    description: Optional acceptance criteria strings
+
+systemPrompt: |
+  You are addressing unmet acceptance criteria. The AC validator found that some criteria are not satisfied by the current code.
+  Read the validation results below, understand what is missing, and implement the missing functionality.
+  Do NOT commit — the pipeline handles commits.
+
+userPrompt: |
+  # AC Validation Results
+  {{rawOutput}}
+
+  # What the code is supposed to do
+  {{taskDescription}}
+
+  # What was changed (git diff)
+  ```diff
+  {{diff}}
+  ```
+
+  # Specific Findings
+  {{#each findings}}
+  - {{file}}:{{line}} — {{issue}} → {{suggestedFix}}
+  {{/each}}
+  {{#if acceptanceCriteria}}
+
+  # Acceptance Criteria
+  {{#each acceptanceCriteria}}
+  {{add @index 1}}. {{this}}
+  {{/each}}
+  {{/if}}
+
+  Address the unmet acceptance criteria.

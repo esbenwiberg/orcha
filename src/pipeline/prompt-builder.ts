@@ -13,6 +13,7 @@ import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { loadTemplate, compileTemplate } from './template-loader.js'
+import type { ActionableFinding } from './types.js'
 
 // ============================================================================
 // Logging
@@ -1130,6 +1131,115 @@ export async function buildFixLoopPrompt(
       'Fix the issues described in the gate failure report above.',
       'You may refactor and improve code structure within affected modules.',
       `Source branch: ${codebase.sourceBranch}`,
+    ].join('\n')
+
+    return { systemPrompt, userPrompt }
+  }
+}
+
+// ============================================================================
+// Per-Gate Fix Prompt
+// ============================================================================
+
+/**
+ * Map from gate check names to their corresponding fix template names.
+ *
+ * Gate agents use checkName values like "test", "build", "lint", etc.
+ * This map resolves each to the appropriate fix-* template.
+ */
+const GATE_FIX_TEMPLATE_MAP: Record<string, string> = {
+  test: 'fix-test',
+  build: 'fix-build',
+  lint: 'fix-lint',
+  'code-review': 'fix-code-review',
+  security: 'fix-security',
+  'security-review': 'fix-security',
+  adversary: 'fix-adversary',
+  'adversary-review': 'fix-adversary',
+  'ac-validator': 'fix-ac-validator',
+  'ac-validation': 'fix-ac-validator',
+}
+
+/**
+ * Build a focused fix prompt for a specific gate failure.
+ *
+ * Unlike the general-purpose buildFixLoopPrompt(), this function creates
+ * a minimal, gate-specific prompt that gives the fix agent exactly what
+ * it needs: the raw error output, the diff, and the task. No blueprint,
+ * no enhanced context — just the error and the code.
+ *
+ * @param checkName - Gate check name (e.g., "test", "build", "lint", "code-review", "security", "adversary", "ac-validator")
+ * @param rawOutput - Raw terminal/AI output from the gate check
+ * @param findings - Structured ActionableFinding objects from the gate
+ * @param diff - Git diff of current changes
+ * @param taskDescription - What the code is supposed to do
+ * @param acceptanceCriteria - Optional acceptance criteria
+ * @returns Compiled { systemPrompt, userPrompt } ready for the fix agent
+ */
+export async function buildPerGateFixPrompt(
+  checkName: string,
+  rawOutput: string,
+  findings: ActionableFinding[],
+  diff: string,
+  taskDescription: string,
+  acceptanceCriteria?: string[],
+): Promise<PromptParts> {
+  const templateName = GATE_FIX_TEMPLATE_MAP[checkName] || `fix-${checkName}`
+
+  const variables = {
+    rawOutput,
+    findings,
+    diff,
+    taskDescription,
+    acceptanceCriteria: acceptanceCriteria || [],
+  }
+
+  // Try loading the gate-specific fix template
+  try {
+    const template = await loadTemplate(templateName)
+    return compileTemplate(template, variables)
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const warning = `Failed to load template '${templateName}': ${errMsg}. Falling back to generic fix prompt.`
+    console.warn(`[prompt-builder] ${warning}`)
+    await logWarning(warning)
+
+    // FALLBACK: Generic fix prompt that works for any gate type
+    const systemPrompt = [
+      `You are fixing issues found by the ${checkName} gate.`,
+      'Read the output below, find the root cause, and fix the code.',
+      'Do NOT commit — the pipeline handles commits.',
+    ].join('\n')
+
+    const findingsSection = findings.length > 0
+      ? findings.map((f) => `- ${f.file}:${f.line} — ${f.issue} → ${f.suggestedFix}`).join('\n')
+      : '(no structured findings)'
+
+    const acSection = acceptanceCriteria && acceptanceCriteria.length > 0
+      ? [
+          '',
+          '# Acceptance Criteria',
+          ...acceptanceCriteria.map((ac, i) => `${i + 1}. ${ac}`),
+        ].join('\n')
+      : ''
+
+    const userPrompt = [
+      `# ${checkName} Output`,
+      rawOutput,
+      '',
+      '# What the code is supposed to do',
+      taskDescription,
+      '',
+      '# What was changed (git diff)',
+      '```diff',
+      diff,
+      '```',
+      '',
+      '# Specific Findings',
+      findingsSection,
+      acSection,
+      '',
+      `Fix the issues found by the ${checkName} gate.`,
     ].join('\n')
 
     return { systemPrompt, userPrompt }

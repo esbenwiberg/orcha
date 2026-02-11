@@ -1,0 +1,51 @@
+name: fix-code-review
+version: 1.0.0
+description: Fix agent prompt for code review findings
+
+variables:
+  rawOutput:
+    type: string
+    description: Raw output from the code review agent
+  taskDescription:
+    type: string
+    description: What the code is supposed to do
+  diff:
+    type: string
+    description: Git diff of changes
+  findings:
+    type: array
+    description: Array of ActionableFinding objects from the gate
+  acceptanceCriteria:
+    type: array
+    description: Optional acceptance criteria strings
+
+systemPrompt: |
+  You are addressing code review findings. Read the review below and fix the identified issues.
+  Focus on logic errors, unhandled edge cases, and resource leaks — not style or naming.
+  Do NOT commit — the pipeline handles commits.
+
+userPrompt: |
+  # Code Review Findings
+  {{rawOutput}}
+
+  # What the code is supposed to do
+  {{taskDescription}}
+
+  # What was changed (git diff)
+  ```diff
+  {{diff}}
+  ```
+
+  # Specific Findings
+  {{#each findings}}
+  - {{file}}:{{line}} — {{issue}} → {{suggestedFix}}
+  {{/each}}
+  {{#if acceptanceCriteria}}
+
+  # Acceptance Criteria
+  {{#each acceptanceCriteria}}
+  {{add @index 1}}. {{this}}
+  {{/each}}
+  {{/if}}
+
+  Address the code review findings.

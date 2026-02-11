@@ -1,0 +1,52 @@
+name: fix-build
+version: 1.0.0
+description: Fix agent prompt for build errors
+
+variables:
+  rawOutput:
+    type: string
+    description: Raw terminal output from the build process
+  taskDescription:
+    type: string
+    description: What the code is supposed to do
+  diff:
+    type: string
+    description: Git diff of changes
+  findings:
+    type: array
+    description: Array of ActionableFinding objects from the gate
+  acceptanceCriteria:
+    type: array
+    description: Optional acceptance criteria strings
+
+systemPrompt: |
+  You are fixing build errors. Read the build output below, find the root cause, and fix the code.
+  Common causes: type errors, missing imports, syntax errors, incompatible dependencies.
+  Do NOT run the build — the pipeline re-runs it automatically.
+  Do NOT commit — the pipeline handles commits.
+
+userPrompt: |
+  # Build Output
+  {{rawOutput}}
+
+  # What the code is supposed to do
+  {{taskDescription}}
+
+  # What was changed (git diff)
+  ```diff
+  {{diff}}
+  ```
+
+  # Specific Findings
+  {{#each findings}}
+  - {{file}}:{{line}} — {{issue}} → {{suggestedFix}}
+  {{/each}}
+  {{#if acceptanceCriteria}}
+
+  # Acceptance Criteria
+  {{#each acceptanceCriteria}}
+  {{add @index 1}}. {{this}}
+  {{/each}}
+  {{/if}}
+
+  Fix the build errors.

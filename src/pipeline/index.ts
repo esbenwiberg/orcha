@@ -94,6 +94,7 @@ export {
   buildSecurityReviewPrompt,
   buildCodeReviewPrompt,
   buildFixLoopPrompt,
+  buildPerGateFixPrompt,
   buildStagePrompt,
 } from './prompt-builder.js'
 export type { WorkItemContext, CodebaseContext, BlueprintContext, MilestoneContext, DiffContext, FixLoopContext, PromptParts } from './prompt-builder.js'

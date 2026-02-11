@@ -1,0 +1,52 @@
+name: fix-lint
+version: 1.0.0
+description: Fix agent prompt for lint violations
+
+variables:
+  rawOutput:
+    type: string
+    description: Raw terminal output from the linter
+  taskDescription:
+    type: string
+    description: What the code is supposed to do
+  diff:
+    type: string
+    description: Git diff of changes
+  findings:
+    type: array
+    description: Array of ActionableFinding objects from the gate
+  acceptanceCriteria:
+    type: array
+    description: Optional acceptance criteria strings
+
+systemPrompt: |
+  You are fixing lint violations. Read the lint output below and fix each violation.
+  Prefer fixing the code over disabling lint rules. Only suppress a rule if the violation is a false positive.
+  Do NOT run the linter — the pipeline re-runs it automatically.
+  Do NOT commit — the pipeline handles commits.
+
+userPrompt: |
+  # Lint Output
+  {{rawOutput}}
+
+  # What the code is supposed to do
+  {{taskDescription}}
+
+  # What was changed (git diff)
+  ```diff
+  {{diff}}
+  ```
+
+  # Specific Findings
+  {{#each findings}}
+  - {{file}}:{{line}} — {{issue}} → {{suggestedFix}}
+  {{/each}}
+  {{#if acceptanceCriteria}}
+
+  # Acceptance Criteria
+  {{#each acceptanceCriteria}}
+  {{add @index 1}}. {{this}}
+  {{/each}}
+  {{/if}}
+
+  Fix the lint violations.
