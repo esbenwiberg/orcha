@@ -5379,6 +5379,11 @@ function renderPipelineDetail(pipelineId) {
 
   pipelineDetailEl.innerHTML = html;
 
+  // Initialize timeline mode to 'overview' if not already set
+  if (!state.timelineModes[pipeline.id]) {
+    state.timelineModes[pipeline.id] = 'overview';
+  }
+
   // Fetch and render the activity timeline asynchronously
   fetchAndRenderTimeline(pipeline.id);
 
@@ -5744,7 +5749,7 @@ async function fetchAndRenderTimeline(pipelineId) {
       return;
     }
 
-    container.innerHTML = renderTimelineEntries(entries);
+    container.innerHTML = renderTimelineEntries(entries, pipelineId);
   } catch (err) {
     container.innerHTML = '<div class="timeline-empty">Failed to load activity</div>';
   }
@@ -5856,11 +5861,38 @@ function renderMetrics(metrics) {
 }
 
 /**
- * Render all timeline entries as HTML.
+ * Determine if an entry should be shown in overview mode.
+ * Overview mode only shows major events, filtering out verbose activity entries.
  */
-function renderTimelineEntries(entries) {
+function shouldShowInOverview(entry) {
+  const majorEventTypes = [
+    'stage-complete',
+    'checkpoint',
+    'info',
+    'stage-error',
+    'gate-result',
+    'competing-result'
+  ];
+  return majorEventTypes.includes(entry.type);
+}
+
+/**
+ * Render all timeline entries as HTML.
+ * If pipelineId is provided, filters entries based on timeline mode.
+ */
+function renderTimelineEntries(entries, pipelineId) {
+  // Filter entries based on mode if pipelineId is provided
+  let entriesToRender = entries;
+  if (pipelineId) {
+    // Default to overview mode if not set
+    const mode = state.timelineModes[pipelineId] || 'overview';
+    if (mode === 'overview') {
+      entriesToRender = entries.filter(shouldShowInOverview);
+    }
+  }
+
   // Newest first — reverse chronological
-  const reversed = entries.slice().reverse();
+  const reversed = entriesToRender.slice().reverse();
   let html = '';
   for (let i = 0; i < reversed.length; i++) {
     const entry = reversed[i];
