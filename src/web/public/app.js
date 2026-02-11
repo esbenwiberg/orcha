@@ -7153,7 +7153,7 @@ async function escalationAction(pipelineId, actionType, param) {
     showToast('Action executed successfully', 'success');
 
     // Refresh pipeline details
-    await refreshPipelines();
+    await fetchPipelines();
     selectPipeline(pipelineId);
   } catch (err) {
     console.error('Escalation action error:', err);
@@ -7215,7 +7215,7 @@ async function submitFeedback(pipelineId) {
     showToast('Pipeline retry started with feedback', 'success');
 
     // Refresh pipeline details
-    await refreshPipelines();
+    await fetchPipelines();
     selectPipeline(pipelineId);
   } catch (err) {
     console.error('Feedback submission error:', err);
@@ -7271,7 +7271,7 @@ async function confirmForceShip(pipelineId) {
     showToast('Pipeline force shipped', 'success');
 
     // Refresh pipeline details
-    await refreshPipelines();
+    await fetchPipelines();
     selectPipeline(pipelineId);
   } catch (err) {
     console.error('Force ship error:', err);
