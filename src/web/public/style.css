@@ -3620,6 +3620,22 @@ body {
   padding-bottom: 0;
 }
 
+/* Highlight animation for new entries in overview mode */
+.timeline-entry-highlight {
+  animation: timelineHighlight 2s ease-out forwards;
+}
+
+@keyframes timelineHighlight {
+  0% {
+    background: rgba(155, 89, 182, 0.25);
+    box-shadow: 0 0 12px rgba(155, 89, 182, 0.4);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
 /* Gutter: dot + connecting line */
 .timeline-gutter {
   display: flex;

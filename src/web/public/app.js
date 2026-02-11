@@ -4586,13 +4586,26 @@ function connectPipelineEvents() {
               }
             }
 
+            // Check if we should highlight this entry (overview mode + major event)
+            const mode = state.timelineModes[pipelineId] || 'overview';
+            const shouldHighlight = mode === 'overview' && shouldShowInOverview(entry);
+
             // Render and prepend the new entry as the newest (top)
             const wrapper = document.createElement('div');
-            wrapper.innerHTML = renderTimelineEntry(entry, true);
+            wrapper.innerHTML = renderTimelineEntry(entry, true, shouldHighlight);
             const newNode = wrapper.firstElementChild;
             if (newNode) {
               container.insertBefore(newNode, container.firstChild);
               container.scrollTop = 0;
+
+              // Remove highlight class after 2 seconds
+              if (shouldHighlight) {
+                requestAnimationFrame(() => {
+                  setTimeout(() => {
+                    newNode.classList.remove('timeline-entry-highlight');
+                  }, 2000);
+                });
+              }
             }
           }
         }
@@ -5904,8 +5917,11 @@ function renderTimelineEntries(entries, pipelineId) {
 
 /**
  * Render a single timeline entry.
+ * @param {Object} entry - The timeline entry to render
+ * @param {Boolean} isNewest - Whether this is the newest entry
+ * @param {Boolean} shouldHighlight - Whether to apply highlight animation
  */
-function renderTimelineEntry(entry, isNewest) {
+function renderTimelineEntry(entry, isNewest, shouldHighlight = false) {
   const isActivity = entry.type === 'stage-activity';
   const isCompleted = entry.type === 'stage-complete' || entry.type === 'checkpoint' || entry.type === 'info';
   const isError = entry.type === 'stage-error';
@@ -5919,7 +5935,13 @@ function renderTimelineEntry(entry, isNewest) {
 
   const timeStr = formatTimeOnly(entry.timestamp);
 
-  let html = '<div class="timeline-entry' + (isNewest ? ' last' : '') + (isActivity ? ' activity' : '') + (isError ? ' error' : '') + '">';
+  let entryClasses = 'timeline-entry';
+  if (isNewest) entryClasses += ' last';
+  if (isActivity) entryClasses += ' activity';
+  if (isError) entryClasses += ' error';
+  if (shouldHighlight) entryClasses += ' timeline-entry-highlight';
+
+  let html = '<div class="' + entryClasses + '">';
 
   // Vertical line + dot (line connects down to the next older entry)
   html += '<div class="timeline-gutter">';
