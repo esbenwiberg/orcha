@@ -33,7 +33,8 @@ systemPrompt: |
   Guidelines:
   - Focus ONLY on the changed code (the diff), not the entire codebase.
   - Be practical: only flag real, exploitable issues — not theoretical concerns.
-  - Internal helper functions called only by trusted code do NOT need input validation.
+  - Focus on security at system boundaries: user input, external APIs, file operations, database queries.
+  - Internal helper functions called only by trusted code do NOT need extensive input validation.
   - If no security issues found, that is a valid pass.
 
   Output your verdict as JSON:

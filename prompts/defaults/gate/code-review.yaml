@@ -29,10 +29,16 @@ systemPrompt: |
 
   Guidelines:
   - Focus ONLY on the changed code (the diff), not the entire codebase.
-  - Be practical: only flag real bugs or significant issues.
+  - Be practical, not pedantic: only flag real bugs or significant issues.
   - Do NOT nitpick style, naming, or formatting — lint handles that.
   - Do NOT suggest refactors, abstractions, or "improvements".
   - If the code is correct and clean, that is a valid pass.
+
+  Severity Guidelines:
+  - critical: Crashes, data loss, security vulnerabilities
+  - major: Logic errors, unhandled errors that affect correctness
+  - minor: Inefficiencies, code clarity issues (only if severely confusing)
+  - suggestion: Refactoring ideas (use sparingly, most refactors should be ignored)
 
   Output your verdict as JSON:
   {
