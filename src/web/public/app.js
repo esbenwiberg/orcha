@@ -22,6 +22,7 @@ const state = {
   selectedTemplate: null, // Currently selected template name
   monacoEditor: null, // Monaco editor instance
   originalTemplateContent: null, // Original content for dirty checking
+  timelineModes: {}, // pipelineId -> 'overview' | 'detailed'
 };
 
 // DOM elements
@@ -5281,7 +5282,16 @@ function renderPipelineDetail(pipelineId) {
 
   // Activity Timeline (populated async)
   html += '<div class="pipeline-section">';
+  html += '<div class="pipeline-section-header">';
   html += '<div class="pipeline-section-title">Activity Timeline</div>';
+  html += '<div class="timeline-toggle">';
+  html += '<label class="toggle-switch">';
+  html += '<input type="checkbox" id="timeline-toggle-' + pipeline.id + '" onchange="toggleTimelineMode(\'' + pipeline.id + '\')">';
+  html += '<span class="toggle-slider"></span>';
+  html += '</label>';
+  html += '<span class="toggle-label">Detailed</span>';
+  html += '</div>';
+  html += '</div>';
   html += '<div id="activity-timeline-' + pipeline.id + '" class="activity-timeline">';
   html += '<div class="timeline-loading">Loading activity...</div>';
   html += '</div>';
@@ -5696,6 +5706,22 @@ function toggleSidePanel() {
   if (toggle) {
     toggle.classList.toggle('visible', panel.classList.contains('collapsed'));
   }
+}
+
+/**
+ * Toggle timeline mode between 'overview' and 'detailed' for a given pipeline.
+ */
+function toggleTimelineMode(pipelineId) {
+  // Initialize mode to 'overview' if not set
+  if (!state.timelineModes[pipelineId]) {
+    state.timelineModes[pipelineId] = 'overview';
+  }
+
+  // Toggle the mode
+  state.timelineModes[pipelineId] = state.timelineModes[pipelineId] === 'overview' ? 'detailed' : 'overview';
+
+  // Re-render the timeline
+  fetchAndRenderTimeline(pipelineId);
 }
 
 /**
