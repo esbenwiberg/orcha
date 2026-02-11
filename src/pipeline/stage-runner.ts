@@ -10,8 +10,9 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process'
-import { mkdir, writeFile } from 'fs/promises'
+import { mkdir, writeFile, unlink } from 'fs/promises'
 import { join } from 'path'
+import { tmpdir } from 'os'
 import treeKill from 'tree-kill'
 import type { PipelineConfig } from './types.js'
 import { resolveModel, resolveBudget } from './pipeline-config.js'
@@ -152,14 +153,16 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
   await mkdir(logsDir, { recursive: true })
   const logPath = join(logsDir, `${stageKey}.log`)
 
-  // Build the CLI arguments (prompt is passed via stdin to avoid E2BIG)
-  const { cliArgs: args, stdinPrompt } = buildCliArgs({
+  // Build the CLI arguments (prompt and system prompt are passed via stdin/file to avoid E2BIG)
+  const { cliArgs: args, stdinPrompt, systemPromptFile } = await buildCliArgs({
     model,
     budget,
     systemPrompt,
     allowedTools,
     outputFormat,
     prompt,
+    pipelineId,
+    stageKey,
   })
 
   // Spawn the process with live log streaming + activity progress
@@ -187,7 +190,21 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
     }).catch(() => { /* best-effort */ })
   }
 
-  const result = await spawnClaude(args, cwd, pipelineId, stdinPrompt, onData, onActivity)
+  let result: Awaited<ReturnType<typeof spawnClaude>>
+  try {
+    result = await spawnClaude(args, cwd, pipelineId, stdinPrompt, onData, onActivity)
+  } catch (err) {
+    // Clean up temp file on error
+    if (systemPromptFile) {
+      await unlink(systemPromptFile).catch(() => { /* best-effort */ })
+    }
+    throw err
+  } finally {
+    // Clean up temp system prompt file
+    if (systemPromptFile) {
+      await unlink(systemPromptFile).catch(() => { /* best-effort */ })
+    }
+  }
 
   // Write log file
   const logContent = [
@@ -243,12 +260,13 @@ interface CliArgs {
   allowedTools?: string
   outputFormat?: string
   prompt: string
+  pipelineId: string
+  stageKey: string
 }
 
-function buildCliArgs(args: CliArgs): { cliArgs: string[]; stdinPrompt: string } {
+async function buildCliArgs(args: CliArgs): Promise<{ cliArgs: string[]; stdinPrompt: string; systemPromptFile?: string }> {
   const cliArgs: string[] = [
     '--model', args.model,
-    '--append-system-prompt', args.systemPrompt,
     '--dangerously-skip-permissions',
     '--max-budget-usd', String(args.budget),
     // Prompt is passed via stdin to avoid E2BIG when diffs are large
@@ -258,11 +276,21 @@ function buildCliArgs(args: CliArgs): { cliArgs: string[]; stdinPrompt: string }
     '--verbose',
   ]
 
+  // Write system prompt to a temp file to avoid E2BIG errors with large contexts
+  let systemPromptFile: string | undefined
+  if (args.systemPrompt && args.systemPrompt.length > 0) {
+    const tempDir = join(getPipelineDir(args.pipelineId), 'temp')
+    await mkdir(tempDir, { recursive: true })
+    systemPromptFile = join(tempDir, `system-prompt-${args.stageKey}-${Date.now()}.txt`)
+    await writeFile(systemPromptFile, args.systemPrompt, 'utf-8')
+    cliArgs.push('--append-system-prompt-file', systemPromptFile)
+  }
+
   if (args.allowedTools) {
     cliArgs.push('--allowedTools', args.allowedTools)
   }
 
-  return { cliArgs, stdinPrompt: args.prompt }
+  return { cliArgs, stdinPrompt: args.prompt, systemPromptFile }
 }
 
 /**
