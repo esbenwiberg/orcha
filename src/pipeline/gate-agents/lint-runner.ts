@@ -17,10 +17,13 @@
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
 import { execAsync, execFileAsync } from '../exec-utils.js'
-import type { GateResult, StackRunnerResult } from '../types.js'
+import type { GateResult, StackRunnerResult, ActionableFinding } from '../types.js'
 import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
 import { getChangedLintableFiles, getChangedFilesByExtensions } from '../git-utils.js'
+
+/** Cap raw output at 50KB for sanity. */
+const MAX_RAW_OUTPUT = 50 * 1024
 
 // ============================================================================
 // Filename Validation
@@ -237,11 +240,36 @@ async function runMultiStackLint(
         ? `No lint commands configured or no lintable files changed — skipping lint gate`
         : `Lint passed (${parts.join(', ')})`
 
+  // Build rawOutput from all stack outputs
+  const allRawOutput = stackResults
+    .map((r) => r.output ? `[${r.type}] ${r.output}` : '')
+    .filter(Boolean)
+    .join('\n---\n')
+
+  // Build findings from failed stacks (convert internal LintFinding to ActionableFinding)
+  const findings: ActionableFinding[] = stackResults
+    .filter((r): r is StackLintResult => r.status === 'fail')
+    .flatMap((r) => {
+      if (r.findings && r.findings.length > 0) {
+        return lintFindingsToActionable(r.findings)
+      }
+      // Fallback: single finding summarizing the failure
+      return [{
+        file: '',
+        line: 0,
+        issue: `Lint failed for ${r.type} stack at ${r.path}`,
+        suggestedFix: `Run \`${r.command ?? 'lint'}\` in ${r.path} and fix lint issues`,
+        severity: 'high' as const,
+      }]
+    })
+
   return {
     verdict,
     checkName: 'lint',
     summary,
     details: { stacks: stackResults },
+    findings,
+    rawOutput: allRawOutput.slice(0, MAX_RAW_OUTPUT),
     timestamp,
   }
 }
@@ -508,6 +536,8 @@ async function runLegacyLint(
       checkName: 'lint',
       summary: 'No lintable files changed — skipping lint gate',
       details: { reason: 'no-changed-files' },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -520,6 +550,8 @@ async function runLegacyLint(
       checkName: 'lint',
       summary: 'No lint command found — skipping lint gate',
       details: { reason: 'no-lint-command' },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -549,6 +581,8 @@ async function runLegacyLint(
         files: changedFiles,
         output: output.slice(-2000),
       },
+      findings: [],
+      rawOutput: output.slice(0, MAX_RAW_OUTPUT),
       timestamp,
     }
   } catch (err) {
@@ -556,20 +590,22 @@ async function runLegacyLint(
     const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
 
     // Parse lint output for structured reporting
-    const findings = parseEslintOutput(output)
+    const lintFindings = parseEslintOutput(output)
 
     return {
       verdict: 'fail',
       checkName: 'lint',
-      summary: `Lint failed: ${findings.length} issue(s) in ${changedFiles.length} changed file(s)`,
+      summary: `Lint failed: ${lintFindings.length} issue(s) in ${changedFiles.length} changed file(s)`,
       details: {
         command: lintCommand,
         exitCode: typeof execError.code === 'number' ? execError.code : undefined,
         filesChecked: changedFiles.length,
         files: changedFiles,
-        findings,
+        findings: lintFindings,
         output: output.slice(-4000),
       },
+      findings: lintFindingsToActionable(lintFindings),
+      rawOutput: output.slice(0, MAX_RAW_OUTPUT),
       timestamp,
     }
   }
@@ -665,6 +701,19 @@ function parseEslintOutput(output: string): LintFinding[] {
   }
 
   return findings
+}
+
+/**
+ * Convert internal LintFindings to the standardized ActionableFinding format.
+ */
+function lintFindingsToActionable(lintFindings: LintFinding[]): ActionableFinding[] {
+  return lintFindings.map((f) => ({
+    file: f.file,
+    line: f.line ?? 0,
+    issue: `${f.severity === 'error' ? 'Error' : 'Warning'}: ${f.message}${f.rule ? ` (${f.rule})` : ''}`,
+    suggestedFix: `Fix the ${f.rule ?? 'lint'} issue at ${f.file}${f.line ? `:${f.line}` : ''}`,
+    severity: f.severity === 'error' ? 'high' as const : 'medium' as const,
+  }))
 }
 
 /**

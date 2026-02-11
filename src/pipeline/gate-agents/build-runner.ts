@@ -12,9 +12,12 @@
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
 import { execAsync, execFileAsync } from '../exec-utils.js'
-import type { GateResult, StackRunnerResult } from '../types.js'
+import type { GateResult, StackRunnerResult, ActionableFinding } from '../types.js'
 import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
+
+/** Cap raw output at 50KB for sanity. */
+const MAX_RAW_OUTPUT = 50 * 1024
 
 // ============================================================================
 // Allowed Build Commands (whitelist for security)
@@ -171,11 +174,30 @@ async function runMultiStackBuilds(
         ? `No build commands configured — skipping build gate`
         : `All builds passed (${parts.join(', ')})`
 
+  // Build rawOutput from all stack outputs
+  const allRawOutput = stackResults
+    .map((r) => r.output ? `[${r.type}] ${r.output}` : '')
+    .filter(Boolean)
+    .join('\n---\n')
+
+  // Build findings from failed stacks
+  const findings: ActionableFinding[] = stackResults
+    .filter((r) => r.status === 'fail')
+    .map((r) => ({
+      file: '',
+      line: 0,
+      issue: `Build failed for ${r.type} stack at ${r.path} (exit code ${r.exitCode ?? 'unknown'})`,
+      suggestedFix: `Run \`${r.command ?? 'build'}\` in ${r.path} and fix build errors`,
+      severity: 'critical' as const,
+    }))
+
   return {
     verdict,
     checkName: 'build',
     summary,
     details: { stacks: stackResults },
+    findings,
+    rawOutput: allRawOutput.slice(0, MAX_RAW_OUTPUT),
     timestamp,
   }
 }
@@ -199,6 +221,8 @@ async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
       checkName: 'build',
       summary: 'No build command found in package.json — skipping build gate',
       details: { reason: 'no-build-command' },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -211,6 +235,8 @@ async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
       checkName: 'build',
       summary: `Build command "${buildCommand}" not in whitelist — skipping for security`,
       details: { reason: 'command-not-whitelisted', command: buildCommand },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -236,6 +262,8 @@ async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
         command: buildCommand,
         output: output.slice(-2000), // Last 2KB of output
       },
+      findings: [],
+      rawOutput: output.slice(0, MAX_RAW_OUTPUT),
       timestamp,
     }
   } catch (err) {
@@ -251,6 +279,14 @@ async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
         exitCode: execError.code,
         output: output.slice(-4000), // Last 4KB for failures (more context)
       },
+      findings: [{
+        file: '',
+        line: 0,
+        issue: `Build failed with exit code ${execError.code ?? 'unknown'}`,
+        suggestedFix: `Run \`${buildCommand}\` and fix build errors`,
+        severity: 'critical',
+      }],
+      rawOutput: output.slice(0, MAX_RAW_OUTPUT),
       timestamp,
     }
   }

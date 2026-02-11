@@ -16,7 +16,7 @@ import { readFileSync } from 'fs'
 import { mkdtemp, writeFile, readFile, rm } from 'fs/promises'
 import { join, resolve, relative } from 'path'
 import { tmpdir } from 'os'
-import type { PipelineRun, GateResult } from '../types.js'
+import type { PipelineRun, GateResult, ActionableFinding } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
 import { runStage } from '../stage-runner.js'
 import { resolveModel, resolveBudget } from '../pipeline-config.js'
@@ -82,6 +82,8 @@ export async function runAdversary(
       checkName: 'adversary',
       summary: 'No diff found — skipping adversary gate',
       details: { reason: 'no-diff' },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -120,6 +122,8 @@ export async function runAdversary(
         checkName: 'adversary',
         summary: `Adversary session failed (exit code ${result.exitCode}) — treating as pass`,
         details: { error: result.stderr.slice(0, 1000) },
+        findings: [],
+        rawOutput: result.stderr.slice(0, 50000),
         timestamp,
       }
     }
@@ -132,6 +136,8 @@ export async function runAdversary(
         checkName: 'adversary',
         summary: 'Adversary produced no tests — pass',
         details: { reasoning: adversaryOutput?.reasoning ?? 'no output parsed' },
+        findings: [],
+        rawOutput: result.stdout,
         timestamp,
       }
     }
@@ -156,6 +162,15 @@ export async function runAdversary(
     const failedTests = compiled.filter((r) => !r.passed)
 
     if (failedTests.length > 0) {
+      // Convert failed adversary tests to ActionableFinding format
+      const adversaryFindings: ActionableFinding[] = failedTests.map((t) => ({
+        file: '',
+        line: 0,
+        issue: `Adversary test "${t.filename}" exposed a bug: ${t.output.split('\n').find((l) => l.trim()) ?? 'test failed'}`,
+        suggestedFix: `Fix the bug exposed by adversary test "${t.filename}"`,
+        severity: 'high' as const,
+      }))
+
       return {
         verdict: 'fail',
         checkName: 'adversary',
@@ -172,6 +187,8 @@ export async function runAdversary(
           })),
           reasoning: adversaryOutput.reasoning,
         },
+        findings: adversaryFindings,
+        rawOutput: result.stdout,
         timestamp,
       }
     }
@@ -188,6 +205,8 @@ export async function runAdversary(
         testsFailed: 0,
         reasoning: adversaryOutput.reasoning,
       },
+      findings: [],
+      rawOutput: result.stdout,
       timestamp,
     }
   } catch (err) {
@@ -196,6 +215,8 @@ export async function runAdversary(
       checkName: 'adversary',
       summary: `Adversary error: ${(err as Error).message} — treating as pass`,
       details: { error: (err as Error).message },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   } finally {

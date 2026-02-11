@@ -8,7 +8,7 @@
  * a structured pass/fail verdict.
  */
 
-import type { PipelineRun, GateResult } from '../types.js'
+import type { PipelineRun, GateResult, ActionableFinding } from '../types.js'
 import { runStage } from '../stage-runner.js'
 import { resolveModel, resolveBudget } from '../pipeline-config.js'
 import { buildAcValidatorPrompt } from '../prompt-builder.js'
@@ -44,6 +44,8 @@ export async function runAcValidator(
       checkName: 'ac-validator',
       summary: 'No acceptance criteria defined — skipping AC validation',
       details: { reason: 'no-acceptance-criteria' },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -56,6 +58,8 @@ export async function runAcValidator(
       checkName: 'ac-validator',
       summary: 'No diff found — skipping AC validation',
       details: { reason: 'no-diff' },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -92,6 +96,8 @@ export async function runAcValidator(
         checkName: 'ac-validator',
         summary: `AC validator session failed (exit code ${result.exitCode})`,
         details: { error: result.stderr.slice(0, 1000) },
+        findings: [],
+        rawOutput: result.stderr.slice(0, 50000),
         timestamp,
       }
     }
@@ -104,6 +110,8 @@ export async function runAcValidator(
       checkName: 'ac-validator',
       summary: `AC validator error: ${(err as Error).message}`,
       details: { error: (err as Error).message },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -141,9 +149,22 @@ function parseAcVerdict(stdout: string, timestamp: string): GateResult {
       checkName: 'ac-validator',
       summary: 'AC validator produced unstructured output — cannot verify acceptance criteria',
       details: { rawOutput: stdout.slice(0, 2000) },
+      findings: [],
+      rawOutput: stdout,
       timestamp,
     }
   }
+
+  // Convert unmet criteria to ActionableFinding format
+  const actionableFindings: ActionableFinding[] = (parsed.criteria ?? [])
+    .filter((c) => !c.met)
+    .map((c) => ({
+      file: '',
+      line: 0,
+      issue: `Acceptance criterion not met: "${c.criterion}"`,
+      suggestedFix: c.explanation,
+      severity: 'high' as const,
+    }))
 
   return {
     verdict: parsed.pass ? 'pass' : 'fail',
@@ -154,6 +175,8 @@ function parseAcVerdict(stdout: string, timestamp: string): GateResult {
       totalCriteria: parsed.criteria?.length ?? 0,
       metCriteria: parsed.criteria?.filter((c) => c.met).length ?? 0,
     },
+    findings: actionableFindings,
+    rawOutput: stdout,
     timestamp,
   }
 }

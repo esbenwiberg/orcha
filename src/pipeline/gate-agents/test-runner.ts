@@ -13,9 +13,12 @@
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
 import { execFileAsync } from '../exec-utils.js'
-import type { GateResult, StackRunnerResult } from '../types.js'
+import type { GateResult, StackRunnerResult, ActionableFinding } from '../types.js'
 import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
+
+/** Cap raw output at 50KB for sanity. */
+const MAX_RAW_OUTPUT = 50 * 1024
 
 // ============================================================================
 // Allowed Test Commands (whitelist for security)
@@ -180,11 +183,30 @@ async function runMultiStackTests(
         ? `No test commands configured — skipping test gate`
         : `All tests passed (${parts.join(', ')})`
 
+  // Build rawOutput from all stack outputs
+  const allRawOutput = stackResults
+    .map((r) => r.output ? `[${r.type}] ${r.output}` : '')
+    .filter(Boolean)
+    .join('\n---\n')
+
+  // Build findings from failed stacks
+  const findings: ActionableFinding[] = stackResults
+    .filter((r) => r.status === 'fail')
+    .map((r) => ({
+      file: '',
+      line: 0,
+      issue: `Test suite failed for ${r.type} stack at ${r.path} (exit code ${r.exitCode ?? 'unknown'})`,
+      suggestedFix: `Run \`${r.command ?? 'tests'}\` in ${r.path} and fix failing tests`,
+      severity: 'critical' as const,
+    }))
+
   return {
     verdict,
     checkName: 'test-runner',
     summary,
     details: { stacks: stackResults },
+    findings,
+    rawOutput: allRawOutput.slice(0, MAX_RAW_OUTPUT),
     timestamp,
   }
 }
@@ -208,6 +230,8 @@ async function runLegacyTests(worktreePath: string): Promise<GateResult> {
       checkName: 'test-runner',
       summary: 'No test command found in package.json — skipping test gate',
       details: { reason: 'no-test-command' },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -220,6 +244,8 @@ async function runLegacyTests(worktreePath: string): Promise<GateResult> {
       checkName: 'test-runner',
       summary: `Test command "${testCommand}" not in whitelist — skipping for security`,
       details: { reason: 'command-not-whitelisted', command: testCommand },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -246,6 +272,8 @@ async function runLegacyTests(worktreePath: string): Promise<GateResult> {
         command: testCommand,
         output: output.slice(-2000), // Last 2KB of output
       },
+      findings: [],
+      rawOutput: output.slice(0, MAX_RAW_OUTPUT),
       timestamp,
     }
   } catch (err) {
@@ -261,6 +289,14 @@ async function runLegacyTests(worktreePath: string): Promise<GateResult> {
         exitCode: execError.status,
         output: output.slice(-4000), // Last 4KB for failures (more context)
       },
+      findings: [{
+        file: '',
+        line: 0,
+        issue: `Tests failed with exit code ${execError.status ?? 'unknown'}`,
+        suggestedFix: `Run \`${testCommand}\` and fix failing tests`,
+        severity: 'critical',
+      }],
+      rawOutput: output.slice(0, MAX_RAW_OUTPUT),
       timestamp,
     }
   }

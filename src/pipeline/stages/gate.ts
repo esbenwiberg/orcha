@@ -461,6 +461,8 @@ function makeSkippedResult(checkName: string): GateResult {
     verdict: 'skip',
     checkName,
     summary: `Skipped by user override`,
+    findings: [],
+    rawOutput: '',
     timestamp: new Date().toISOString(),
   }
 }

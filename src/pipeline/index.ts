@@ -11,6 +11,8 @@ export type {
   BudgetConfig,
   PipelineConfig,
   GateVerdict,
+  Severity,
+  ActionableFinding,
   GateResult,
   StackRunnerResult,
   StageResult,

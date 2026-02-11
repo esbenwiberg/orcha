@@ -8,7 +8,7 @@
  * a structured pass/fail verdict.
  */
 
-import type { PipelineRun, GateResult } from '../types.js'
+import type { PipelineRun, GateResult, ActionableFinding, Severity } from '../types.js'
 import { runStage } from '../stage-runner.js'
 import { resolveModel, resolveBudget } from '../pipeline-config.js'
 import { buildCodeReviewPrompt } from '../prompt-builder.js'
@@ -60,6 +60,8 @@ export async function runCodeReview(
       checkName: 'code-review',
       summary: 'No diff found — skipping code review',
       details: { reason: 'no-diff' },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -92,6 +94,8 @@ export async function runCodeReview(
         checkName: 'code-review',
         summary: `Code review session failed (exit code ${result.exitCode})`,
         details: { error: result.stderr.slice(0, 1000) },
+        findings: [],
+        rawOutput: result.stderr.slice(0, 50000),
         timestamp,
       }
     }
@@ -103,6 +107,8 @@ export async function runCodeReview(
       checkName: 'code-review',
       summary: `Code review error: ${(err as Error).message}`,
       details: { error: (err as Error).message },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -118,6 +124,18 @@ function isCodeReviewVerdict(obj: unknown): obj is CodeReviewVerdictOutput {
   return typeof v.pass === 'boolean' && typeof v.summary === 'string'
 }
 
+/** Map code review severity strings to ActionableFinding severity. */
+function mapCodeReviewSeverity(severity: string): Severity {
+  switch (severity) {
+    case 'critical': return 'critical'
+    case 'major': return 'high'
+    case 'minor': return 'medium'
+    case 'info':
+    case 'nitpick': return 'info'
+    default: return 'medium'
+  }
+}
+
 function parseCodeReviewVerdict(stdout: string, timestamp: string): GateResult {
   const parsed = parseStructuredOutput(stdout, isCodeReviewVerdict)
 
@@ -127,6 +145,8 @@ function parseCodeReviewVerdict(stdout: string, timestamp: string): GateResult {
       checkName: 'code-review',
       summary: 'Code review produced unstructured output — cannot verify code quality',
       details: { rawOutput: stdout.slice(0, 2000) },
+      findings: [],
+      rawOutput: stdout,
       timestamp,
     }
   }
@@ -134,6 +154,15 @@ function parseCodeReviewVerdict(stdout: string, timestamp: string): GateResult {
   const majorFindings = parsed.findings?.filter(
     (f) => f.severity === 'critical' || f.severity === 'major',
   ) ?? []
+
+  // Convert code review findings to ActionableFinding format
+  const actionableFindings: ActionableFinding[] = (parsed.findings ?? []).map((f) => ({
+    file: f.file ?? '',
+    line: f.line ?? 0,
+    issue: f.description,
+    suggestedFix: `Review and fix the ${f.severity} issue in ${f.file ?? 'the code'}${f.line ? ` at line ${f.line}` : ''}`,
+    severity: mapCodeReviewSeverity(f.severity),
+  }))
 
   return {
     verdict: parsed.pass ? 'pass' : 'fail',
@@ -144,6 +173,8 @@ function parseCodeReviewVerdict(stdout: string, timestamp: string): GateResult {
       totalFindings: parsed.findings?.length ?? 0,
       majorFindings: majorFindings.length,
     },
+    findings: actionableFindings,
+    rawOutput: stdout,
     timestamp,
   }
 }

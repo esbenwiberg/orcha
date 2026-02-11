@@ -111,6 +111,25 @@ export type GateVerdict = 'pass' | 'fail' | 'skip'
 /** Severity levels for gate findings (security, code review). */
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info'
 
+/**
+ * A single actionable finding from a gate agent.
+ *
+ * Provides a standardized format for all gate agents (shell and AI)
+ * so fix agents and human reviewers get consistent, structured feedback.
+ */
+export interface ActionableFinding {
+  /** File path (if applicable, empty string for general issues) */
+  file: string
+  /** Line number (0 if not applicable) */
+  line: number
+  /** What's wrong — one sentence */
+  issue: string
+  /** How to fix it — one sentence suggestion */
+  suggestedFix: string
+  /** Severity level */
+  severity: Severity
+}
+
 export interface GateResult {
   verdict: GateVerdict
   /** Name of the gate check (e.g. "tests", "lint", "adversary-review"). */
@@ -119,6 +138,10 @@ export interface GateResult {
   summary: string
   /** Optional structured details (e.g. test counts, lint errors). */
   details?: Record<string, unknown>
+  /** Standardized findings for fix agents and human review. */
+  findings: ActionableFinding[]
+  /** Raw output from the check (terminal output for shell agents, full text for AI agents). */
+  rawOutput: string
   timestamp: string // ISO 8601
 }
 

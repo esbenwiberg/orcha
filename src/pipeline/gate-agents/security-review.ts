@@ -8,7 +8,7 @@
  * a structured pass/fail verdict.
  */
 
-import type { PipelineRun, GateResult } from '../types.js'
+import type { PipelineRun, GateResult, ActionableFinding, Severity } from '../types.js'
 import { runStage } from '../stage-runner.js'
 import { resolveModel, resolveBudget } from '../pipeline-config.js'
 import { buildSecurityReviewPrompt } from '../prompt-builder.js'
@@ -61,6 +61,8 @@ export async function runSecurityReview(
       checkName: 'security',
       summary: 'No diff found — skipping security review',
       details: { reason: 'no-diff' },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -93,6 +95,8 @@ export async function runSecurityReview(
         checkName: 'security',
         summary: `Security review session failed (exit code ${result.exitCode})`,
         details: { error: result.stderr.slice(0, 1000) },
+        findings: [],
+        rawOutput: result.stderr.slice(0, 50000),
         timestamp,
       }
     }
@@ -104,6 +108,8 @@ export async function runSecurityReview(
       checkName: 'security',
       summary: `Security review error: ${(err as Error).message}`,
       details: { error: (err as Error).message },
+      findings: [],
+      rawOutput: '',
       timestamp,
     }
   }
@@ -119,6 +125,18 @@ function isSecurityVerdict(obj: unknown): obj is SecurityVerdictOutput {
   return typeof v.pass === 'boolean' && typeof v.summary === 'string'
 }
 
+/** Map security severity strings to ActionableFinding severity. */
+function mapSecuritySeverity(severity: string): Severity {
+  switch (severity) {
+    case 'critical': return 'critical'
+    case 'high': return 'high'
+    case 'medium': return 'medium'
+    case 'low': return 'low'
+    case 'info': return 'info'
+    default: return 'medium'
+  }
+}
+
 function parseSecurityVerdict(stdout: string, timestamp: string): GateResult {
   const parsed = parseStructuredOutput(stdout, isSecurityVerdict)
 
@@ -128,6 +146,8 @@ function parseSecurityVerdict(stdout: string, timestamp: string): GateResult {
       checkName: 'security',
       summary: 'Security review produced unstructured output — cannot verify security',
       details: { rawOutput: stdout.slice(0, 2000) },
+      findings: [],
+      rawOutput: stdout,
       timestamp,
     }
   }
@@ -135,6 +155,15 @@ function parseSecurityVerdict(stdout: string, timestamp: string): GateResult {
   const criticalFindings = parsed.findings?.filter(
     (f) => f.severity === 'critical' || f.severity === 'high',
   ) ?? []
+
+  // Convert security findings to ActionableFinding format
+  const actionableFindings: ActionableFinding[] = (parsed.findings ?? []).map((f) => ({
+    file: f.file ?? '',
+    line: f.line ?? 0,
+    issue: `[${f.category}] ${f.description}`,
+    suggestedFix: `Fix the ${f.severity} ${f.category} vulnerability in ${f.file ?? 'the code'}${f.line ? ` at line ${f.line}` : ''}`,
+    severity: mapSecuritySeverity(f.severity),
+  }))
 
   return {
     verdict: parsed.pass ? 'pass' : 'fail',
@@ -145,6 +174,8 @@ function parseSecurityVerdict(stdout: string, timestamp: string): GateResult {
       totalFindings: parsed.findings?.length ?? 0,
       criticalFindings: criticalFindings.length,
     },
+    findings: actionableFindings,
+    rawOutput: stdout,
     timestamp,
   }
 }
