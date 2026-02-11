@@ -351,23 +351,21 @@ export interface CompetingResult {
 }
 
 // ============================================================================
-// Circuit Breaker (Fix Loop)
+// Circuit Breaker (Fix Loop) — Per-Check Tracking
 // ============================================================================
 
-/** Signature identifying a unique failure pattern in the fix loop. */
-export interface FailureSignature {
-  /** Hash of the failure pattern (e.g. SHA256 of checkName:summary). */
-  hash: string
-  /** Human-readable description of what failed. */
-  description: string
-}
-
-/** Circuit breaker state tracking repeated failures. */
-export interface CircuitBreakerState {
-  /** Map of failure signature hashes to occurrence count. */
-  failureCounts: Record<string, number>
-  /** Timestamp when circuit breaker was last updated. */
-  lastUpdated: string
+/**
+ * Per-check circuit breaker state.
+ *
+ * Tracks each gate check independently. If a check fails with the same
+ * rawOutput hash twice in a row, it's "circuit-broken" (skip fix, escalate).
+ * Other checks continue to get fix attempts normally.
+ */
+export interface PerCheckBreakerState {
+  /** checkName -> hash of last rawOutput (first 2000 chars). */
+  lastFailureHash: Record<string, string>
+  /** checkName -> consecutive count of same hash. */
+  consecutiveCount: Record<string, number>
 }
 
 // ============================================================================
@@ -608,8 +606,8 @@ export interface PipelineRun {
   userInstructions?: string
   /** Tech stacks that failed dependency installation (e.g. ['node', 'python']). */
   dependencyFailures?: string[]
-  /** Circuit breaker state for detecting repeated fix-loop failures. */
-  circuitBreakerState?: CircuitBreakerState
+  /** Circuit breaker state for detecting repeated fix-loop failures (per-check tracking). */
+  circuitBreakerState?: PerCheckBreakerState
 
   // --- Milestone tracking ---
   /**

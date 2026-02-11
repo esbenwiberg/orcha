@@ -7,6 +7,10 @@
  *
  * Priority order ensures the most impactful fixes (test, build) run
  * first, so later checks benefit from already-fixed code.
+ *
+ * Uses the per-check circuit breaker: if a check fails with the same
+ * output pattern twice in a row, its fix is skipped (circuit-broken)
+ * and it's marked for escalation. Other checks continue normally.
  */
 
 import type { PipelineRun, GateResult } from '../types.js'
@@ -16,7 +20,7 @@ import { resolveModel, resolveBudget } from '../pipeline-config.js'
 import { buildPerGateFixPrompt } from '../prompt-builder.js'
 import { getDiff } from '../git-utils.js'
 import { appendProgress } from '../progress.js'
-import { CircuitBreaker } from './circuit-breaker.js'
+import { PerCheckCircuitBreaker } from './circuit-breaker.js'
 
 // ============================================================================
 // Constants
@@ -48,6 +52,8 @@ export interface FixOptions {
   modelOverride?: string
   /** Override budget for fix stages. */
   budgetOverride?: number
+  /** Per-check circuit breaker instance (managed by fix-loop.ts). */
+  circuitBreaker: PerCheckCircuitBreaker
 }
 
 export interface PerGateFixResult {
@@ -55,6 +61,8 @@ export interface PerGateFixResult {
   fixedChecks: string[]
   /** Check names that were skipped (circuit breaker or unknown priority). */
   skippedChecks: string[]
+  /** Check names that were circuit-broken (subset of skippedChecks). */
+  circuitBrokenChecks: string[]
 }
 
 // ============================================================================
@@ -65,12 +73,13 @@ export interface PerGateFixResult {
  * Run per-gate fixes for each failed gate result, sequentially in priority order.
  *
  * For each failed check:
- * 1. Check circuit breaker -- skip if same pattern has failed twice
- * 2. Get current diff from worktree
- * 3. Build a focused per-gate fix prompt
- * 4. Spawn a Claude session to fix that specific check
- * 5. Auto-commit after the session completes
- * 6. Emit progress events
+ * 1. Record the failure in the circuit breaker
+ * 2. If circuit-broken (same output hash seen twice) — skip its fix, mark for escalation
+ * 3. Get current diff from worktree
+ * 4. Build a focused per-gate fix prompt
+ * 5. Spawn a Claude session to fix that specific check
+ * 6. Auto-commit after the session completes
+ * 7. Emit progress events
  */
 export async function runPerGateFixes(
   run: PipelineRun,
@@ -79,27 +88,29 @@ export async function runPerGateFixes(
 ): Promise<PerGateFixResult> {
   const fixedChecks: string[] = []
   const skippedChecks: string[] = []
+  const circuitBrokenChecks: string[] = []
 
   // Sort failed results by priority order
   const sorted = sortByPriority(failedResults)
 
-  // Initialize circuit breaker from existing state
-  const circuitBreaker = new CircuitBreaker(run.circuitBreakerState)
+  const { circuitBreaker } = opts
 
   for (const gateResult of sorted) {
     const checkName = gateResult.checkName
 
-    // Check circuit breaker for this individual check
-    const checkSignature = circuitBreaker.computeSignature([gateResult])
-    if (circuitBreaker.isRepeatedFailure(checkSignature)) {
+    // Record this failure and check if the check is now circuit-broken
+    const isBroken = circuitBreaker.recordCheckFailure(checkName, gateResult.rawOutput)
+
+    if (isBroken) {
       await appendProgress(run.id, {
         type: 'info',
         stage: 'fix-loop',
-        title: `Skipping ${checkName}: circuit breaker (repeated failure pattern)`,
-        detail: checkSignature.description,
+        title: `Skipping ${checkName}: circuit breaker (same failure pattern repeated)`,
+        detail: `Check "${checkName}" has failed with the same output pattern — skipping fix`,
       }).catch(() => { /* best-effort */ })
 
       skippedChecks.push(checkName)
+      circuitBrokenChecks.push(checkName)
       continue
     }
 
@@ -172,7 +183,7 @@ export async function runPerGateFixes(
     fixedChecks.push(checkName)
   }
 
-  return { fixedChecks, skippedChecks }
+  return { fixedChecks, skippedChecks, circuitBrokenChecks }
 }
 
 // ============================================================================

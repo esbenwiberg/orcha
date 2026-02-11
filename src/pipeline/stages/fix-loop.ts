@@ -6,10 +6,13 @@
  * priority order (test -> build -> lint -> code-review -> security ->
  * adversary -> ac-validator).
  *
+ * The per-check circuit breaker tracks each check independently:
+ * if a check fails with the same output pattern twice, its fix is
+ * skipped and escalated — but other checks' fixes still run.
+ *
  * After all per-gate fixes complete, increments the fix loop counter
  * and transitions back to 'gate' for re-evaluation. If max retries
- * are exceeded or all checks are skipped by the circuit breaker,
- * transitions to 'escalated'.
+ * are exceeded or all checks are circuit-broken, transitions to 'escalated'.
  */
 
 import { writeFile, mkdir } from 'fs/promises'
@@ -18,7 +21,7 @@ import type { PipelineRun, StageResult } from '../types.js'
 import { transition, recordStageResult, incrementFixLoop, transitionToError } from '../pipeline-engine.js'
 import { getPipelineDir } from '../pipeline-store.js'
 import { appendProgress } from '../progress.js'
-import { CircuitBreaker } from '../fix-loop/circuit-breaker.js'
+import { PerCheckCircuitBreaker } from '../fix-loop/circuit-breaker.js'
 import { savePipelineRun, loadPipelineRun } from '../pipeline-store.js'
 import { EscalationManager } from '../escalation/escalation-manager.js'
 import { runPerGateFixes } from '../fix-loop/per-gate-fixer.js'
@@ -56,57 +59,7 @@ export async function runFixLoopStage(
 
   try {
     // -----------------------------------------------------------------------
-    // 1. Circuit breaker: check for repeated overall failure pattern
-    // -----------------------------------------------------------------------
-    const circuitBreaker = new CircuitBreaker(run.circuitBreakerState)
-    const failureSignature = circuitBreaker.computeSignature(run.gateResults)
-
-    if (circuitBreaker.isRepeatedFailure(failureSignature)) {
-      await appendProgress(run.id, {
-        type: 'info',
-        stage: 'fix-loop',
-        title: 'Circuit breaker triggered: repeated failure pattern detected',
-        detail: failureSignature.description,
-      }).catch(() => { /* best-effort */ })
-
-      const escalationManager = new EscalationManager()
-      await escalationManager.escalate(run.id, `Circuit breaker: ${failureSignature.description}`)
-
-      run = (await loadPipelineRun(run.id))!
-      run = await transition(run, 'escalated')
-      return run
-    }
-
-    // Record this failure (increments count internally)
-    const shouldEscalate = circuitBreaker.recordFailure(failureSignature)
-
-    // Persist circuit breaker state
-    const updatedRun: PipelineRun = {
-      ...run,
-      circuitBreakerState: circuitBreaker.getState(),
-      updatedAt: new Date().toISOString(),
-    }
-    await savePipelineRun(updatedRun)
-    run = updatedRun
-
-    if (shouldEscalate) {
-      await appendProgress(run.id, {
-        type: 'info',
-        stage: 'fix-loop',
-        title: 'Circuit breaker triggered: escalating due to repeated failures',
-        detail: failureSignature.description,
-      }).catch(() => { /* best-effort */ })
-
-      const escalationManager = new EscalationManager()
-      await escalationManager.escalate(run.id, `Circuit breaker: ${failureSignature.description}`)
-
-      run = (await loadPipelineRun(run.id))!
-      run = await transition(run, 'escalated')
-      return run
-    }
-
-    // -----------------------------------------------------------------------
-    // 2. Max retries check
+    // 1. Max retries check
     // -----------------------------------------------------------------------
     if (run.fixLoopCount >= maxFixLoops) {
       const escalationManager = new EscalationManager()
@@ -118,7 +71,7 @@ export async function runFixLoopStage(
     }
 
     // -----------------------------------------------------------------------
-    // 3. Determine attempt number
+    // 2. Determine attempt number
     // -----------------------------------------------------------------------
     const attempt = run.fixLoopCount + 1
 
@@ -131,20 +84,41 @@ export async function runFixLoopStage(
     }).catch(() => { /* best-effort */ })
 
     // -----------------------------------------------------------------------
+    // 3. Initialize per-check circuit breaker from persisted state
+    // -----------------------------------------------------------------------
+    const circuitBreaker = new PerCheckCircuitBreaker(run.circuitBreakerState)
+
+    // -----------------------------------------------------------------------
     // 4. Get failed checks and run per-gate fixes
     // -----------------------------------------------------------------------
     const failed = run.gateResults.filter((r) => r.verdict === 'fail')
 
-    const { fixedChecks, skippedChecks } = await runPerGateFixes(run, failed, {
+    const { fixedChecks, skippedChecks, circuitBrokenChecks } = await runPerGateFixes(run, failed, {
       attempt,
       modelOverride: opts?.modelOverride,
       budgetOverride: opts?.budgetOverride,
+      circuitBreaker,
     })
 
     // -----------------------------------------------------------------------
-    // 5. If all checks were skipped (circuit breaker), escalate
+    // 5. Persist circuit breaker state after per-gate fixes
+    // -----------------------------------------------------------------------
+    const updatedRun: PipelineRun = {
+      ...run,
+      circuitBreakerState: circuitBreaker.getState(),
+      updatedAt: new Date().toISOString(),
+    }
+    await savePipelineRun(updatedRun)
+    run = updatedRun
+
+    // -----------------------------------------------------------------------
+    // 6. If all checks were skipped / circuit-broken, escalate
     // -----------------------------------------------------------------------
     if (fixedChecks.length === 0) {
+      const reason = circuitBrokenChecks.length > 0
+        ? `Circuit breaker: all failed checks have repeated failure patterns (${circuitBrokenChecks.join(', ')})`
+        : `All failed checks skipped by fix errors: ${skippedChecks.join(', ')}`
+
       await appendProgress(run.id, {
         type: 'info',
         stage: 'fix-loop',
@@ -153,7 +127,7 @@ export async function runFixLoopStage(
       }).catch(() => { /* best-effort */ })
 
       const escalationManager = new EscalationManager()
-      await escalationManager.escalate(run.id, `All failed checks skipped by circuit breaker or fix errors: ${skippedChecks.join(', ')}`)
+      await escalationManager.escalate(run.id, reason)
 
       run = (await loadPipelineRun(run.id))!
       run = await transition(run, 'escalated')
@@ -161,12 +135,12 @@ export async function runFixLoopStage(
     }
 
     // -----------------------------------------------------------------------
-    // 6. Increment fix loop counter
+    // 7. Increment fix loop counter
     // -----------------------------------------------------------------------
     run = await incrementFixLoop(run)
 
     // -----------------------------------------------------------------------
-    // 7. Save fix loop artifacts
+    // 8. Save fix loop artifacts
     // -----------------------------------------------------------------------
     const fixDir = join(getPipelineDir(run.id), 'fix-loops', `attempt-${attempt}`)
     await mkdir(fixDir, { recursive: true })
@@ -175,6 +149,7 @@ export async function runFixLoopStage(
       attempt,
       fixedChecks,
       skippedChecks,
+      circuitBrokenChecks,
       startedAt,
       completedAt: new Date().toISOString(),
     }
@@ -191,11 +166,11 @@ export async function runFixLoopStage(
       stage: 'fix-loop',
       title: `Fix loop attempt ${attempt} completed`,
       detail: `Fixed: ${fixedChecks.join(', ')}${skippedChecks.length > 0 ? ` | Skipped: ${skippedChecks.join(', ')}` : ''}`,
-      data: { attempt, fixedChecks, skippedChecks },
+      data: { attempt, fixedChecks, skippedChecks, circuitBrokenChecks },
     }).catch(() => { /* best-effort */ })
 
     // -----------------------------------------------------------------------
-    // 8. Record stage result and transition back to gate
+    // 9. Record stage result and transition back to gate
     // -----------------------------------------------------------------------
     const completedAt = new Date().toISOString()
     const stageResult: StageResult = {

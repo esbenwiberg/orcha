@@ -1,110 +1,102 @@
 /**
- * Circuit Breaker
+ * Per-Check Circuit Breaker
  *
- * Detects repeated failures in the fix loop and prevents infinite retries.
- * Uses a simple signature-based approach: if the same failure pattern appears
- * multiple times (threshold = 2), the circuit breaker triggers escalation.
+ * Tracks failures per gate check independently. If a specific check
+ * (e.g. "test") fails with the same output pattern twice in a row,
+ * that check is "circuit-broken" — its fix is skipped and it's marked
+ * for escalation. Other checks' fixes still run normally.
  *
- * Signature computation:
- * - Hash of "${checkName}:${firstLineOfSummary}" for each failing gate check
- * - Combined into a single signature hash for the entire gate result set
+ * Hashing uses the first 2000 chars of rawOutput for stability,
+ * so minor output differences (timestamps, PIDs) don't break the hash.
  */
 
 import { createHash } from 'crypto'
-import type { GateResult, FailureSignature, CircuitBreakerState } from '../types.js'
+import type { PerCheckBreakerState } from '../types.js'
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-/** Number of times a failure signature must repeat before escalating. */
-const ESCALATION_THRESHOLD = 2
+/** Number of consecutive same-hash failures before a check is circuit-broken. */
+const BREAKER_THRESHOLD = 2
+
+/** Max chars of rawOutput to hash (for stability against minor output diffs). */
+const HASH_INPUT_LIMIT = 2000
 
 // ============================================================================
-// Circuit Breaker Class
+// Per-Check Circuit Breaker
 // ============================================================================
 
-export class CircuitBreaker {
-  private state: CircuitBreakerState
+export class PerCheckCircuitBreaker {
+  private state: PerCheckBreakerState
 
-  constructor(initialState?: CircuitBreakerState) {
-    this.state = initialState ?? {
-      failureCounts: {},
-      lastUpdated: new Date().toISOString(),
+  constructor(state?: PerCheckBreakerState) {
+    this.state = state ?? {
+      lastFailureHash: {},
+      consecutiveCount: {},
     }
   }
 
   /**
-   * Record a failure signature and check if escalation threshold is reached.
-   * Returns true if the circuit breaker has tripped (should escalate).
+   * Check if a specific gate check should be skipped (circuit broken).
+   *
+   * Hashes the rawOutput and compares to the last recorded failure hash
+   * for this check. If the hash matches and the consecutive count is
+   * already at the threshold, the check is broken.
    */
-  recordFailure(signature: FailureSignature): boolean {
-    const count = (this.state.failureCounts[signature.hash] ?? 0) + 1
-    this.state.failureCounts[signature.hash] = count
-    this.state.lastUpdated = new Date().toISOString()
+  isCheckBroken(checkName: string, rawOutput: string): boolean {
+    const hash = hashOutput(rawOutput)
+    const lastHash = this.state.lastFailureHash[checkName]
+    const count = this.state.consecutiveCount[checkName] ?? 0
 
-    return count >= ESCALATION_THRESHOLD
+    return hash === lastHash && count >= BREAKER_THRESHOLD
   }
 
   /**
-   * Check if a failure signature has been seen before (without incrementing count).
+   * Record a failure for a specific check.
+   *
+   * If the hash matches the previous failure for this check, increments
+   * the consecutive count. If it's a new hash, resets the count to 1.
+   *
+   * Returns true if the check is now circuit-broken (count >= threshold).
    */
-  isRepeatedFailure(signature: FailureSignature): boolean {
-    const count = this.state.failureCounts[signature.hash] ?? 0
-    return count >= ESCALATION_THRESHOLD
-  }
+  recordCheckFailure(checkName: string, rawOutput: string): boolean {
+    const hash = hashOutput(rawOutput)
+    const lastHash = this.state.lastFailureHash[checkName]
 
-  /**
-   * Compute a failure signature from gate results.
-   * Only includes FAILED checks (ignores passing/skipped checks).
-   */
-  computeSignature(gateResults: GateResult[]): FailureSignature {
-    const failures = gateResults.filter((r) => r.verdict === 'fail')
-
-    if (failures.length === 0) {
-      // No failures — this shouldn't happen in fix-loop, but handle gracefully
-      return {
-        hash: 'no-failures',
-        description: 'No failures (unexpected in fix-loop)',
-      }
+    if (hash === lastHash) {
+      // Same failure pattern — increment
+      this.state.consecutiveCount[checkName] = (this.state.consecutiveCount[checkName] ?? 0) + 1
+    } else {
+      // New failure pattern — reset
+      this.state.lastFailureHash[checkName] = hash
+      this.state.consecutiveCount[checkName] = 1
     }
 
-    // Build a signature from each failing check
-    const checkSignatures = failures.map((f) => {
-      const firstLine = f.summary.split('\n')[0].trim()
-      return `${f.checkName}:${firstLine}`
-    })
+    return this.state.consecutiveCount[checkName] >= BREAKER_THRESHOLD
+  }
 
-    // Sort to ensure consistent hashing regardless of check order
-    checkSignatures.sort()
-
-    // Hash the combined signature
-    const combinedSignature = checkSignatures.join('||')
-    const hash = createHash('sha256').update(combinedSignature).digest('hex').slice(0, 16)
-
-    // Build human-readable description
-    const description = failures.map((f) => f.checkName).join(', ')
-
+  /**
+   * Get serializable state for persistence on PipelineRun.
+   */
+  getState(): PerCheckBreakerState {
     return {
-      hash,
-      description: `Failed checks: ${description}`,
+      lastFailureHash: { ...this.state.lastFailureHash },
+      consecutiveCount: { ...this.state.consecutiveCount },
     }
   }
+}
 
-  /**
-   * Get the current circuit breaker state (for persistence).
-   */
-  getState(): CircuitBreakerState {
-    return { ...this.state }
-  }
+// ============================================================================
+// Helpers
+// ============================================================================
 
-  /**
-   * Reset the circuit breaker state (useful for retry-escalated).
-   */
-  reset(): void {
-    this.state = {
-      failureCounts: {},
-      lastUpdated: new Date().toISOString(),
-    }
-  }
+/**
+ * Hash the first HASH_INPUT_LIMIT chars of rawOutput using SHA-256.
+ * Truncating stabilizes the hash against minor output variations
+ * (timestamps, process IDs, etc.) that appear later in the output.
+ */
+function hashOutput(rawOutput: string): string {
+  const truncated = rawOutput.slice(0, HASH_INPUT_LIMIT)
+  return createHash('sha256').update(truncated).digest('hex').slice(0, 16)
 }
