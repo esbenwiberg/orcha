@@ -4597,45 +4597,26 @@ function connectPipelineEvents() {
               }
             }
 
-            // In overview mode, fade out and remove old entries before adding new one
-            if (isOverviewMode && isMajorEvent) {
-              const existingEntries = container.querySelectorAll('.timeline-entry');
-              existingEntries.forEach(entry => {
-                entry.classList.add('timeline-entry-fadeout');
-              });
+            // Render and prepend the new entry with highlight in overview mode
+            const shouldHighlight = isOverviewMode && isMajorEvent;
+            const wrapper = document.createElement('div');
+            wrapper.innerHTML = renderTimelineEntry(entry, true, shouldHighlight);
+            const newNode = wrapper.firstElementChild;
+            if (newNode) {
+              // Add fade-in animation for new entries
+              if (isOverviewMode && isMajorEvent) {
+                newNode.classList.add('timeline-entry-fadein');
+              }
+              container.insertBefore(newNode, container.firstChild);
+              container.scrollTop = 0;
 
-              // Remove old entries after fade animation completes
-              setTimeout(() => {
-                existingEntries.forEach(entry => entry.remove());
-
-                // Now render and add the new entry with fade-in
-                const wrapper = document.createElement('div');
-                wrapper.innerHTML = renderTimelineEntry(entry, true, false);
-                const newNode = wrapper.firstElementChild;
-                if (newNode) {
-                  newNode.classList.add('timeline-entry-fadein');
-                  container.insertBefore(newNode, container.firstChild);
-                  container.scrollTop = 0;
-                }
-              }, 300); // Match fadeout animation duration
-            } else {
-              // Detailed mode: normal append behavior
-              const shouldHighlight = isOverviewMode && isMajorEvent;
-              const wrapper = document.createElement('div');
-              wrapper.innerHTML = renderTimelineEntry(entry, true, shouldHighlight);
-              const newNode = wrapper.firstElementChild;
-              if (newNode) {
-                container.insertBefore(newNode, container.firstChild);
-                container.scrollTop = 0;
-
-                // Remove highlight class after 2 seconds
-                if (shouldHighlight) {
-                  requestAnimationFrame(() => {
-                    setTimeout(() => {
-                      newNode.classList.remove('timeline-entry-highlight');
-                    }, 2000);
-                  });
-                }
+              // Remove highlight class after 2 seconds
+              if (shouldHighlight) {
+                requestAnimationFrame(() => {
+                  setTimeout(() => {
+                    newNode.classList.remove('timeline-entry-highlight');
+                  }, 2000);
+                });
               }
             }
           }
@@ -5262,9 +5243,9 @@ function renderPipelineDetail(pipelineId) {
   html += '<div style="flex:1">';
   if (pipeline.title) {
     html += '<div class="pipeline-detail-title">' + escapeHtml(pipeline.title) + '</div>';
-    html += '<div style="color:#aaa;font-size:0.85rem;margin-top:2px;">' + escapeHtml(pipeline.description || '') + '</div>';
+    html += '<div style="color:#aaa;font-size:0.85rem;margin-top:2px;">' + truncateText(pipeline.description || '', 150) + '</div>';
   } else {
-    html += '<div class="pipeline-detail-title">' + escapeHtml(pipeline.description || 'Pipeline') + '</div>';
+    html += '<div class="pipeline-detail-title">' + truncateText(pipeline.description || 'Pipeline', 100) + '</div>';
   }
 
   // Add milestone count badge next to title (if available from shortDescription)
@@ -5966,8 +5947,8 @@ function renderTimelineEntries(entries, pipelineId) {
     // Default to overview mode if not set
     const mode = state.timelineModes[pipelineId] || 'overview';
     if (mode === 'overview') {
-      // In overview mode, show only major events and limit to the most recent one
-      entriesToRender = entries.filter(shouldShowInOverview).slice(-1);
+      // In overview mode, show only major events (all of them)
+      entriesToRender = entries.filter(shouldShowInOverview);
     }
   }
 
