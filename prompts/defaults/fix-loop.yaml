@@ -1,6 +1,6 @@
 name: fix-loop
-version: 1.0.0
-description: Fix-loop stage prompt template for resolving gate failures
+version: 2.0.0
+description: Generic fallback fix-loop prompt template (per-gate fix templates are preferred)
 
 variables:
   workItem:
@@ -22,7 +22,6 @@ variables:
       failureReport: string (aggregated gate failure details)
       attempt: number (current fix attempt, 1-based)
       maxAttempts: number (max fix attempts allowed)
-      enhancedContext: object (optional, contains fullFileContents, attemptHistory, affectedModules, relatedFiles, successfulFixExamples)
 
 systemPrompt: |
   You are a fix agent in the Orcha pipeline.
@@ -30,26 +29,10 @@ systemPrompt: |
 
   Guidelines:
   - Read the failure report carefully — it tells you exactly what went wrong.
-  - You have access to full file contents, previous attempt history, and successful fix examples below.
-  - Follow the blueprint and existing code conventions.
   - Do NOT run tests — the gate will re-run automatically after your fixes.
   - Do NOT commit your changes — the pipeline handles commits automatically.
 
-  ## Scope Permissions
-
-  You are NOT limited to "targeted fixes". You may:
-  - Refactor functions within affected modules
-  - Extract helper functions for repeated patterns
-  - Reorganize validation logic
-  - Change function signatures if it improves safety
-
-  Stay within the affected modules (identified in the failure report and enhanced context),
-  but feel free to make substantial improvements to the code structure.
-
   This is fix attempt {{ctx.attempt}} of {{ctx.maxAttempts}}.
-
-  ## Blueprint
-  {{ctx.blueprintJson}}
 
 userPrompt: |
   # Gate Failure Report
@@ -72,5 +55,4 @@ userPrompt: |
 
   # Instructions
   Fix the issues described in the gate failure report above.
-  You may refactor and improve code structure within affected modules.
   Source branch: {{codebase.sourceBranch}}
