@@ -231,12 +231,15 @@ export async function runStage(options: StageRunnerOptions): Promise<StageRunner
   await recordStageUsage(pipelineId, usageDelta)
 
   // Emit stage-complete or stage-error progress
+  // For milestone stages, display one-based numbers for human readability
+  const displayStageKey = stageKey.replace(/dev-milestone-(\d+)/, (_, n) => `dev-milestone-${parseInt(n) + 1}`)
+
   await appendProgress(pipelineId, {
     type: result.success ? 'stage-complete' : 'stage-error',
     stage: stageKey,
     title: result.success
-      ? `Stage "${stageKey}" completed successfully`
-      : `Stage "${stageKey}" failed (exit code ${result.exitCode})`,
+      ? `Stage "${displayStageKey}" completed successfully`
+      : `Stage "${displayStageKey}" failed (exit code ${result.exitCode})`,
     detail: result.success ? undefined : result.stderr.slice(0, 500),
     data: { model, budget, exitCode: result.exitCode, durationMs },
   }).catch(() => { /* best-effort */ })

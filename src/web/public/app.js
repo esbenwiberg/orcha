@@ -4573,6 +4573,17 @@ function connectPipelineEvents() {
               placeholder.remove();
             }
 
+            // Check mode and if this entry should be shown
+            const mode = state.timelineModes[pipelineId] || 'overview';
+            const isMajorEvent = shouldShowInOverview(entry);
+            const isOverviewMode = mode === 'overview';
+
+            // In overview mode, only show major events
+            if (isOverviewMode && !isMajorEvent) {
+              // Skip non-major events in overview mode
+              return;
+            }
+
             // Update the previous newest entry: remove "last" class and swap hollow dot to filled
             const prevNewest = container.querySelector('.timeline-entry.last');
             if (prevNewest) {
@@ -4586,25 +4597,45 @@ function connectPipelineEvents() {
               }
             }
 
-            // Check if we should highlight this entry (overview mode + major event)
-            const mode = state.timelineModes[pipelineId] || 'overview';
-            const shouldHighlight = mode === 'overview' && shouldShowInOverview(entry);
+            // In overview mode, fade out and remove old entries before adding new one
+            if (isOverviewMode && isMajorEvent) {
+              const existingEntries = container.querySelectorAll('.timeline-entry');
+              existingEntries.forEach(entry => {
+                entry.classList.add('timeline-entry-fadeout');
+              });
 
-            // Render and prepend the new entry as the newest (top)
-            const wrapper = document.createElement('div');
-            wrapper.innerHTML = renderTimelineEntry(entry, true, shouldHighlight);
-            const newNode = wrapper.firstElementChild;
-            if (newNode) {
-              container.insertBefore(newNode, container.firstChild);
-              container.scrollTop = 0;
+              // Remove old entries after fade animation completes
+              setTimeout(() => {
+                existingEntries.forEach(entry => entry.remove());
 
-              // Remove highlight class after 2 seconds
-              if (shouldHighlight) {
-                requestAnimationFrame(() => {
-                  setTimeout(() => {
-                    newNode.classList.remove('timeline-entry-highlight');
-                  }, 2000);
-                });
+                // Now render and add the new entry with fade-in
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = renderTimelineEntry(entry, true, false);
+                const newNode = wrapper.firstElementChild;
+                if (newNode) {
+                  newNode.classList.add('timeline-entry-fadein');
+                  container.insertBefore(newNode, container.firstChild);
+                  container.scrollTop = 0;
+                }
+              }, 300); // Match fadeout animation duration
+            } else {
+              // Detailed mode: normal append behavior
+              const shouldHighlight = isOverviewMode && isMajorEvent;
+              const wrapper = document.createElement('div');
+              wrapper.innerHTML = renderTimelineEntry(entry, true, shouldHighlight);
+              const newNode = wrapper.firstElementChild;
+              if (newNode) {
+                container.insertBefore(newNode, container.firstChild);
+                container.scrollTop = 0;
+
+                // Remove highlight class after 2 seconds
+                if (shouldHighlight) {
+                  requestAnimationFrame(() => {
+                    setTimeout(() => {
+                      newNode.classList.remove('timeline-entry-highlight');
+                    }, 2000);
+                  });
+                }
               }
             }
           }
@@ -5890,6 +5921,41 @@ function shouldShowInOverview(entry) {
 }
 
 /**
+ * Truncate text with "show more/less" toggle if it exceeds maxLength.
+ * Returns HTML string with truncated text and toggle link.
+ */
+function truncateText(text, maxLength) {
+  if (!text || text.length <= maxLength) return escapeHtml(text);
+
+  const truncated = text.substring(0, maxLength);
+  const uniqueId = 'text-' + Math.random().toString(36).substr(2, 9);
+
+  return `
+    <span class="truncated" id="${uniqueId}-truncated">
+      ${escapeHtml(truncated)}...
+      <a class="show-more-link" onclick="toggleFullText('${uniqueId}')">show more</a>
+    </span>
+    <span class="full-text" id="${uniqueId}-full" style="display:none;">
+      ${escapeHtml(text)}
+      <a class="show-more-link" onclick="toggleFullText('${uniqueId}')">show less</a>
+    </span>
+  `;
+}
+
+/**
+ * Toggle between truncated and full text display.
+ */
+function toggleFullText(id) {
+  const truncated = document.getElementById(id + '-truncated');
+  const full = document.getElementById(id + '-full');
+  if (truncated && full) {
+    const isExpanded = full.style.display !== 'none';
+    truncated.style.display = isExpanded ? '' : 'none';
+    full.style.display = isExpanded ? 'none' : '';
+  }
+}
+
+/**
  * Render all timeline entries as HTML.
  * If pipelineId is provided, filters entries based on timeline mode.
  */
@@ -5900,7 +5966,8 @@ function renderTimelineEntries(entries, pipelineId) {
     // Default to overview mode if not set
     const mode = state.timelineModes[pipelineId] || 'overview';
     if (mode === 'overview') {
-      entriesToRender = entries.filter(shouldShowInOverview);
+      // In overview mode, show only major events and limit to the most recent one
+      entriesToRender = entries.filter(shouldShowInOverview).slice(-1);
     }
   }
 
@@ -5953,11 +6020,11 @@ function renderTimelineEntry(entry, isNewest, shouldHighlight = false) {
   html += '<div class="timeline-content">';
   html += '<div class="timeline-header">';
   html += '<span class="timeline-time">' + timeStr + '</span>';
-  html += '<span class="timeline-title">' + escapeHtml(entry.title) + '</span>';
+  html += '<span class="timeline-title">' + truncateText(entry.title, 100) + '</span>';
   html += '</div>';
 
   if (entry.detail) {
-    html += '<div class="timeline-detail">' + escapeHtml(entry.detail) + '</div>';
+    html += '<div class="timeline-detail">' + truncateText(entry.detail, 200) + '</div>';
   }
 
   // Special rendering for gate-result entries
