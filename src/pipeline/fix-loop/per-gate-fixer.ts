@@ -103,10 +103,11 @@ export async function runPerGateFixes(
 
     if (isBroken) {
       await appendProgress(run.id, {
-        type: 'info',
+        type: 'fix-loop',
         stage: 'fix-loop',
-        title: `Skipping ${checkName}: circuit breaker (same failure pattern repeated)`,
+        title: `Skipped: ${checkName} (circuit-broken)`,
         detail: `Check "${checkName}" has failed with the same output pattern — skipping fix`,
+        data: { checkName, circuitBroken: true },
       }).catch(() => { /* best-effort */ })
 
       skippedChecks.push(checkName)
@@ -138,8 +139,9 @@ export async function runPerGateFixes(
     await appendProgress(run.id, {
       type: 'fix-loop',
       stage: 'fix-loop',
-      title: `Fixing ${checkName} (attempt ${opts.attempt})`,
-      data: { checkName, attempt: opts.attempt },
+      title: `Fixing: ${checkName}`,
+      detail: `${gateResult.findings.length} finding(s) to address (attempt ${opts.attempt})`,
+      data: { checkName, attempt: opts.attempt, findings: gateResult.findings },
     }).catch(() => { /* best-effort */ })
 
     // Spawn the fix agent
@@ -175,8 +177,8 @@ export async function runPerGateFixes(
     await appendProgress(run.id, {
       type: 'fix-loop',
       stage: 'fix-loop',
-      title: `Fixed ${checkName} (attempt ${opts.attempt})`,
-      detail: `Committed ${commitResult.commitSha}`,
+      title: `Fixed: ${checkName}`,
+      detail: `Committed ${commitResult.commitSha} (attempt ${opts.attempt})`,
       data: { checkName, attempt: opts.attempt, commitSha: commitResult.commitSha, model: result.model },
     }).catch(() => { /* best-effort */ })
 

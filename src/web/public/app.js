@@ -5896,6 +5896,7 @@ function shouldShowInOverview(entry) {
     'info',
     'stage-error',
     'gate-result',
+    'fix-loop',
     'competing-result'
   ];
   return majorEventTypes.includes(entry.type);
@@ -6016,9 +6017,14 @@ function renderTimelineEntry(entry, isNewest, shouldHighlight = false) {
     html += '<div class="timeline-detail">' + truncateText(entry.detail, 200) + '</div>';
   }
 
-  // Special rendering for gate-result entries
-  if (entry.type === 'gate-result' && entry.data && entry.data.checks) {
-    html += renderTimelineGateChecks(entry.data.checks);
+  // Special rendering for gate-result entries (data.results from backend)
+  if (entry.type === 'gate-result' && entry.data && entry.data.results) {
+    html += renderTimelineGateChecks(entry.data.results);
+  }
+
+  // Special rendering for fix-loop entries with per-gate data
+  if (entry.type === 'fix-loop' && entry.data && entry.data.checkName) {
+    html += renderTimelineFixLoopEntry(entry);
   }
 
   // Special rendering for competing-result entries
@@ -6033,6 +6039,7 @@ function renderTimelineEntry(entry, isNewest, shouldHighlight = false) {
 
 /**
  * Render gate check cards within a timeline entry.
+ * Supports findings display: each check card can be expanded to show findings.
  */
 function renderTimelineGateChecks(checks) {
   if (!Array.isArray(checks) || checks.length === 0) return '';
@@ -6041,12 +6048,121 @@ function renderTimelineGateChecks(checks) {
   for (const check of checks) {
     const verdict = check.verdict || 'skip';
     const icon = verdict === 'pass' ? '&#10003;' : verdict === 'fail' ? '&#10007;' : '&#8212;';
+    const checkName = escapeHtml(check.checkName || check.name || '');
+    const findings = check.findings || [];
+    const hasFindingsToShow = findings.length > 0 && verdict === 'fail';
+    const findingsId = 'findings-' + Math.random().toString(36).substr(2, 9);
+
     html += '<div class="timeline-gate-card ' + verdict + '">';
     html += '<span class="timeline-gate-icon">' + icon + '</span>';
-    html += '<span class="timeline-gate-name">' + escapeHtml(check.checkName || check.name || '') + '</span>';
+    html += '<span class="timeline-gate-name">' + checkName + '</span>';
+
+    // Show findings count for failed checks that have findings
+    if (hasFindingsToShow) {
+      html += '<span class="timeline-gate-findings-count" onclick="toggleFindings(\'' + findingsId + '\', event)">';
+      html += findings.length + ' finding(s)';
+      html += '</span>';
+    }
+
     html += '</div>';
+
+    // Expandable findings list (hidden by default)
+    if (hasFindingsToShow) {
+      html += '<div class="timeline-findings-list" id="' + findingsId + '" style="display:none;">';
+      for (const f of findings) {
+        html += '<div class="timeline-finding-item">';
+        var loc = '';
+        if (f.file) {
+          loc = escapeHtml(f.file);
+          if (f.line) loc += ':' + f.line;
+          loc += ' &mdash; ';
+        }
+        html += '<span class="finding-location">' + loc + '</span>';
+        html += '<span class="finding-issue">' + escapeHtml(f.issue || '') + '</span>';
+        if (f.suggestedFix) {
+          html += '<span class="finding-fix"> &rarr; ' + escapeHtml(f.suggestedFix) + '</span>';
+        }
+        if (f.severity) {
+          html += '<span class="finding-severity ' + escapeHtml(f.severity) + '">' + escapeHtml(f.severity) + '</span>';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+    }
   }
   html += '</div>';
+  return html;
+}
+
+/**
+ * Toggle findings panel visibility.
+ */
+function toggleFindings(id, event) {
+  if (event) event.stopPropagation();
+  var el = document.getElementById(id);
+  if (el) {
+    el.style.display = el.style.display === 'none' ? '' : 'none';
+  }
+}
+
+/**
+ * Render per-gate fix-loop entry with check-specific display.
+ */
+function renderTimelineFixLoopEntry(entry) {
+  var data = entry.data;
+  var checkName = data.checkName || '';
+  var html = '';
+
+  // Circuit-broken indicator
+  if (data.circuitBroken) {
+    html += '<div class="timeline-fix-status circuit-broken">';
+    html += '<span class="fix-status-icon">&#9889;</span>';
+    html += '<span class="fix-status-label">' + escapeHtml(checkName) + ' (circuit-broken)</span>';
+    html += '</div>';
+    return html;
+  }
+
+  // Fix in progress or completed
+  var isCompleted = data.commitSha;
+  var statusClass = isCompleted ? 'fix-completed' : 'fix-in-progress';
+  html += '<div class="timeline-fix-status ' + statusClass + '">';
+  if (isCompleted) {
+    html += '<span class="fix-status-icon">&#10003;</span>';
+  } else {
+    html += '<span class="fix-status-icon fix-spinning">&#9881;</span>';
+  }
+  html += '<span class="fix-status-label">' + escapeHtml(checkName) + '</span>';
+  if (data.attempt) {
+    html += '<span class="fix-attempt-badge">attempt ' + data.attempt + '</span>';
+  }
+  html += '</div>';
+
+  // Show findings for fix start events
+  if (data.findings && Array.isArray(data.findings) && data.findings.length > 0 && !isCompleted) {
+    var findingsId = 'fix-findings-' + Math.random().toString(36).substr(2, 9);
+    html += '<div class="timeline-fix-findings-summary" onclick="toggleFindings(\'' + findingsId + '\', event)">';
+    html += data.findings.length + ' finding(s) to address';
+    html += '</div>';
+    html += '<div class="timeline-findings-list" id="' + findingsId + '" style="display:none;">';
+    for (var i = 0; i < data.findings.length; i++) {
+      var f = data.findings[i];
+      html += '<div class="timeline-finding-item">';
+      var loc = '';
+      if (f.file) {
+        loc = escapeHtml(f.file);
+        if (f.line) loc += ':' + f.line;
+        loc += ' &mdash; ';
+      }
+      html += '<span class="finding-location">' + loc + '</span>';
+      html += '<span class="finding-issue">' + escapeHtml(f.issue || '') + '</span>';
+      if (f.suggestedFix) {
+        html += '<span class="finding-fix"> &rarr; ' + escapeHtml(f.suggestedFix) + '</span>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
   return html;
 }
 

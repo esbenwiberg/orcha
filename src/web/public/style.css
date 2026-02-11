@@ -3812,6 +3812,136 @@ body {
   font-weight: 500;
 }
 
+/* Gate findings count badge */
+.timeline-gate-findings-count {
+  font-size: 0.6rem;
+  color: var(--status-error);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  margin-left: 2px;
+}
+.timeline-gate-findings-count:hover {
+  opacity: 0.8;
+}
+
+/* Expandable findings list */
+.timeline-findings-list {
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 0.65rem;
+  line-height: 1.5;
+}
+.timeline-finding-item {
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.timeline-finding-item:last-child {
+  border-bottom: none;
+}
+.finding-location {
+  color: var(--accent-primary);
+  font-family: monospace;
+  font-size: 0.62rem;
+}
+.finding-issue {
+  color: var(--text-primary);
+}
+.finding-fix {
+  color: var(--status-done);
+  font-style: italic;
+}
+.finding-severity {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 0.55rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.finding-severity.critical {
+  background: rgba(231, 76, 60, 0.15);
+  color: #e74c3c;
+}
+.finding-severity.high {
+  background: rgba(230, 126, 34, 0.15);
+  color: #e67e22;
+}
+.finding-severity.medium {
+  background: rgba(241, 196, 15, 0.15);
+  color: #f1c40f;
+}
+.finding-severity.low {
+  background: rgba(46, 204, 113, 0.15);
+  color: var(--status-done);
+}
+.finding-severity.info {
+  background: rgba(52, 152, 219, 0.15);
+  color: #3498db;
+}
+
+/* Per-gate fix status indicators */
+.timeline-fix-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  margin-top: 6px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+.timeline-fix-status.fix-in-progress {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+.timeline-fix-status.fix-completed {
+  border-color: var(--status-done);
+  color: var(--status-done);
+}
+.timeline-fix-status.circuit-broken {
+  border-color: #e67e22;
+  color: #e67e22;
+  background: rgba(230, 126, 34, 0.08);
+}
+.fix-status-icon {
+  font-size: 0.75rem;
+}
+.fix-status-icon.fix-spinning {
+  animation: spin 2s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.fix-status-label {
+  font-weight: 500;
+}
+.fix-attempt-badge {
+  font-size: 0.6rem;
+  opacity: 0.7;
+  margin-left: 2px;
+}
+
+/* Fix findings summary (clickable) */
+.timeline-fix-findings-summary {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  margin-top: 4px;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+.timeline-fix-findings-summary:hover {
+  color: var(--text-primary);
+}
+
 /* Competing agent cards in timeline */
 .timeline-competing-agents {
   display: flex;

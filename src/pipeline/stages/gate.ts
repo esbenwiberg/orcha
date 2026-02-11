@@ -173,6 +173,7 @@ async function runSingleGateStage(
           checkName: r.checkName,
           verdict: r.verdict,
           summary: r.summary,
+          findings: r.findings,  // actionable findings for dashboard
         })),
       },
     }).catch(() => { /* best-effort */ })
