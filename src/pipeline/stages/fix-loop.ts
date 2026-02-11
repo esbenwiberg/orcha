@@ -24,7 +24,7 @@ import type { WorkItemContext, CodebaseContext } from '../prompt-builder.js'
 import { getDiff } from '../git-utils.js'
 import { appendProgress } from '../progress.js'
 import { CircuitBreaker } from '../fix-loop/circuit-breaker.js'
-import { savePipelineRun } from '../pipeline-store.js'
+import { savePipelineRun, loadPipelineRun } from '../pipeline-store.js'
 import { EscalationManager } from '../escalation/escalation-manager.js'
 import { buildEnhancedFixContext } from '../fix-loop/context-builder.js'
 import { AttemptTracker } from '../fix-loop/attempt-tracker.js'
@@ -82,6 +82,8 @@ export async function runFixLoopStage(
       const escalationManager = new EscalationManager()
       await escalationManager.escalate(run.id, `Circuit breaker: ${failureSignature.description}`)
 
+      // Reload from disk to pick up escalation field before transition overwrites
+      run = (await loadPipelineRun(run.id))!
       run = await transition(run, 'escalated')
       return run
     }
@@ -111,6 +113,8 @@ export async function runFixLoopStage(
       const escalationManager = new EscalationManager()
       await escalationManager.escalate(run.id, `Circuit breaker: ${failureSignature.description}`)
 
+      // Reload from disk to pick up escalation field before transition overwrites
+      run = (await loadPipelineRun(run.id))!
       run = await transition(run, 'escalated')
       return run
     }
@@ -121,6 +125,8 @@ export async function runFixLoopStage(
       const escalationManager = new EscalationManager()
       await escalationManager.escalate(run.id, `Max fix loops exceeded (${maxFixLoops})`)
 
+      // Reload from disk to pick up escalation field before transition overwrites
+      run = (await loadPipelineRun(run.id))!
       run = await transition(run, 'escalated')
       return run
     }

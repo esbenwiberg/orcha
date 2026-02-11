@@ -12,6 +12,7 @@
 import type { PipelineRun, UserAction, Severity } from '../types.js'
 import { loadPipelineRun, savePipelineRun } from '../pipeline-store.js'
 import { transition } from '../pipeline-engine.js'
+import { retryEscalatedPipeline } from '../checkpoint.js'
 import { AuditLogger } from './audit-log.js'
 
 // ============================================================================
@@ -128,23 +129,27 @@ async function handleOverrideSeverity(run: PipelineRun, threshold: Severity): Pr
 
 /**
  * Retry with user feedback.
- * Injects feedback into userInstructions and transitions to 'fix-loop'.
+ * Delegates to retryEscalatedPipeline which bumps maxFixLoops,
+ * resets circuit breaker, and transitions to 'fix-loop'.
  */
 async function handleRetryWithFeedback(run: PipelineRun, feedback: string): Promise<PipelineRun> {
   if (!feedback) {
     throw new Error('Feedback is required for retry-with-feedback action')
   }
 
-  // Inject feedback into userInstructions
-  const updatedRun: PipelineRun = {
+  // Reset circuit breaker so repeated failure patterns don't trip immediately
+  const cleared: PipelineRun = {
     ...run,
-    userInstructions: feedback,
+    circuitBreakerState: undefined,
     updatedAt: new Date().toISOString(),
   }
-  await savePipelineRun(updatedRun)
+  await savePipelineRun(cleared)
 
-  // Transition to 'fix-loop' for retry
-  return await transition(updatedRun, 'fix-loop')
+  // Delegate to retryEscalatedPipeline which bumps maxFixLoops and transitions
+  return await retryEscalatedPipeline(cleared, {
+    additionalRetries: 1,
+    instructions: feedback,
+  })
 }
 
 /**
