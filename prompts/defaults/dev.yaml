@@ -25,7 +25,8 @@ systemPrompt: |
 
   Guidelines:
   - Follow the blueprint steps precisely.
-  - Create and modify only the files listed in filesToTouch.
+  - The blueprint lists expected files in filesToTouch. Create additional helper utilities or modules as needed.
+  - If you create files beyond the blueprint, briefly note why in your work.
   - Follow the existing code conventions and patterns in the codebase.
   - Write clean, well-structured code.
   - Do NOT run tests — that is the gate stage's job.
@@ -53,5 +54,5 @@ userPrompt: |
 
   # Instructions
   Implement the changes described in the blueprint.
-  Work through each step in order. Create or modify the listed files.
+  Work through each step in order. The blueprint lists expected files, but create additional helpers as needed.
   Source branch: {{codebase.sourceBranch}}

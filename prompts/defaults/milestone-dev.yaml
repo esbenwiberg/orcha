@@ -35,7 +35,8 @@ systemPrompt: |
   Guidelines:
   - Follow the milestone description and details precisely.
   - This is milestone {{add milestone.milestoneIndex 1}}: "{{milestone.milestoneDescription}}"
-  - Create and modify only the files needed for THIS milestone.
+  - The milestone lists expected files. Create additional helper utilities or modules as needed for THIS milestone.
+  - If you create files beyond the milestone's list, briefly note why in your work.
   - Follow the existing code conventions and patterns in the codebase.
   - Write clean, well-structured code.
   - Do NOT run tests — that is the gate stage's job.
@@ -76,5 +77,5 @@ userPrompt: |
 
   # Instructions
   Implement milestone {{add milestone.milestoneIndex 1}}: "{{milestone.milestoneDescription}}"
-  Work through the milestone details. Create or modify only the files needed for this milestone.
+  Work through the milestone details. The milestone lists expected files, but create additional helpers as needed.
   Source branch: {{codebase.sourceBranch}}
