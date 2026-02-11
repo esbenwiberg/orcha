@@ -13,7 +13,7 @@
 
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
-import { execSync } from 'child_process'
+import { execAsync } from '../exec-utils.js'
 import type { PipelineRun, GateResult, StageResult, AttemptHistoryEntry } from '../types.js'
 import { transition, recordStageResult, incrementFixLoop, transitionToError } from '../pipeline-engine.js'
 import { getPipelineDir } from '../pipeline-store.js'
@@ -147,7 +147,7 @@ export async function runFixLoopStage(
     const blueprintJson = await readFile(blueprintPath, 'utf-8')
 
     // Get the current diff
-    const diff = getDiff(run.worktreePath, run.sourceBranch, run.baseCommit) ?? '(unable to generate diff)'
+    const diff = (await getDiff(run.worktreePath, run.sourceBranch, run.baseCommit)) ?? '(unable to generate diff)'
 
     // Build failure report from gate results
     const failureReport = buildFailureReport(run.gateResults)
@@ -230,7 +230,7 @@ export async function runFixLoopStage(
     run = await incrementFixLoop(run)
 
     // Get the diff after fix (before commit)
-    const fixDiff = getDiff(run.worktreePath, run.sourceBranch, run.baseCommit) ?? ''
+    const fixDiff = (await getDiff(run.worktreePath, run.sourceBranch, run.baseCommit)) ?? ''
 
     // Track this attempt
     const attemptTracker = new AttemptTracker()
@@ -377,19 +377,21 @@ async function autoCommitFix(
   const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
 
   // Stage all changes
-  execSync('git add -A', execOpts)
+  await execAsync('git add -A', execOpts)
 
   // Check if there's anything to commit
-  const status = execSync('git status --porcelain', execOpts).trim()
+  const { stdout: statusOut } = await execAsync('git status --porcelain', execOpts)
+  const status = statusOut.trim()
 
   if (status) {
-    execSync(
+    await execAsync(
       `git commit -m "pipeline: fix-loop attempt ${attempt}"`,
       execOpts,
     )
   }
 
-  const commitSha = execSync('git rev-parse HEAD', execOpts).trim()
+  const { stdout: shaOut } = await execAsync('git rev-parse HEAD', execOpts)
+  const commitSha = shaOut.trim()
   return { commitSha }
 }
 

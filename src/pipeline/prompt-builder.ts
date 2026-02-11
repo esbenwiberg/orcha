@@ -8,7 +8,7 @@
  * - Learning hints from past pipeline outcomes
  */
 
-import { execSync } from 'child_process'
+import { execAsync } from './exec-utils.js'
 import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -92,16 +92,16 @@ export interface PromptParts {
 /**
  * Get a compact directory tree of the worktree (max 3 levels, excluding noise).
  */
-function getCodebaseTree(worktreePath: string): string {
+async function getCodebaseTree(worktreePath: string): Promise<string> {
   try {
     // Use find to list directories (more portable than tree)
-    const result = execSync(
+    const { stdout: result } = await execAsync(
       'find . -maxdepth 3 -type d ' +
       '\\( -name node_modules -o -name .git -o -name dist -o -name coverage -o -name .next -o -name __pycache__ \\) -prune ' +
       '-o -type d -print | head -80 | sort',
-      { cwd: worktreePath, encoding: 'utf-8', timeout: 5000 },
-    ).trim()
-    return result || '(unable to read directory tree)'
+      { cwd: worktreePath, timeout: 5000 },
+    )
+    return result.trim() || '(unable to read directory tree)'
   } catch {
     return '(unable to read directory tree)'
   }
@@ -110,17 +110,17 @@ function getCodebaseTree(worktreePath: string): string {
 /**
  * List key files that likely define the project structure.
  */
-function getKeyFiles(worktreePath: string): string {
+async function getKeyFiles(worktreePath: string): Promise<string> {
   try {
-    const result = execSync(
+    const { stdout: result } = await execAsync(
       'find . -maxdepth 2 -type f ' +
       '\\( -name "package.json" -o -name "tsconfig.json" -o -name "Cargo.toml" ' +
       '-o -name "go.mod" -o -name "pyproject.toml" -o -name "Makefile" ' +
       '-o -name "CLAUDE.md" -o -name ".clauderc" -o -name "README.md" \\) ' +
       '| head -20 | sort',
-      { cwd: worktreePath, encoding: 'utf-8', timeout: 5000 },
-    ).trim()
-    return result || '(no key files found)'
+      { cwd: worktreePath, timeout: 5000 },
+    )
+    return result.trim() || '(no key files found)'
   } catch {
     return '(unable to list key files)'
   }
@@ -200,8 +200,8 @@ export async function buildArchitectPrompt(
   codebase: CodebaseContext,
   learningHints?: string[],
 ): Promise<PromptParts> {
-  const tree = getCodebaseTree(codebase.worktreePath)
-  const keyFiles = getKeyFiles(codebase.worktreePath)
+  const tree = await getCodebaseTree(codebase.worktreePath)
+  const keyFiles = await getKeyFiles(codebase.worktreePath)
 
   // Try loading template, fall back to hardcoded prompts on failure
   try {

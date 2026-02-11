@@ -16,7 +16,7 @@
 
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
-import { execSync, execFileSync } from 'child_process'
+import { execAsync, execFileAsync } from '../exec-utils.js'
 import type { GateResult, StackRunnerResult } from '../types.js'
 import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
@@ -155,13 +155,13 @@ export async function runLintRunner(
  *
  * Skips stacks that failed dependency installation.
  */
-function runMultiStackLint(
+async function runMultiStackLint(
   worktreePath: string,
   sourceBranch: string,
   baseCommit: string | undefined,
   techStacks: TechStack[],
   dependencyFailures?: string[],
-): GateResult {
+): Promise<GateResult> {
   const timestamp = new Date().toISOString()
   const stackResults: StackLintResult[] = []
   const failedDeps = new Set(dependencyFailures ?? [])
@@ -190,7 +190,7 @@ function runMultiStackLint(
     }
 
     // For all stacks, scope to changed files matching stack extensions
-    const rawChangedFiles = getChangedFilesByExtensions(
+    const rawChangedFiles = await getChangedFilesByExtensions(
       worktreePath,
       sourceBranch,
       stack.lintableExtensions,
@@ -211,11 +211,11 @@ function runMultiStackLint(
     }
 
     if (stack.type === 'node') {
-      stackResults.push(runNodeLint(stack, relPath, changedFiles))
+      stackResults.push(await runNodeLint(stack, relPath, changedFiles))
     } else if (stack.type === 'dotnet') {
-      stackResults.push(runDotnetLint(stack, relPath, changedFiles))
+      stackResults.push(await runDotnetLint(stack, relPath, changedFiles))
     } else if (stack.type === 'python') {
-      stackResults.push(runPythonLint(stack, relPath, changedFiles))
+      stackResults.push(await runPythonLint(stack, relPath, changedFiles))
     }
   }
 
@@ -256,7 +256,7 @@ function runMultiStackLint(
  *
  * Uses execFileSync with args array to avoid shell injection vulnerabilities.
  */
-function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
+async function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]): Promise<StackLintResult> {
   // Build args array for execFileSync (avoids shell injection)
   let cmd: string
   let args: string[]
@@ -293,9 +293,8 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
   const lintCommand = `${cmd} ${args.join(' ')}` // For display only
 
   try {
-    const output = execFileSync(cmd, args, {
+    const { stdout: output } = await execFileAsync(cmd, [...args], {
       cwd: stack.absolutePath,
-      encoding: 'utf-8',
       timeout: 120000,
       env: {
         ...process.env,
@@ -315,7 +314,7 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
       output: output.slice(-2000),
     }
   } catch (err) {
-    const execError = err as { status?: number; stdout?: string; stderr?: string }
+    const execError = err as { code?: number; stdout?: string; stderr?: string }
     const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
 
     return {
@@ -327,7 +326,7 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
       files: changedFiles,
       findings: parseEslintOutput(output),
       output: output.slice(-4000),
-      exitCode: execError.status,
+      exitCode: typeof execError.code === 'number' ? execError.code : undefined,
     }
   }
 }
@@ -350,7 +349,7 @@ function runNodeLint(stack: TechStack, relPath: string, changedFiles: string[]):
  * but before execution. However, this requires filesystem write access to the worktree
  * AND precise timing (milliseconds window), making it impractical to exploit.
  */
-function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
+async function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]): Promise<StackLintResult> {
   // Build args array for execFileSync (avoids shell injection)
   // Note: Files starting with '-' and '@' are already rejected by isValidFilename() in the caller.
   // Format: dotnet format --verify-no-changes --include file1.cs --include file2.cs
@@ -364,9 +363,8 @@ function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]
   const lintCommand = `dotnet ${args.join(' ')}` // For display only
 
   try {
-    const output = execFileSync('dotnet', args, {
+    const { stdout: output } = await execFileAsync('dotnet', [...args], {
       cwd: stack.absolutePath,
-      encoding: 'utf-8',
       timeout: 120000,
       env: {
         ...process.env,
@@ -386,7 +384,7 @@ function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]
       output: output.slice(-2000),
     }
   } catch (err) {
-    const execError = err as { status?: number; stdout?: string; stderr?: string }
+    const execError = err as { code?: number; stdout?: string; stderr?: string }
     const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
 
     return {
@@ -398,7 +396,7 @@ function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]
       files: changedFiles,
       findings: parseGenericOutput(output),
       output: output.slice(-4000),
-      exitCode: execError.status,
+      exitCode: typeof execError.code === 'number' ? execError.code : undefined,
     }
   }
 }
@@ -409,7 +407,7 @@ function runDotnetLint(stack: TechStack, relPath: string, changedFiles: string[]
  *
  * Uses execFileSync with args array to avoid shell injection vulnerabilities.
  */
-function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]): StackLintResult {
+async function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]): Promise<StackLintResult> {
   // Build args array for execFileSync (avoids shell injection)
   let cmd: string
   let args: string[]
@@ -446,9 +444,8 @@ function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]
   const lintCommand = `${cmd} ${args.join(' ')}` // For display only
 
   try {
-    const output = execFileSync(cmd, args, {
+    const { stdout: output } = await execFileAsync(cmd, [...args], {
       cwd: stack.absolutePath,
-      encoding: 'utf-8',
       timeout: 120000,
       env: {
         ...process.env,
@@ -468,7 +465,7 @@ function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]
       output: output.slice(-2000),
     }
   } catch (err) {
-    const execError = err as { status?: number; stdout?: string; stderr?: string }
+    const execError = err as { code?: number; stdout?: string; stderr?: string }
     const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
 
     return {
@@ -480,7 +477,7 @@ function runPythonLint(stack: TechStack, relPath: string, changedFiles: string[]
       files: changedFiles,
       findings: parseGenericOutput(output),
       output: output.slice(-4000),
-      exitCode: execError.status,
+      exitCode: typeof execError.code === 'number' ? execError.code : undefined,
     }
   }
 }
@@ -500,7 +497,7 @@ async function runLegacyLint(
   const timestamp = new Date().toISOString()
 
   // Get changed files (only lintable extensions)
-  const rawChangedFiles = getChangedLintableFiles(worktreePath, sourceBranch, baseCommit)
+  const rawChangedFiles = await getChangedLintableFiles(worktreePath, sourceBranch, baseCommit)
 
   // Filter out any filenames with control characters for security
   const changedFiles = filterValidFilenames(rawChangedFiles)
@@ -531,9 +528,8 @@ async function runLegacyLint(
   const lintCommand = buildLintCommand(lintStrategy, changedFiles)
 
   try {
-    const output = execSync(lintCommand, {
+    const { stdout: output } = await execAsync(lintCommand, {
       cwd: worktreePath,
-      encoding: 'utf-8',
       timeout: 120000, // 2 minute timeout for lint
       env: {
         ...process.env,
@@ -556,7 +552,7 @@ async function runLegacyLint(
       timestamp,
     }
   } catch (err) {
-    const execError = err as { status?: number; stdout?: string; stderr?: string }
+    const execError = err as { code?: number; stdout?: string; stderr?: string }
     const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
 
     // Parse lint output for structured reporting
@@ -568,7 +564,7 @@ async function runLegacyLint(
       summary: `Lint failed: ${findings.length} issue(s) in ${changedFiles.length} changed file(s)`,
       details: {
         command: lintCommand,
-        exitCode: execError.status,
+        exitCode: typeof execError.code === 'number' ? execError.code : undefined,
         filesChecked: changedFiles.length,
         files: changedFiles,
         findings,

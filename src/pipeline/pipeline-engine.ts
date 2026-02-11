@@ -483,7 +483,7 @@ export async function createPipelineRun(
     worktreeManaged = true
   }
 
-  const baseCommit = getHeadSha(worktreePath)
+  const baseCommit = await getHeadSha(worktreePath)
   const run: PipelineRun = {
     id: pipelineId,
     state: 'created',

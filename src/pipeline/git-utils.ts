@@ -3,9 +3,11 @@
  *
  * Shared helpers for git diff retrieval and changed-file detection.
  * Used by gate agents and the fix-loop stage.
+ *
+ * All functions are ASYNC to avoid blocking the Node.js event loop.
  */
 
-import { execSync, execFileSync } from 'child_process'
+import { execAsync, execFileAsync } from './exec-utils.js'
 
 // ============================================================================
 // Branch Name Validation
@@ -39,13 +41,13 @@ function assertSafeCommitSha(sha: string): void {
  * Get the current HEAD commit SHA.
  * Used to snapshot the base commit at pipeline creation time.
  */
-export function getHeadSha(worktreePath: string): string | undefined {
+export async function getHeadSha(worktreePath: string): Promise<string | undefined> {
   try {
-    return execSync('git rev-parse HEAD', {
+    const { stdout } = await execAsync('git rev-parse HEAD', {
       cwd: worktreePath,
-      encoding: 'utf-8',
       timeout: 5000,
-    }).trim() || undefined
+    })
+    return stdout.trim() || undefined
   } catch {
     return undefined
   }
@@ -66,14 +68,15 @@ export function getHeadSha(worktreePath: string): string | undefined {
  *
  * Returns null if no diff can be obtained.
  */
-export function getDiff(worktreePath: string, sourceBranch: string, baseCommit?: string): string | null {
-  const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
+export async function getDiff(worktreePath: string, sourceBranch: string, baseCommit?: string): Promise<string | null> {
+  const execOpts = { cwd: worktreePath, timeout: 10000 }
 
   // Best strategy: diff from the exact base commit captured at pipeline start
   if (baseCommit) {
     assertSafeCommitSha(baseCommit)
     try {
-      const diff = execSync(`git diff ${baseCommit}..HEAD`, execOpts).trim()
+      const { stdout } = await execAsync(`git diff ${baseCommit}..HEAD`, execOpts)
+      const diff = stdout.trim()
       if (diff) return diff
     } catch { /* baseCommit may have been garbage-collected or rebased away */ }
   }
@@ -81,17 +84,20 @@ export function getDiff(worktreePath: string, sourceBranch: string, baseCommit?:
   assertSafeBranch(sourceBranch)
 
   try {
-    const diff = execSync(`git diff origin/${sourceBranch}...HEAD`, execOpts).trim()
+    const { stdout } = await execAsync(`git diff origin/${sourceBranch}...HEAD`, execOpts)
+    const diff = stdout.trim()
     if (diff) return diff
   } catch { /* origin/sourceBranch may not exist */ }
 
   try {
-    const diff = execSync(`git diff ${sourceBranch}...HEAD`, execOpts).trim()
+    const { stdout } = await execAsync(`git diff ${sourceBranch}...HEAD`, execOpts)
+    const diff = stdout.trim()
     if (diff) return diff
   } catch { /* sourceBranch may not exist locally */ }
 
   try {
-    const diff = execSync('git diff HEAD~1', execOpts).trim()
+    const { stdout } = await execAsync('git diff HEAD~1', execOpts)
+    const diff = stdout.trim()
     if (diff) return diff
   } catch { /* No previous commit */ }
 
@@ -138,11 +144,6 @@ function isSafeFilename(filename: string): boolean {
 /**
  * Filter a list of filenames to only include safe ones.
  * Logs a warning for rejected filenames (rate-limited to prevent log flooding).
- *
- * Security: If ANY unsafe filenames are detected, logs a warning but continues
- * with the safe subset. This prevents a single malicious file from blocking
- * legitimate operations while still protecting against path traversal attacks.
- * The warning enables detection of potential attacks in logs.
  */
 function filterSafeFilenames(filenames: string[]): string[] {
   const safeFiles: string[] = []
@@ -157,7 +158,6 @@ function filterSafeFilenames(filenames: string[]): string[] {
   }
 
   if (unsafeFiles.length > 0) {
-    // Rate-limit logging to prevent log flooding from malicious repos with many bad filenames
     const samplesToLog = unsafeFiles.slice(0, MAX_UNSAFE_FILENAME_WARNINGS)
     const remaining = unsafeFiles.length - samplesToLog.length
     const suffix = remaining > 0 ? ` (and ${remaining} more)` : ''
@@ -171,34 +171,20 @@ function filterSafeFilenames(filenames: string[]): string[] {
 
 /**
  * Validate that an extension is safe for use in git pathspecs.
- * Throws if the extension doesn't match the safe pattern or is too long.
- *
- * Security:
- * - Length limit prevents memory exhaustion from extremely long strings
- * - Pattern validation ensures only alphanumeric extensions (no wildcards or glob chars)
- * - Must start with '.' to be a valid extension
- * - Rejects: *, ?, [, ], {, }, and other glob metacharacters
  */
 function assertSafeExtension(ext: string): void {
-  // Must start with '.'
   if (!ext.startsWith('.')) {
     throw new Error(`Invalid file extension (must start with '.'): ${ext}`)
   }
-  // Limit extension length to prevent memory issues (10 chars like ".typescript" is more than enough)
   if (ext.length > 10) {
     throw new Error(`File extension too long: ${ext}`)
   }
-  // Explicitly reject glob metacharacters that could expand to unintended files
-  // Note: Character class uses [][\]{} — the ] is escaped as \], and [ is literal at the start
   if (/[*?[\]{}]/.test(ext)) {
     throw new Error(`Invalid file extension (contains glob metacharacters): ${ext}`)
   }
-  // Explicitly reject shell command separators (defense-in-depth)
   if (/[;|&`$]/.test(ext)) {
     throw new Error(`Invalid file extension (contains shell metacharacters): ${ext}`)
   }
-  // SAFE_EXTENSION_RE only allows alphanumeric characters after the dot
-  // This is the primary security check - all characters must be alphanumeric
   if (!SAFE_EXTENSION_RE.test(ext)) {
     throw new Error(`Invalid file extension: ${ext}`)
   }
@@ -206,87 +192,45 @@ function assertSafeExtension(ext: string): void {
 
 /**
  * Build a regex that matches any of the given extensions at the end of a filename.
- * e.g. ['.cs', '.fs'] → /\.(cs|fs)$/
- *
- * Security: The pattern is anchored to end-of-string ($) to prevent matching files
- * like 'test.ts.backup' when looking for '.ts' files.
  */
 function buildExtensionRegex(extensions: string[]): RegExp {
-  // Escape regex special characters in each extension (after removing leading dot)
   const alts = extensions.map((ext) => ext.replace(/^\./, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  // Pattern: \.(ext1|ext2)$ — anchored to end of string
   return new RegExp(`\\.(${alts.join('|')})$`)
 }
 
 /**
- * Validate that a pathspec is safe (no command substitution or shell metacharacters).
- * Defense-in-depth: even though execFileSync prevents shell injection, we validate
- * pathspecs to prevent any potential issues with git's pathspec parsing.
- *
- * Security: Rejects pathspecs containing:
- * - Command substitution chars: $, `, |
- * - Shell separators: ;, &
- * - Newlines (could affect git argument parsing)
+ * Validate that a pathspec is safe.
  */
 function isValidPathspec(pathspec: string): boolean {
   if (!pathspec || pathspec.length === 0) return false
-  // Reject command substitution and shell metacharacters
   if (/[$`|;&\n\r]/.test(pathspec)) return false
   return true
 }
 
 /**
- * Validate a git range argument (e.g., 'abc123..HEAD', 'origin/main...HEAD').
- * Defense-in-depth: callers should already use assertSafeBranch/assertSafeCommitSha,
- * but we double-check here.
- *
- * Security: Allows only alphanumeric, '.', '/', '-', and '_' characters.
- * Rejects shell metacharacters, newlines, null bytes, and backslashes.
- * The regex implicitly rejects backslash traversal (e.g., 'foo\\..\\bar') since
- * backslash is not in the allowed character set [a-zA-Z0-9._/-].
- * Additional checks reject forward-slash path traversal patterns.
+ * Validate a git range argument.
  */
 const SAFE_RANGE_RE = /^[a-zA-Z0-9._/-]+$/
 
 function isValidRangeArg(arg: string): boolean {
   if (!arg || arg.length === 0) return false
-  if (arg.length > 200) return false // Prevent DoS from very long args
-  if (arg === '--') return false // Standalone -- would confuse arg parsing
+  if (arg.length > 200) return false
+  if (arg === '--') return false
   if (!SAFE_RANGE_RE.test(arg)) return false
-  // Reject path traversal patterns comprehensively.
-  // Note: '..' is valid in git range syntax (e.g., 'a..b' for two-dot range),
-  // but path traversal sequences must be blocked.
-  // Check for:
-  // - '../' anywhere (traversal forward)
-  // - '/..' anywhere (traversal backward, including at end)
-  // - './..' (relative path traversal like './../')
-  // - Starting with '../' (traversal at beginning)
   if (arg.includes('../')) return false
-  if (arg.includes('/..')) return false  // Catches both '/..' in middle and at end
-  if (arg.includes('./.')) return false  // Catches './..' and similar patterns
-  if (arg.startsWith('..')) return false // Catches '../' at start without slash
-  // Reject patterns that look like absolute paths embedded in the range
+  if (arg.includes('/..')) return false
+  if (arg.includes('./.')) return false
+  if (arg.startsWith('..')) return false
   if (arg.includes('//')) return false
   return true
 }
 
 /**
- * Build git diff args array for execFileSync.
- * Returns args array: ['diff', '--name-only', ...range, '--', ...pathspecs]
- *
- * Security: Uses execFileSync with args array to prevent shell injection.
- * Filters out empty and invalid pathspecs to prevent issues.
- * Validates that no pathspec looks like a git option (starts with '-').
- * Validates range arguments against safe patterns.
+ * Build git diff args array for execFileAsync.
  */
 function buildDiffArgs(range: string[], pathspecs: string[]): string[] {
-  // Filter out empty and invalid pathspecs
-  // This is defense-in-depth — callers should already validate via assertSafeExtension
   const filteredPathspecs = pathspecs.filter(isValidPathspec)
 
-  // Defense-in-depth: Reject any pathspec that starts with '-' as it could be
-  // misinterpreted as a git option. The '--' separator should prevent this, but
-  // some git versions or edge cases might still be vulnerable.
   const safePathspecs = filteredPathspecs.filter((p) => {
     if (p.startsWith('-')) {
       console.warn(`[git-utils] Rejecting pathspec starting with '-': ${p}`)
@@ -295,9 +239,6 @@ function buildDiffArgs(range: string[], pathspecs: string[]): string[] {
     return true
   })
 
-  // Validate range arguments - filter out any that don't match safe patterns
-  // Callers should already use assertSafeBranch/assertSafeCommitSha, but
-  // we double-check here as defense-in-depth
   const safeRange = range.filter((r) => {
     if (!isValidRangeArg(r)) {
       console.warn(`[git-utils] Rejecting invalid range argument: ${JSON.stringify(r).slice(0, 50)}`)
@@ -313,36 +254,22 @@ function buildDiffArgs(range: string[], pathspecs: string[]): string[] {
  * Get the list of changed files (relative paths) matching the given extensions.
  * Uses git diff --name-only with extension filters.
  *
- * Strategy order (same as getDiff):
- * 1. baseCommit..HEAD (exact)
- * 2. origin/sourceBranch...HEAD (three-dot merge-base)
- * 3. sourceBranch...HEAD (local fallback)
- * 4. HEAD (last resort — filters with regex since pathspec may not apply)
- *
- * Security: Uses execFileSync with args array to prevent command injection.
+ * Security: Uses execFileAsync with args array to prevent command injection.
  */
-export function getChangedFilesByExtensions(
+export async function getChangedFilesByExtensions(
   worktreePath: string,
   sourceBranch: string,
   extensions: string[],
   baseCommit?: string,
-): string[] {
+): Promise<string[]> {
   if (extensions.length === 0) return []
 
-  const execOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 10000 }
+  const execOpts = { cwd: worktreePath, timeout: 10000 }
 
-  // Validate ALL extensions FIRST before building pathspecs.
-  // This ensures we don't partially build the pathspecs array if validation
-  // throws midway through (which could leave us in an inconsistent state).
-  //
-  // Note: buildDiffArgs also validates pathspecs via isValidPathspec().
-  // This is intentional defense-in-depth — each layer validates independently
-  // so a bug in one layer doesn't compromise security.
   for (const ext of extensions) {
     assertSafeExtension(ext)
   }
 
-  // Build pathspecs (e.g., ['*.ts', '*.js']) - validation already passed above
   const pathspecs = extensions.map((ext) => `*${ext}`)
 
   // Best strategy: diff from exact base commit
@@ -350,7 +277,8 @@ export function getChangedFilesByExtensions(
     assertSafeCommitSha(baseCommit)
     try {
       const args = buildDiffArgs([`${baseCommit}..HEAD`], pathspecs)
-      const output = execFileSync('git', args, execOpts).trim()
+      const { stdout } = await execFileAsync('git', args, execOpts)
+      const output = stdout.trim()
       if (output) return filterSafeFilenames(output.split('\n').filter(Boolean))
     } catch { /* baseCommit may be unavailable */ }
   }
@@ -359,19 +287,22 @@ export function getChangedFilesByExtensions(
 
   try {
     const args = buildDiffArgs([`origin/${sourceBranch}...HEAD`], pathspecs)
-    const output = execFileSync('git', args, execOpts).trim()
+    const { stdout } = await execFileAsync('git', args, execOpts)
+    const output = stdout.trim()
     if (output) return filterSafeFilenames(output.split('\n').filter(Boolean))
   } catch { /* origin/sourceBranch may not exist */ }
 
   try {
     const args = buildDiffArgs([`${sourceBranch}...HEAD`], pathspecs)
-    const output = execFileSync('git', args, execOpts).trim()
+    const { stdout } = await execFileAsync('git', args, execOpts)
+    const output = stdout.trim()
     if (output) return filterSafeFilenames(output.split('\n').filter(Boolean))
   } catch { /* sourceBranch may not exist locally */ }
 
   try {
     const args = buildDiffArgs(['HEAD'], [])
-    const output = execFileSync('git', args, execOpts).trim()
+    const { stdout } = await execFileAsync('git', args, execOpts)
+    const output = stdout.trim()
     if (output) {
       const extRegex = buildExtensionRegex(extensions)
       return filterSafeFilenames(output.split('\n').filter((f) => extRegex.test(f)))
@@ -383,8 +314,7 @@ export function getChangedFilesByExtensions(
 
 /**
  * Get the list of changed files (relative paths) that are lintable (JS/TS).
- * Convenience wrapper around getChangedFilesByExtensions for backward compatibility.
  */
-export function getChangedLintableFiles(worktreePath: string, sourceBranch: string, baseCommit?: string): string[] {
+export async function getChangedLintableFiles(worktreePath: string, sourceBranch: string, baseCommit?: string): Promise<string[]> {
   return getChangedFilesByExtensions(worktreePath, sourceBranch, ['.ts', '.js', '.tsx', '.jsx'], baseCommit)
 }

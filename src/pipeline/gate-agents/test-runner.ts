@@ -12,7 +12,7 @@
 
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
-import { execSync, execFileSync } from 'child_process'
+import { execFileAsync } from '../exec-utils.js'
 import type { GateResult, StackRunnerResult } from '../types.js'
 import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
@@ -22,7 +22,7 @@ import type { TechStack } from '../tech-scanner.js'
 // ============================================================================
 
 /**
- * Map of allowed test commands to their execFileSync arguments.
+ * Map of allowed test commands to their execFileAsync arguments.
  * Only commands in this whitelist can be executed, preventing arbitrary
  * command injection from malicious package.json or project files.
  *
@@ -80,14 +80,14 @@ export async function runTestRunner(
  * aggregates the verdict: any fail → 'fail', all skip → 'skip', else 'pass'.
  *
  * Skips stacks that failed dependency installation.
- * Uses a whitelist of allowed test commands and execFileSync to prevent
+ * Uses a whitelist of allowed test commands and execFileAsync to prevent
  * command injection from malicious project files.
  */
-function runMultiStackTests(
+async function runMultiStackTests(
   worktreePath: string,
   techStacks: TechStack[],
   dependencyFailures?: string[],
-): GateResult {
+): Promise<GateResult> {
   const timestamp = new Date().toISOString()
   const stackResults: StackRunnerResult[] = []
   const failedDeps = new Set(dependencyFailures ?? [])
@@ -128,10 +128,9 @@ function runMultiStackTests(
     }
 
     try {
-      // Copy args array since execFileSync may modify it and ours is frozen
-      const output = execFileSync(allowedCmd.cmd, [...allowedCmd.args], {
+      // Copy args array since execFileAsync may modify it and ours is frozen
+      const { stdout: output } = await execFileAsync(allowedCmd.cmd, [...allowedCmd.args], {
         cwd: stack.absolutePath,
-        encoding: 'utf-8',
         timeout: 300000, // 5 minute timeout per stack
         env: {
           ...process.env,
@@ -196,7 +195,7 @@ function runMultiStackTests(
 
 /**
  * Original single-project test runner. Used when no techStacks are provided.
- * Uses execFileSync with whitelisted command to prevent command injection.
+ * Uses execFileAsync with whitelisted command to prevent command injection.
  */
 async function runLegacyTests(worktreePath: string): Promise<GateResult> {
   const timestamp = new Date().toISOString()
@@ -226,10 +225,9 @@ async function runLegacyTests(worktreePath: string): Promise<GateResult> {
   }
 
   try {
-    // Copy args array since execFileSync may modify it and ours is frozen
-    const output = execFileSync(allowedCmd.cmd, [...allowedCmd.args], {
+    // Copy args array since execFileAsync may modify it and ours is frozen
+    const { stdout: output } = await execFileAsync(allowedCmd.cmd, [...allowedCmd.args], {
       cwd: worktreePath,
-      encoding: 'utf-8',
       timeout: 300000, // 5 minute timeout for tests
       env: {
         ...process.env,

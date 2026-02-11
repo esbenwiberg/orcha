@@ -54,7 +54,7 @@ export async function runSecurityReview(
   const timestamp = new Date().toISOString()
 
   // Get the diff
-  const diff = getDiff(run.worktreePath, run.sourceBranch, run.baseCommit)
+  const diff = await getDiff(run.worktreePath, run.sourceBranch, run.baseCommit)
   if (!diff) {
     return {
       verdict: 'skip',

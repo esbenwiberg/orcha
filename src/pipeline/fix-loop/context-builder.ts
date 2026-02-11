@@ -10,7 +10,7 @@
 
 import { readFile } from 'fs/promises'
 import { join, dirname, relative } from 'path'
-import { execSync } from 'child_process'
+import { execAsync } from '../exec-utils.js'
 import type { PipelineRun, GateResult } from '../types.js'
 import { getPipelineDir } from '../pipeline-store.js'
 
@@ -56,10 +56,10 @@ export async function buildEnhancedFixContext(
   const attemptHistory = await loadAttemptHistory(run)
 
   // Build affected modules tree
-  const affectedModules = buildAffectedModulesTree(run.worktreePath, failedFiles)
+  const affectedModules = await buildAffectedModulesTree(run.worktreePath, failedFiles)
 
   // Find related files in affected modules
-  const relatedFiles = findRelatedFiles(run.worktreePath, failedFiles)
+  const relatedFiles = await findRelatedFiles(run.worktreePath, failedFiles)
 
   return {
     fullFileContents,
@@ -189,7 +189,7 @@ async function loadAttemptHistory(run: PipelineRun): Promise<string> {
  * Build a directory tree for modules containing failed files.
  * Returns a formatted tree string.
  */
-function buildAffectedModulesTree(worktreePath: string, failedFiles: string[]): string {
+async function buildAffectedModulesTree(worktreePath: string, failedFiles: string[]): Promise<string> {
   if (failedFiles.length === 0) {
     return '(No files identified in failures)'
   }
@@ -211,10 +211,11 @@ function buildAffectedModulesTree(worktreePath: string, failedFiles: string[]): 
   const trees: string[] = []
   for (const dir of dirs) {
     try {
-      const tree = execSync(
+      const { stdout } = await execAsync(
         `find "${dir}" -maxdepth 2 -type f -name '*.ts' -o -name '*.js' -o -name '*.py' -o -name '*.cs' -o -name '*.go' -o -name '*.rs' | head -30 | sort`,
-        { cwd: worktreePath, encoding: 'utf-8', timeout: 5000 },
-      ).trim()
+        { cwd: worktreePath, timeout: 5000 },
+      )
+      const tree = stdout.trim()
 
       if (tree) {
         trees.push(`## ${dir}/\n${tree}`)
@@ -233,7 +234,7 @@ function buildAffectedModulesTree(worktreePath: string, failedFiles: string[]): 
  * Looks for files that import or export from failed files.
  * Returns a list of related file paths.
  */
-function findRelatedFiles(worktreePath: string, failedFiles: string[]): string[] {
+async function findRelatedFiles(worktreePath: string, failedFiles: string[]): Promise<string[]> {
   const related = new Set<string>()
 
   for (const file of failedFiles) {
@@ -247,10 +248,11 @@ function findRelatedFiles(worktreePath: string, failedFiles: string[]): string[]
       // Search for imports/exports referencing this file
       // Use a simple grep pattern: import/require/from statements mentioning the file
       const pattern = `(import|from|require).*${baseName}`
-      const matches = execSync(
+      const { stdout } = await execAsync(
         `grep -r -l -E "${pattern}" --include="*.ts" --include="*.js" --include="*.tsx" --include="*.jsx" --include="*.py" . 2>/dev/null | head -20`,
-        { cwd: worktreePath, encoding: 'utf-8', timeout: 5000 },
-      ).trim()
+        { cwd: worktreePath, timeout: 5000 },
+      )
+      const matches = stdout.trim()
 
       if (matches) {
         for (const match of matches.split('\n')) {

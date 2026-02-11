@@ -8,7 +8,7 @@
  * Logs installation output to: ~/.orcha/pipelines/{id}/logs/dependency-install.log
  */
 
-import { execSync } from 'child_process'
+import { execAsync } from '../exec-utils.js'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import type { TechStack } from '../tech-scanner.js'
@@ -111,13 +111,11 @@ async function installStackDependencies(stack: TechStack): Promise<StackInstallR
  * Install Node.js dependencies using npm/yarn/pnpm.
  * Detects which package manager to use based on lock files.
  */
-function installNodeDependencies(stack: TechStack): StackInstallResult {
+async function installNodeDependencies(stack: TechStack): Promise<StackInstallResult> {
   const cwd = stack.absolutePath
   const execOpts = {
     cwd,
-    encoding: 'utf-8' as const,
     timeout: 300000, // 5 minute timeout
-    stdio: 'pipe' as const,
     env: process.env, // Inherit parent PATH for npm hooks and binaries
   }
 
@@ -134,7 +132,7 @@ function installNodeDependencies(stack: TechStack): StackInstallResult {
   }
 
   try {
-    const output = execSync(installCmd, execOpts)
+    const { stdout: output } = await execAsync(installCmd, execOpts)
     return {
       success: true,
       output: `${installCmd}\n${output}`,
@@ -157,13 +155,11 @@ function installNodeDependencies(stack: TechStack): StackInstallResult {
  * Install Python dependencies using pip.
  * Installs from requirements.txt, pyproject.toml, or setup.py.
  */
-function installPythonDependencies(stack: TechStack): StackInstallResult {
+async function installPythonDependencies(stack: TechStack): Promise<StackInstallResult> {
   const cwd = stack.absolutePath
   const execOpts = {
     cwd,
-    encoding: 'utf-8' as const,
     timeout: 300000, // 5 minute timeout
-    stdio: 'pipe' as const,
     env: process.env, // Inherit parent PATH for pip and python binaries
   }
 
@@ -178,7 +174,7 @@ function installPythonDependencies(stack: TechStack): StackInstallResult {
     if (!existsSync(join(cwd, attempt.file))) continue
 
     try {
-      const output = execSync(attempt.cmd, execOpts)
+      const { stdout: output } = await execAsync(attempt.cmd, execOpts)
       return {
         success: true,
         output: `${attempt.cmd}\n${output}`,
@@ -210,20 +206,18 @@ function installPythonDependencies(stack: TechStack): StackInstallResult {
 /**
  * Install .NET dependencies using dotnet restore.
  */
-function installDotnetDependencies(stack: TechStack): StackInstallResult {
+async function installDotnetDependencies(stack: TechStack): Promise<StackInstallResult> {
   const cwd = stack.absolutePath
   const execOpts = {
     cwd,
-    encoding: 'utf-8' as const,
     timeout: 300000, // 5 minute timeout
-    stdio: 'pipe' as const,
     env: process.env, // Inherit parent PATH for dotnet binary
   }
 
   const installCmd = 'dotnet restore'
 
   try {
-    const output = execSync(installCmd, execOpts)
+    const { stdout: output } = await execAsync(installCmd, execOpts)
     return {
       success: true,
       output: `${installCmd}\n${output}`,

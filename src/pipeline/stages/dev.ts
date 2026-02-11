@@ -38,7 +38,7 @@
 
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
-import { spawnSync } from 'child_process'
+import { spawnResult } from '../exec-utils.js'
 import type { PipelineRun, StageResult, CompetingResult, MilestoneProgress, BlueprintOutput } from '../types.js'
 import { getBlueprintMilestones } from '../types.js'
 import { transition, recordStageResult, transitionToError } from '../pipeline-engine.js'
@@ -56,10 +56,10 @@ import { appendProgress } from '../progress.js'
 /**
  * Sanitize a string for use in git commit messages.
  * Uses a WHITELIST approach - only allows safe characters.
- * This is defense-in-depth; the primary protection is using spawnSync with
+ * This is defense-in-depth; the primary protection is using spawnResult with
  * array arguments (which avoids shell interpolation entirely).
  *
- * SECURITY NOTE: Even though we use spawnSync for git commits (which is safe),
+ * SECURITY NOTE: Even though we use spawnResult for git commits (which is safe),
  * this sanitization provides defense-in-depth in case the message is ever
  * logged, displayed, or used in other contexts.
  */
@@ -294,7 +294,7 @@ async function runSingleDevStage(
     }
 
     // All milestones completed - capture final diff
-    const finalDiff = getDiff(run.worktreePath, run.sourceBranch)
+    const finalDiff = await getDiff(run.worktreePath, run.sourceBranch)
 
     // Save dev results to pipeline directory
     const devResultsDir = join(getPipelineDir(run.id), 'dev-results')
@@ -435,12 +435,12 @@ async function runSingleMilestoneDevStage(
 /**
  * Get the diff from sourceBranch to HEAD using merge-base (three-dot) semantics.
  *
- * SECURITY: Uses spawnSync with array arguments to avoid shell command injection.
+ * SECURITY: Uses spawnResult with array arguments to avoid shell command injection.
  * Additionally, we use '--' to separate git options from ref arguments, preventing
  * git flag injection attacks where a malicious branch name like '--help' or
  * '--exec=evil' could be interpreted as a git option.
  */
-function getDiff(worktreePath: string, sourceBranch: string): string {
+async function getDiff(worktreePath: string, sourceBranch: string): Promise<string> {
   const spawnOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
 
   // SECURITY: Validate branch name doesn't contain path traversal sequences
@@ -461,10 +461,10 @@ function getDiff(worktreePath: string, sourceBranch: string): string {
   const candidates = [sanitizedBranch, `origin/${sanitizedBranch}`, 'origin/main', 'origin/master']
   for (const ref of candidates) {
     // '--' ensures 'ref' is treated as a revision, not a flag
-    const mbResult = spawnSync('git', ['merge-base', '--', ref, 'HEAD'], spawnOpts)
+    const mbResult = await spawnResult('git', ['merge-base', '--', ref, 'HEAD'], spawnOpts)
     if (mbResult.status === 0 && mbResult.stdout) {
       const mergeBase = mbResult.stdout.trim()
-      const diffResult = spawnSync('git', ['diff', '--', mergeBase, 'HEAD'], spawnOpts)
+      const diffResult = await spawnResult('git', ['diff', '--', mergeBase, 'HEAD'], spawnOpts)
       if (diffResult.status === 0) {
         return (diffResult.stdout || '').trim()
       }
@@ -472,7 +472,7 @@ function getDiff(worktreePath: string, sourceBranch: string): string {
   }
 
   // Fall back to diff against previous commit
-  const fallback = spawnSync('git', ['diff', '--', 'HEAD~1'], spawnOpts)
+  const fallback = await spawnResult('git', ['diff', '--', 'HEAD~1'], spawnOpts)
   return (fallback.stdout || '').trim()
 }
 
@@ -835,10 +835,10 @@ async function runCompetingAgent(
   // Create worktree for this agent from the pipeline worktree's current state
   const worktreePath = `${run.worktreePath}-dev-${agentIndex}${milestoneSuffix}`
 
-  // SECURITY: Use spawnSync with array args to avoid command injection via
+  // SECURITY: Use spawnResult with array args to avoid command injection via
   // malicious run.id values that could craft dangerous branchName or worktreePath.
   // Create a new branch from the current pipeline branch and add worktree
-  const worktreeResult = spawnSync('git', ['worktree', 'add', '-b', branchName, worktreePath, 'HEAD'], {
+  const worktreeResult = await spawnResult('git', ['worktree', 'add', '-b', branchName, worktreePath, 'HEAD'], {
     cwd: run.worktreePath,
     encoding: 'utf-8',
     timeout: 30000,
@@ -920,9 +920,9 @@ async function runCompetingAgent(
     }
   } catch (err) {
     // Clean up worktree on failure
-    // SECURITY: Use spawnSync with array args to avoid command injection via worktreePath
+    // SECURITY: Use spawnResult with array args to avoid command injection via worktreePath
     try {
-      spawnSync('git', ['worktree', 'remove', '--force', worktreePath], {
+      await spawnResult('git', ['worktree', 'remove', '--force', worktreePath], {
         cwd: run.worktreePath,
         encoding: 'utf-8',
         timeout: 30000,
@@ -950,14 +950,14 @@ async function autoCommit(worktreePath: string, sourceBranch: string, commitSuff
   const spawnOpts = { cwd: worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
 
   // Get the current branch name
-  const branchResult = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], spawnOpts)
+  const branchResult = await spawnResult('git', ['rev-parse', '--abbrev-ref', 'HEAD'], spawnOpts)
   const branch = (branchResult.stdout || '').trim()
 
   // Stage all changes
-  spawnSync('git', ['add', '-A'], spawnOpts)
+  await spawnResult('git', ['add', '-A'], spawnOpts)
 
   // Check if there's anything to commit
-  const statusResult = spawnSync('git', ['status', '--porcelain'], spawnOpts)
+  const statusResult = await spawnResult('git', ['status', '--porcelain'], spawnOpts)
   const status = (statusResult.stdout || '').trim()
   let commitSha: string
 
@@ -968,7 +968,7 @@ async function autoCommit(worktreePath: string, sourceBranch: string, commitSuff
       ? `${baseMsg} (${sanitizeForGitMessage(commitSuffix)})`
       : baseMsg
 
-    const commitResult = spawnSync('git', ['commit', '-m', commitMsg], spawnOpts)
+    const commitResult = await spawnResult('git', ['commit', '-m', commitMsg], spawnOpts)
 
     if (commitResult.status !== 0 && commitResult.status !== null) {
       const stderr = commitResult.stderr || ''
@@ -978,10 +978,10 @@ async function autoCommit(worktreePath: string, sourceBranch: string, commitSuff
     }
   }
 
-  const shaResult = spawnSync('git', ['rev-parse', 'HEAD'], spawnOpts)
+  const shaResult = await spawnResult('git', ['rev-parse', 'HEAD'], spawnOpts)
   commitSha = (shaResult.stdout || '').trim()
 
-  const diff = getDiff(worktreePath, sourceBranch)
+  const diff = await getDiff(worktreePath, sourceBranch)
 
   return { diff, branch, commitSha }
 }

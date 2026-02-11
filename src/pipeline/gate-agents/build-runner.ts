@@ -11,7 +11,7 @@
 
 import { readFile } from 'fs/promises'
 import { join, relative } from 'path'
-import { execSync, execFileSync } from 'child_process'
+import { execAsync, execFileAsync } from '../exec-utils.js'
 import type { GateResult, StackRunnerResult } from '../types.js'
 import { aggregateStackVerdicts } from '../types.js'
 import type { TechStack } from '../tech-scanner.js'
@@ -21,7 +21,7 @@ import type { TechStack } from '../tech-scanner.js'
 // ============================================================================
 
 /**
- * Map of allowed build commands to their execFileSync arguments.
+ * Map of allowed build commands to their execFileAsync arguments.
  * Only commands in this whitelist can be executed, preventing arbitrary
  * command injection from malicious package.json or project files.
  *
@@ -55,7 +55,7 @@ export async function runBuildRunner(
 ): Promise<GateResult> {
   // Multi-tech path: run per-stack builds
   if (techStacks && techStacks.length > 0) {
-    return runMultiStackBuilds(worktreePath, techStacks, dependencyFailures)
+    return await runMultiStackBuilds(worktreePath, techStacks, dependencyFailures)
   }
 
   // Legacy path: detect from package.json (backward compat)
@@ -71,14 +71,14 @@ export async function runBuildRunner(
  * aggregates the verdict: any fail → 'fail', all skip → 'skip', else 'pass'.
  *
  * Skips stacks that failed dependency installation.
- * Uses a whitelist of allowed build commands and execFileSync to prevent
+ * Uses a whitelist of allowed build commands and execFileAsync to prevent
  * command injection from malicious project files.
  */
-function runMultiStackBuilds(
+async function runMultiStackBuilds(
   worktreePath: string,
   techStacks: TechStack[],
   dependencyFailures?: string[],
-): GateResult {
+): Promise<GateResult> {
   const timestamp = new Date().toISOString()
   const stackResults: StackRunnerResult[] = []
   const failedDeps = new Set(dependencyFailures ?? [])
@@ -119,10 +119,9 @@ function runMultiStackBuilds(
     }
 
     try {
-      // Copy args array since execFileSync may modify it and ours is frozen
-      const output = execFileSync(allowedCmd.cmd, [...allowedCmd.args], {
+      // Copy args array since ours is frozen
+      const { stdout: output } = await execFileAsync(allowedCmd.cmd, [...allowedCmd.args], {
         cwd: stack.absolutePath,
-        encoding: 'utf-8',
         timeout: 300000, // 5 minute timeout per stack
         env: {
           ...process.env,
@@ -140,7 +139,7 @@ function runMultiStackBuilds(
         output: output.slice(-2000),
       })
     } catch (err) {
-      const execError = err as { status?: number; stdout?: string; stderr?: string }
+      const execError = err as { code?: number; stdout?: string; stderr?: string }
       const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
 
       stackResults.push({
@@ -149,7 +148,7 @@ function runMultiStackBuilds(
         status: 'fail',
         command: stack.commands.build,
         output: output.slice(-4000),
-        exitCode: execError.status,
+        exitCode: execError.code,
       })
     }
   }
@@ -187,7 +186,7 @@ function runMultiStackBuilds(
 
 /**
  * Original single-project build runner. Used when no techStacks are provided.
- * Uses execFileSync with whitelisted command to prevent command injection.
+ * Uses execFileAsync with whitelisted command to prevent command injection.
  */
 async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
   const timestamp = new Date().toISOString()
@@ -217,10 +216,9 @@ async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
   }
 
   try {
-    // Copy args array since execFileSync may modify it and ours is frozen
-    const output = execFileSync(allowedCmd.cmd, [...allowedCmd.args], {
+    // Copy args array since ours is frozen
+    const { stdout: output } = await execFileAsync(allowedCmd.cmd, [...allowedCmd.args], {
       cwd: worktreePath,
-      encoding: 'utf-8',
       timeout: 300000, // 5 minute timeout for builds
       env: {
         ...process.env,
@@ -241,16 +239,16 @@ async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
       timestamp,
     }
   } catch (err) {
-    const execError = err as { status?: number; stdout?: string; stderr?: string }
+    const execError = err as { code?: number; stdout?: string; stderr?: string }
     const output = [execError.stdout || '', execError.stderr || ''].join('\n').trim()
 
     return {
       verdict: 'fail',
       checkName: 'build',
-      summary: `Build failed (exit code ${execError.status ?? 'unknown'})`,
+      summary: `Build failed (exit code ${execError.code ?? 'unknown'})`,
       details: {
         command: buildCommand,
-        exitCode: execError.status,
+        exitCode: execError.code,
         output: output.slice(-4000), // Last 4KB for failures (more context)
       },
       timestamp,

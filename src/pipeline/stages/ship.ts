@@ -15,7 +15,7 @@
 
 import { writeFile, mkdir, readFile } from 'fs/promises'
 import { join } from 'path'
-import { execSync } from 'child_process'
+import { execAsync } from '../exec-utils.js'
 import type { PipelineRun, StageResult, GateResult } from '../types.js'
 import { transition, recordStageResult, transitionToError } from '../pipeline-engine.js'
 import { getPipelineDir } from '../pipeline-store.js'
@@ -64,13 +64,13 @@ export async function runShipStage(
     const execOpts = { cwd: run.worktreePath, encoding: 'utf-8' as const, timeout: 30000 }
 
     // Get current branch and commit SHA
-    const branch = execSync('git rev-parse --abbrev-ref HEAD', execOpts).trim()
-    const commitSha = execSync('git rev-parse HEAD', execOpts).trim()
+    const { stdout: branchOut } = await execAsync('git rev-parse --abbrev-ref HEAD', execOpts); const branch = branchOut.trim()
+    const { stdout: shaOut } = await execAsync('git rev-parse HEAD', execOpts); const commitSha = shaOut.trim()
 
     // Detect VCS provider from remote URL
     let remoteUrl: string
     try {
-      remoteUrl = execSync('git remote get-url origin', execOpts).trim()
+      const { stdout: remoteOut } = await execAsync('git remote get-url origin', execOpts); remoteUrl = remoteOut.trim()
     } catch {
       return await transitionToError(run, 'Ship stage failed: no git remote "origin" configured')
     }
@@ -87,7 +87,7 @@ export async function runShipStage(
 
     // Push branch to remote
     try {
-      execSync(`git push -u origin ${branch}`, {
+      await execAsync(`git push -u origin ${branch}`, {
         ...execOpts,
         timeout: 120000, // 2 minutes for push
       })

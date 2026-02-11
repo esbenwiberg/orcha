@@ -26,7 +26,7 @@
 
 import { writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
-import { execSync } from 'child_process'
+import { execAsync } from '../exec-utils.js'
 import type { PipelineRun, GateResult, StageResult, CompetingResult, Severity } from '../types.js'
 import { transition, recordStageResult, transitionToError } from '../pipeline-engine.js'
 import { getPipelineDir } from '../pipeline-store.js'
@@ -439,9 +439,8 @@ async function cleanupLosingWorktrees(
   const losers = competingResults.filter((c) => !c.winner && c.worktreePath)
   for (const loser of losers) {
     try {
-      execSync(`git worktree remove --force "${loser.worktreePath}"`, {
+      await execAsync(`git worktree remove --force "${loser.worktreePath}"`, {
         cwd: run.worktreePath,
-        encoding: 'utf-8',
         timeout: 15000,
       })
     } catch {

@@ -11,7 +11,7 @@
  * - If no tests written or all tests pass → pass
  */
 
-import { execFileSync } from 'child_process'
+import { execFileAsync } from '../exec-utils.js'
 import { readFileSync } from 'fs'
 import { mkdtemp, writeFile, readFile, rm } from 'fs/promises'
 import { join, resolve, relative } from 'path'
@@ -75,7 +75,7 @@ export async function runAdversary(
   const primaryTech = opts?.techStacks?.[0]?.type
 
   // Get the diff
-  const diff = getDiff(run.worktreePath, run.sourceBranch, run.baseCommit)
+  const diff = await getDiff(run.worktreePath, run.sourceBranch, run.baseCommit)
   if (!diff) {
     return {
       verdict: 'skip',
@@ -87,7 +87,7 @@ export async function runAdversary(
   }
 
   // Get existing test patterns for context (tech-aware)
-  const testPatterns = getTestPatterns(run.worktreePath, primaryTech)
+  const testPatterns = await getTestPatterns(run.worktreePath, primaryTech)
 
   // Build prompts (tech-aware)
   const workItem: WorkItemContext = {
@@ -214,11 +214,11 @@ export async function runAdversary(
 const VALID_TECH_TYPES: ReadonlySet<TechStack['type']> = new Set<TechStack['type']>(['node', 'dotnet', 'python'])
 
 /**
- * Test file patterns as arrays for execFileSync (avoids shell interpolation).
+ * Test file patterns as arrays for execFileAsync (avoids shell interpolation).
  * Security: Object.freeze() prevents runtime modification via prototype pollution.
  *
  * Additional runtime validation is performed in getTestPatterns() to ensure
- * patterns match the expected format before being used in execFileSync args.
+ * patterns match the expected format before being used in execFileAsync args.
  */
 const TEST_FILE_PATTERNS = Object.freeze({
   node: Object.freeze(['*.test.ts', '*.spec.ts', '*.test.js', '*.spec.js'] as const),
@@ -269,10 +269,10 @@ function validateTechType(techType?: TechStack['type']): TechStack['type'] {
  * @param techType - If provided, searches for tech-appropriate test file patterns.
  *                   Falls back to Node patterns if not specified (backwards compatible).
  *
- * Security: Uses execFileSync with args array to prevent command injection.
+ * Security: Uses execFileAsync with args array to prevent command injection.
  * The pattern array comes from a validated whitelist.
  */
-function getTestPatterns(worktreePath: string, techType?: TechStack['type']): string {
+async function getTestPatterns(worktreePath: string, techType?: TechStack['type']): Promise<string> {
   // Validate techType against whitelist to prevent command injection
   const validatedType = validateTechType(techType)
   const patterns = TEST_FILE_PATTERNS[validatedType]
@@ -293,7 +293,7 @@ function getTestPatterns(worktreePath: string, techType?: TechStack['type']): st
   }
 
   try {
-    // Build find args safely using execFileSync (no shell interpolation)
+    // Build find args safely using execFileAsync (no shell interpolation)
     // find . -maxdepth 4 -type f \( -name "*.test.ts" -o -name "*.spec.ts" ... \)
     const findArgs = ['.', '-maxdepth', '4', '-type', 'f', '(']
     for (let i = 0; i < validatedPatterns.length; i++) {
@@ -302,11 +302,11 @@ function getTestPatterns(worktreePath: string, techType?: TechStack['type']): st
     }
     findArgs.push(')')
 
-    const testFilesOutput = execFileSync('find', findArgs, {
+    const { stdout: testFilesRaw } = await execFileAsync('find', findArgs, {
       cwd: worktreePath,
-      encoding: 'utf-8',
       timeout: 5000,
-    }).trim()
+    })
+    const testFilesOutput = testFilesRaw.trim()
 
     if (!testFilesOutput) return ''
 
@@ -346,7 +346,7 @@ function getTestPatterns(worktreePath: string, techType?: TechStack['type']): st
  * Validate that a test path is safe for execution.
  * Rejects paths with control characters, newlines, or other injection vectors.
  *
- * Security: This is a defense-in-depth check. Even though execFileSync with args
+ * Security: This is a defense-in-depth check. Even though execFileAsync with args
  * array prevents shell injection, we validate to prevent:
  * - Control characters that could affect terminal output
  * - Newlines that could be interpreted specially by some tools
@@ -364,7 +364,7 @@ function isSafeTestPath(testPath: string): boolean {
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(testPath)) return false
   // Reject paths with newlines explicitly (belt-and-suspenders for \n = 0x0a and \r = 0x0d)
   if (testPath.includes('\n') || testPath.includes('\r')) return false
-  // Reject shell metacharacters - defense-in-depth even though execFileSync prevents shell injection
+  // Reject shell metacharacters - defense-in-depth even though execFileAsync prevents shell injection
   // These could cause issues in log parsing, error messages, or other downstream processing
   if (/[;|&`$]/.test(testPath)) return false
   // Reject paths starting with '-' to prevent flag injection attacks.
@@ -479,13 +479,12 @@ async function executeTests(
       continue
     }
 
-    // Execute the test using execFileSync to avoid shell injection
+    // Execute the test using execFileAsync to avoid shell injection
     try {
-      const output = execFileSync(
+      const { stdout: output } = await execFileAsync(
         runner.cmd, runner.args,
         {
           cwd: worktreePath,
-          encoding: 'utf-8',
           timeout: 30000, // 30s per test
           env: {
             ...process.env,
