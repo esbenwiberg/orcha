@@ -111,6 +111,9 @@ export class WebDashboardServer {
       return
     }
 
+    // Body parsing must be registered before auth() for OIDC callback POST
+    this.app.use(express.urlencoded({ extended: false }))
+
     const oidcConfig = {
       authRequired: false,
       auth0Logout: false,
