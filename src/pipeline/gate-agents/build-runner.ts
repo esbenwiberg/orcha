@@ -34,7 +34,7 @@ const MAX_RAW_OUTPUT = 50 * 1024
  */
 const ALLOWED_BUILD_COMMANDS: Readonly<Record<string, Readonly<{ cmd: string; args: readonly string[] }>>> = Object.freeze({
   'npm run build': Object.freeze({ cmd: 'npm', args: Object.freeze(['run', 'build']) }),
-  'dotnet build': Object.freeze({ cmd: 'dotnet', args: Object.freeze(['build', '-m:2']) }),
+  'dotnet build': Object.freeze({ cmd: 'dotnet', args: Object.freeze(['build', '-m:2', '--no-restore', '/p:UseSharedCompilation=false']) }),
   'python -m build': Object.freeze({ cmd: 'python', args: Object.freeze(['-m', 'build']) }),
 })
 
@@ -131,6 +131,8 @@ async function runMultiStackBuilds(
           CI: '1',
           NO_COLOR: '1',
           FORCE_COLOR: '0',
+          MSBUILDDISABLENODEREUSE: '1', // Don't keep MSBuild worker nodes alive after build
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1',
         },
       })
 
@@ -251,6 +253,8 @@ async function runLegacyBuild(worktreePath: string): Promise<GateResult> {
         CI: '1',
         NO_COLOR: '1',
         FORCE_COLOR: '0',
+        MSBUILDDISABLENODEREUSE: '1',
+        DOTNET_CLI_TELEMETRY_OPTOUT: '1',
       },
     })
 

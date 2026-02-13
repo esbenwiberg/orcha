@@ -118,11 +118,14 @@ export async function runPerGateFixes(
     // Get the current diff from worktree
     const diff = (await getDiff(run.worktreePath, run.sourceBranch, run.baseCommit)) ?? '(no diff available)'
 
+    // Guard findings — older gate results may lack this field
+    const findings = gateResult.findings ?? []
+
     // Build the per-gate fix prompt
     const { systemPrompt, userPrompt: baseUserPrompt } = await buildPerGateFixPrompt(
       checkName,
-      gateResult.rawOutput,
-      gateResult.findings,
+      gateResult.rawOutput ?? '',
+      findings,
       diff,
       run.description,
       run.acceptanceCriteria,
@@ -140,8 +143,8 @@ export async function runPerGateFixes(
       type: 'fix-loop',
       stage: 'fix-loop',
       title: `Fixing: ${checkName}`,
-      detail: `${gateResult.findings.length} finding(s) to address (attempt ${opts.attempt})`,
-      data: { checkName, attempt: opts.attempt, findings: gateResult.findings },
+      detail: `${findings.length} finding(s) to address (attempt ${opts.attempt})`,
+      data: { checkName, attempt: opts.attempt, findings },
     }).catch(() => { /* best-effort */ })
 
     // Spawn the fix agent

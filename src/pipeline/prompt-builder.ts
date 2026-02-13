@@ -1068,6 +1068,7 @@ export async function buildFixLoopPrompt(
  */
 const GATE_FIX_TEMPLATE_MAP: Record<string, string> = {
   test: 'fix-test',
+  'test-runner': 'fix-test',
   build: 'fix-build',
   lint: 'fix-lint',
   'code-review': 'fix-code-review',

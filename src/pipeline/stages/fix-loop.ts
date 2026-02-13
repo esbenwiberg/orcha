@@ -91,7 +91,7 @@ export async function runFixLoopStage(
     // -----------------------------------------------------------------------
     // 4. Get failed checks and run per-gate fixes
     // -----------------------------------------------------------------------
-    const failed = run.gateResults.filter((r) => r.verdict === 'fail')
+    const failed = (run.gateResults ?? []).filter((r) => r.verdict === 'fail')
 
     const { fixedChecks, skippedChecks, circuitBrokenChecks } = await runPerGateFixes(run, failed, {
       attempt,
@@ -196,7 +196,8 @@ export async function runFixLoopStage(
 
     return run
   } catch (err) {
-    const errorMsg = `Fix loop error: ${(err as Error).message}`
+    const stack = (err as Error).stack ?? (err as Error).message
+    const errorMsg = `Fix loop error: ${stack}`
     try {
       return await transitionToError(run, errorMsg)
     } catch {

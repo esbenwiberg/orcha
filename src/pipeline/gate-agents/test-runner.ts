@@ -43,7 +43,7 @@ const MAX_RAW_OUTPUT = 50 * 1024
  */
 const ALLOWED_TEST_COMMANDS: Readonly<Record<string, Readonly<{ cmd: string; args: readonly string[] }>>> = Object.freeze({
   'npm test': Object.freeze({ cmd: 'npm', args: Object.freeze(['test']) }),
-  'dotnet test': Object.freeze({ cmd: 'dotnet', args: Object.freeze(['test']) }),
+  'dotnet test': Object.freeze({ cmd: 'dotnet', args: Object.freeze(['test', '--no-restore', '/p:UseSharedCompilation=false']) }),
   'pytest': Object.freeze({ cmd: 'pytest', args: Object.freeze([]) }),
 })
 
@@ -140,6 +140,8 @@ async function runMultiStackTests(
           CI: '1',
           NO_COLOR: '1',
           FORCE_COLOR: '0',
+          MSBUILDDISABLENODEREUSE: '1', // Don't keep MSBuild worker nodes alive after test
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1',
         },
       })
 
@@ -258,9 +260,10 @@ async function runLegacyTests(worktreePath: string): Promise<GateResult> {
       env: {
         ...process.env,
         CI: '1',
-        // Disable color output for cleaner logs
         NO_COLOR: '1',
         FORCE_COLOR: '0',
+        MSBUILDDISABLENODEREUSE: '1',
+        DOTNET_CLI_TELEMETRY_OPTOUT: '1',
       },
     })
 

@@ -102,7 +102,9 @@ async function runSingleGateStage(
     // Detect tech stacks for multi-tech runners
     const techStacks = detectTechStacks(run.worktreePath)
 
-    // Run all gate agents in parallel (respecting skipChecks)
+    // Run gate agents in two phases to avoid OOM on memory-constrained VMs:
+    // Phase 1: Shell runners (build/test/lint) — these spawn heavy dotnet/node processes
+    // Phase 2: AI agents — these spawn Claude sessions (~500MB each)
     const agentOpts = {
       modelOverride: opts?.modelOverride,
       budgetOverride: opts?.budgetOverride,
@@ -110,10 +112,15 @@ async function runSingleGateStage(
     }
     const skip = new Set(run.skipChecks ?? [])
 
-    const [testResult, lintResult, buildResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
+    // Phase 1: Shell runners in parallel
+    const [testResult, lintResult, buildResult] = await Promise.all([
       skip.has('test') ? makeSkippedResult('test') : runTestRunner(run.worktreePath, techStacks, run.dependencyFailures),
       skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(run.worktreePath, run.sourceBranch, run.baseCommit, techStacks, run.dependencyFailures),
       skip.has('build') ? makeSkippedResult('build') : runBuildRunner(run.worktreePath, techStacks, run.dependencyFailures),
+    ])
+
+    // Phase 2: AI agents in parallel (after shell runners release memory)
+    const [acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
       skip.has('ac-validator') ? makeSkippedResult('ac-validator') : runAcValidator(run, agentOpts),
       skip.has('adversary') ? makeSkippedResult('adversary') : runAdversary(run, agentOpts),
       skip.has('security') ? makeSkippedResult('security') : runSecurityReview(run, agentOpts),
@@ -408,10 +415,15 @@ async function evaluateCompetitor(
   }
   const skip = new Set(run.skipChecks ?? [])
 
-  const [testResult, lintResult, buildResult, acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
+  // Phase 1: Shell runners (build/test/lint) — heavy processes finish first
+  const [testResult, lintResult, buildResult] = await Promise.all([
     skip.has('test') ? makeSkippedResult('test') : runTestRunner(competitor.worktreePath, techStacks, run.dependencyFailures),
     skip.has('lint') ? makeSkippedResult('lint') : runLintRunner(competitor.worktreePath, run.sourceBranch, run.baseCommit, techStacks, run.dependencyFailures),
     skip.has('build') ? makeSkippedResult('build') : runBuildRunner(competitor.worktreePath, techStacks, run.dependencyFailures),
+  ])
+
+  // Phase 2: AI agents (after shell runners release memory)
+  const [acResult, adversaryResult, securityResult, codeReviewResult] = await Promise.all([
     skip.has('ac-validator') ? makeSkippedResult('ac-validator') : runAcValidator(competitorRun, agentOpts),
     skip.has('adversary') ? makeSkippedResult('adversary') : runAdversary(competitorRun, agentOpts),
     skip.has('security') ? makeSkippedResult('security') : runSecurityReview(competitorRun, agentOpts),
