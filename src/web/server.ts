@@ -26,9 +26,6 @@ import { getProvider, parseRemoteUrl, detectProvider } from '../core/vcs-provide
 import type { RepoInfo, BranchSyncInfo } from '../core/types.js'
 import { getActions, getAction, createAction, updateAction, deleteAction, executeAction } from '../core/actions-manager.js'
 import { listTemplates, loadTemplate, saveTemplate, resetTemplate, validateTemplate } from '../pipeline/template-loader.js'
-import oidcPkg from 'express-openid-connect'
-const { auth, requiresAuth } = oidcPkg
-import { randomBytes } from 'crypto'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -76,7 +73,6 @@ export class WebDashboardServer {
   private ptySessions = new Map<string, PtySession>()
   private statusMonitors = new Map<string, StatusMonitor>() // Reusable monitors per instance
   private port: number
-  private authEnabled = false
 
   constructor(port = 3847) {
     this.port = port
@@ -89,130 +85,20 @@ export class WebDashboardServer {
   }
 
   /**
-   * Check if a request is coming from localhost (SSH tunnel)
-   */
-  private isLocalhost(req: IncomingMessage): boolean {
-    const host = req.headers.host || ''
-    return host.startsWith('localhost') || host.startsWith('127.0.0.1')
-  }
-
-  /**
-   * Setup OIDC authentication middleware (skipped for localhost)
+   * Auth is handled by oauth2-proxy in front of this server.
+   * No application-level auth middleware needed.
    */
   private setupAuth(): void {
-    const tenantId = process.env.AZURE_TENANT_ID
-    const clientId = process.env.AZURE_CLIENT_ID
-    const clientSecret = process.env.AZURE_CLIENT_SECRET
-    const baseURL = process.env.ORCHA_BASE_URL
-
-    // Skip auth setup if env vars not configured (dev/local mode)
-    if (!tenantId || !clientId || !clientSecret || !baseURL) {
-      console.log('[Auth] OIDC not configured (missing env vars) - running without auth')
-      return
-    }
-
-    // Body parsing must be registered before auth() for OIDC callback POST
+    // Body parsing for form submissions
     this.app.use(express.urlencoded({ extended: false }))
-
-    const oidcConfig = {
-      authRequired: false,
-      auth0Logout: false,
-      issuerBaseURL: `https://login.microsoftonline.com/${tenantId}/v2.0`,
-      baseURL,
-      clientID: clientId,
-      clientSecret,
-      secret: process.env.SESSION_SECRET || randomBytes(32).toString('hex'),
-      routes: {
-        login: '/auth/login',
-        logout: '/auth/logout',
-        callback: '/auth/callback',
-      },
-      session: {
-        rollingDuration: 86400,   // 24 hours rolling
-        absoluteDuration: 604800, // 7 days absolute max
-      },
-      authorizationParams: {
-        response_type: 'code',
-        scope: 'openid profile email',
-      },
-    }
-
-    this.app.use(auth(oidcConfig))
-
-    // Allowed emails (comma-separated in env var, e.g. "me@company.com,other@company.com")
-    const allowedEmails = (process.env.ALLOWED_EMAILS || '')
-      .split(',')
-      .map(e => e.trim().toLowerCase())
-      .filter(Boolean)
-
-    if (allowedEmails.length > 0) {
-      console.log(`[Auth] User allowlist enabled: ${allowedEmails.join(', ')}`)
-    }
-
-    // Protect all routes except health check, but skip for localhost
-    const authMiddleware = (req: any, res: any, next: any) => {
-      if (this.isLocalhost(req)) {
-        return next()
-      }
-      return requiresAuth()(req, res, () => {
-        // If allowlist is configured, check the user's email
-        if (allowedEmails.length > 0) {
-          const userEmail = (req.oidc?.user?.email || '').toLowerCase()
-          if (!allowedEmails.includes(userEmail)) {
-            console.warn(`[Auth] Blocked user: ${userEmail}`)
-            return res.status(403).send('Access denied. Your account is not authorized to use this application.')
-          }
-        }
-        next()
-      })
-    }
-
-    // Protect API routes (except health)
-    this.app.use('/api/sessions', authMiddleware)
-    this.app.use('/api/status', authMiddleware)
-    this.app.use('/api/usage', authMiddleware)
-    this.app.use('/api/actions', authMiddleware)
-    this.app.use('/api/instances', authMiddleware)
-    this.app.use('/api/git', authMiddleware)
-    this.app.use('/api/github', authMiddleware)
-    this.app.use('/api/batch-issues', authMiddleware)
-    this.app.use('/api/upload-image', authMiddleware)
-    this.app.use('/api/server', authMiddleware)
-    this.app.use('/api/pipelines', authMiddleware)
-    this.app.use('/api/prompts', authMiddleware)
-
-    // Protect HTML pages (root dashboard and mobile view)
-    this.app.get('/', authMiddleware)
-    this.app.get('/index.html', authMiddleware)
-    this.app.get('/mobile', authMiddleware)
-    this.app.get('/mobile.html', authMiddleware)
-
-    this.authEnabled = true
-    console.log(`[Auth] OIDC configured with Entra ID (tenant: ${tenantId.substring(0, 8)}...)`)
   }
 
   /**
-   * Handle HTTP upgrade requests for WebSocket with auth
+   * Handle HTTP upgrade requests for WebSocket
+   * Auth is handled by oauth2-proxy before requests reach this server.
    */
   private setupUpgradeHandler(): void {
     this.server.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
-      // Allow without auth when OIDC is not configured or request is from localhost
-      if (!this.authEnabled || this.isLocalhost(req)) {
-        this.wss.handleUpgrade(req, socket, head, (ws) => {
-          this.wss.emit('connection', ws, req)
-        })
-        return
-      }
-
-      // For remote connections with auth enabled, check for auth cookie
-      const cookies = req.headers.cookie || ''
-      if (!cookies.includes('appSession')) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
-        socket.destroy()
-        return
-      }
-
-      // Cookie exists - allow the upgrade (the cookie was validated by OIDC middleware on the page load)
       this.wss.handleUpgrade(req, socket, head, (ws) => {
         this.wss.emit('connection', ws, req)
       })
