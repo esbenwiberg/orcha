@@ -20,6 +20,7 @@ export interface SessionMetadata {
   createdAt: string // ISO 8601
   tmuxSession?: string // Optional: tmux session name
   customName?: string // Optional: user-defined display name
+  planPath?: string // Optional: user-selected plan file path
 }
 
 export interface SessionStoreData {

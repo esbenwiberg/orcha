@@ -732,10 +732,12 @@ async function showPlanDialog(session) {
       <div class="plan-dialog-header">
         <span class="plan-dialog-title">📋 Plan: ${getSessionDisplayName(session)}</span>
         <div style="display:flex;gap:8px;align-items:center;">
+          <button class="plan-browse-btn" title="Browse files" style="background:#9b59b6;border:none;color:white;font-size:0.75rem;padding:6px 10px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:4px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg> Browse</button>
           <button class="plan-copy-btn" style="background:#9b59b6;border:none;color:white;font-size:0.75rem;padding:6px 12px;border-radius:4px;cursor:pointer;display:none;">Copy as Markdown</button>
           <button class="plan-dialog-close">×</button>
         </div>
       </div>
+      <div class="plan-file-path" style="display:none;"></div>
       <div class="plan-dialog-content">
         <div class="plan-loading">Loading plan...</div>
       </div>
@@ -745,25 +747,177 @@ async function showPlanDialog(session) {
   const contentEl = overlay.querySelector('.plan-dialog-content');
   const closeBtn = overlay.querySelector('.plan-dialog-close');
   const copyBtn = overlay.querySelector('.plan-copy-btn');
+  const browseBtn = overlay.querySelector('.plan-browse-btn');
+  const filePathEl = overlay.querySelector('.plan-file-path');
 
-  const closeDialog = () => overlay.remove();
+  let yaziWs = null, yaziTerm = null, yaziResizeObserver = null;
+  let currentMarkdown = null;
+  let yaziActive = false;
+
+  const cleanupYazi = () => {
+    yaziActive = false;
+    if (yaziWs) { try { yaziWs.close(); } catch {} yaziWs = null; }
+    if (yaziTerm) { yaziTerm.dispose(); yaziTerm = null; }
+    if (yaziResizeObserver) { yaziResizeObserver.disconnect(); yaziResizeObserver = null; }
+    contentEl.classList.remove('plan-yazi-active');
+  };
+
+  const closeDialog = () => {
+    cleanupYazi();
+    overlay.remove();
+  };
 
   closeBtn.addEventListener('click', closeDialog);
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) closeDialog();
   });
   overlay.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeDialog();
+    if (e.key === 'Escape' && !yaziActive) closeDialog();
   });
 
   document.body.appendChild(overlay);
   closeBtn.focus();
 
+  // Helper: render plan content from markdown
+  const renderPlan = async (markdown, filePath) => {
+    currentMarkdown = markdown;
+    const htmlContent = marked.parse(markdown);
+    contentEl.innerHTML = `<div class="plan-content markdown-body">${htmlContent}</div>`;
+    copyBtn.style.display = '';
+
+    // Show file path breadcrumb
+    if (filePath) {
+      filePathEl.textContent = filePath;
+      filePathEl.style.display = '';
+    }
+
+    // Render mermaid diagrams if any
+    if (window.mermaid) {
+      const mermaidElements = contentEl.querySelectorAll('code.language-mermaid');
+      mermaidElements.forEach((el, idx) => {
+        const code = el.textContent;
+        const id = `mermaid-${Date.now()}-${idx}`;
+        const container = document.createElement('div');
+        container.className = 'mermaid-container';
+        container.innerHTML = `<div class="mermaid" id="${id}">${code}</div>`;
+        el.parentElement.replaceWith(container);
+      });
+      await window.mermaid.run({ querySelector: '.plan-content .mermaid' });
+    }
+  };
+
+  // Copy button handler
+  copyBtn.addEventListener('click', async () => {
+    if (!currentMarkdown) return;
+    try {
+      await navigator.clipboard.writeText(currentMarkdown);
+      showToast('Plan copied as markdown', 'success');
+    } catch (err) {
+      showToast('Failed to copy: ' + err.message, 'error');
+    }
+  });
+
+  // Browse button handler — launch yazi chooser
+  browseBtn.addEventListener('click', () => {
+    const savedContent = contentEl.innerHTML;
+    yaziActive = true;
+
+    // Replace content with terminal
+    contentEl.classList.add('plan-yazi-active');
+    contentEl.innerHTML = '<div class="plan-yazi-terminal"></div>';
+    const termContainer = contentEl.querySelector('.plan-yazi-terminal');
+
+    yaziTerm = new Terminal({
+      cursorBlink: true,
+      fontSize: 14,
+      theme: { background: '#1a1a2e' },
+      allowProposedApi: true,
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    yaziTerm.loadAddon(fitAddon);
+    yaziTerm.open(termContainer);
+    fitAddon.fit();
+
+    yaziResizeObserver = new ResizeObserver(() => {
+      try { fitAddon.fit(); } catch {}
+      if (yaziWs && yaziWs.readyState === WebSocket.OPEN) {
+        yaziWs.send(JSON.stringify({ type: 'resize', cols: yaziTerm.cols, rows: yaziTerm.rows }));
+      }
+    });
+    yaziResizeObserver.observe(termContainer);
+
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    yaziWs = new WebSocket(`${wsProtocol}//${location.host}?mode=yazi-chooser&instanceId=${session.instanceId}&sessionId=${session.id}`);
+
+    yaziWs.onopen = () => {
+      yaziWs.send(JSON.stringify({ type: 'resize', cols: yaziTerm.cols, rows: yaziTerm.rows }));
+    };
+
+    yaziWs.onmessage = async (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'output') {
+          yaziTerm.write(msg.data);
+        } else if (msg.type === 'chosen') {
+          cleanupYazi();
+          if (msg.path) {
+            // Persist the choice
+            try {
+              await fetch(`/api/sessions/${session.instanceId}/${session.id}/plan-path`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: msg.path }),
+              });
+            } catch (err) {
+              console.warn('Failed to persist plan path:', err);
+            }
+
+            // Fetch and render the selected plan
+            contentEl.innerHTML = '<div class="plan-loading">Loading plan...</div>';
+            try {
+              const res = await fetch(`/api/sessions/${session.instanceId}/${session.id}/plan?path=${encodeURIComponent(msg.path)}`);
+              if (res.ok) {
+                const data = await res.json();
+                await renderPlan(data.content, data.path);
+              } else {
+                contentEl.innerHTML = '<div class="plan-error">Failed to load selected file</div>';
+              }
+            } catch (err) {
+              contentEl.innerHTML = `<div class="plan-error">Failed to load: ${err.message}</div>`;
+            }
+          } else {
+            // User quit without selecting — restore previous content
+            contentEl.innerHTML = savedContent;
+          }
+        }
+        // 'exit' type: cleanup already done in 'chosen' handler
+      } catch {}
+    };
+
+    yaziWs.onerror = () => {
+      cleanupYazi();
+      contentEl.innerHTML = savedContent;
+      showToast('File browser connection failed', 'error');
+    };
+
+    yaziWs.onclose = () => {
+      if (yaziActive) {
+        cleanupYazi();
+        contentEl.innerHTML = savedContent;
+      }
+    };
+
+    yaziTerm.onData((data) => {
+      if (yaziWs && yaziWs.readyState === WebSocket.OPEN) {
+        yaziWs.send(JSON.stringify({ type: 'input', data }));
+      }
+    });
+  });
+
   // Fetch plan content
   try {
     const res = await fetch(`/api/sessions/${session.instanceId}/${session.id}/plan`);
     if (!res.ok) {
-      const data = await res.json();
       contentEl.innerHTML = `
         <div class="plan-empty">
           <div style="font-size: 64px; margin-bottom: 20px; color: #a78bfa;">☰</div>
@@ -785,7 +939,7 @@ async function showPlanDialog(session) {
               .claude/plan.md
             </div>
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); color: var(--text-muted);">
-              <em>Tip:</em> Customize the path in <code>.orcha/config.json</code> with <code>"planPath"</code>
+              <em>Tip:</em> Click <strong>Browse</strong> to select any markdown file as your plan
             </div>
           </div>
         </div>
@@ -794,36 +948,7 @@ async function showPlanDialog(session) {
     }
 
     const data = await res.json();
-    const planMarkdown = data.content;
-
-    // Render markdown with marked.js
-    const htmlContent = marked.parse(planMarkdown);
-    contentEl.innerHTML = `<div class="plan-content markdown-body">${htmlContent}</div>`;
-
-    // Show copy button and add handler
-    copyBtn.style.display = '';
-    copyBtn.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(planMarkdown);
-        showToast('Plan copied as markdown', 'success');
-      } catch (err) {
-        showToast('Failed to copy: ' + err.message, 'error');
-      }
-    });
-
-    // Render mermaid diagrams if any
-    if (window.mermaid) {
-      const mermaidElements = contentEl.querySelectorAll('code.language-mermaid');
-      mermaidElements.forEach((el, idx) => {
-        const code = el.textContent;
-        const id = `mermaid-${Date.now()}-${idx}`;
-        const container = document.createElement('div');
-        container.className = 'mermaid-container';
-        container.innerHTML = `<div class="mermaid" id="${id}">${code}</div>`;
-        el.parentElement.replaceWith(container);
-      });
-      await window.mermaid.run({ querySelector: '.plan-content .mermaid' });
-    }
+    await renderPlan(data.content, data.path);
   } catch (err) {
     contentEl.innerHTML = `<div class="plan-error">Failed to load plan: ${err.message}</div>`;
   }

@@ -10,10 +10,10 @@ import { createServer, type IncomingMessage } from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 import * as pty from 'node-pty'
 import { join, dirname, resolve, isAbsolute } from 'path'
-import { homedir, cpus, totalmem, freemem, uptime, loadavg } from 'os'
+import { homedir, cpus, totalmem, freemem, uptime, loadavg, tmpdir } from 'os'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
-import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, rmSync } from 'fs'
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, rmSync, unlinkSync } from 'fs'
 import type { Socket } from 'net'
 import { listInstances, getInstance, getInstanceByPath, registerInstance, unregisterInstance } from '../core/instance-registry.js'
 import { StatusMonitor, getStatusDirForInstance, migrateStatusFromLegacyPaths } from '../core/status-monitor.js'
@@ -509,6 +509,7 @@ export class WebDashboardServer {
     this.app.get('/api/sessions/:instanceId/:sessionId/plan', async (req, res) => {
       try {
         const { instanceId, sessionId } = req.params
+        const queryPath = req.query.path as string | undefined
 
         // Load session metadata to get worktree path
         const metadata = await loadSessionStore(instanceId)
@@ -520,9 +521,9 @@ export class WebDashboardServer {
         }
 
         // Determine base path (worktree or instance repo)
+        const instance = await getInstance(instanceId)
         let basePath = session.worktreePath
         if (!basePath) {
-          const instance = await getInstance(instanceId)
           if (!instance) {
             res.status(404).json({ error: 'Instance not found' })
             return
@@ -530,8 +531,23 @@ export class WebDashboardServer {
           basePath = instance.repoPath
         }
 
-        // Resolve plan path
-        const planPath = this.resolvePlanPath(basePath)
+        // Resolve plan path: explicit query > persisted session > config > default
+        let planPath: string | null = null
+        if (queryPath) {
+          // Validate explicit path is within repo
+          const repoRoot = instance?.repoPath || basePath
+          const resolved = resolve(queryPath)
+          if (!resolved.startsWith(repoRoot)) {
+            res.status(403).json({ error: 'Path outside repository' })
+            return
+          }
+          if (existsSync(resolved)) planPath = resolved
+        } else if (session.planPath && existsSync(session.planPath)) {
+          planPath = session.planPath
+        } else {
+          planPath = this.resolvePlanPath(basePath)
+        }
+
         if (!planPath) {
           res.status(404).json({ error: 'No plan found' })
           return
@@ -542,6 +558,46 @@ export class WebDashboardServer {
         res.json({ content, path: planPath })
       } catch (err) {
         console.error('[API] Error reading plan:', err)
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Persist plan path for a session
+    this.app.put('/api/sessions/:instanceId/:sessionId/plan-path', async (req, res) => {
+      try {
+        const { instanceId, sessionId } = req.params
+        const { path: filePath } = req.body
+
+        if (!filePath || typeof filePath !== 'string') {
+          res.status(400).json({ error: 'Missing path' })
+          return
+        }
+
+        // Validate path is within the session's repo
+        const instance = await getInstance(instanceId)
+        if (!instance) {
+          res.status(404).json({ error: 'Instance not found' })
+          return
+        }
+        const resolved = resolve(filePath)
+        if (!resolved.startsWith(instance.repoPath)) {
+          res.status(403).json({ error: 'Path outside repository' })
+          return
+        }
+
+        // Update session metadata
+        const sessions = await loadSessionStore(instanceId)
+        const session = sessions.find(s => s.id === sessionId)
+        if (!session) {
+          res.status(404).json({ error: 'Session not found' })
+          return
+        }
+        session.planPath = resolved
+        await saveSessionStore(instanceId, sessions)
+
+        res.json({ ok: true, path: resolved })
+      } catch (err) {
+        console.error('[API] Error saving plan path:', err)
         res.status(500).json({ error: (err as Error).message })
       }
     })
@@ -3311,6 +3367,107 @@ Rules:
         return
       }
 
+      // Plan file chooser mode (yazi --chooser-file)
+      if (mode === 'yazi-chooser') {
+        const instanceId = url.searchParams.get('instanceId')
+        const sessionId = url.searchParams.get('sessionId')
+
+        if (!instanceId) {
+          ws.close(1008, 'Missing instanceId parameter')
+          return
+        }
+
+        const instance = await getInstance(instanceId)
+        if (!instance) {
+          ws.close(1008, 'Instance not found')
+          return
+        }
+
+        // Use main repo path (plans are in the main repo, not worktrees)
+        const targetPath = instance.repoPath
+        console.log(`[WS] Yazi chooser connected: ${instanceId}/${sessionId} (repo: ${targetPath})`)
+
+        // Create temp file for yazi to write chosen path
+        const chooserFile = join(tmpdir(), `orcha-yazi-chooser-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+
+        const ptyProcess = this.createYaziChooserPty(targetPath, chooserFile)
+        if (!ptyProcess) {
+          ws.close(1011, 'Failed to create yazi chooser PTY')
+          return
+        }
+
+        const sessionKey = `yazi-chooser-${instanceId}-${Date.now()}`
+        this.ptySessions.set(sessionKey, { pty: ptyProcess, ws })
+
+        ptyProcess.onData((data) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'output', data }))
+          }
+        })
+
+        ptyProcess.onExit(({ exitCode }) => {
+          console.log(`[PTY] Yazi chooser exited with code ${exitCode}`)
+
+          // Read the chooser file to get selected path
+          let chosenPath: string | null = null
+          try {
+            if (existsSync(chooserFile)) {
+              const content = readFileSync(chooserFile, 'utf-8').trim()
+              if (content) {
+                // Take only the first line (yazi may write multiple)
+                const firstLine = content.split('\n')[0].trim()
+                // Validate path is within repo
+                if (firstLine.startsWith(instance!.repoPath) && existsSync(firstLine)) {
+                  chosenPath = firstLine
+                }
+              }
+            }
+          } catch (err) {
+            console.error('[PTY] Error reading chooser file:', (err as Error).message)
+          }
+
+          // Clean up temp file
+          try {
+            if (existsSync(chooserFile)) unlinkSync(chooserFile)
+          } catch { /* ignore */ }
+
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'chosen', path: chosenPath }))
+            ws.send(JSON.stringify({ type: 'exit', code: exitCode }))
+          }
+          this.ptySessions.delete(sessionKey)
+        })
+
+        ws.on('message', (message) => {
+          try {
+            const msg = JSON.parse(message.toString())
+            if (msg.type === 'input' && msg.data) {
+              ptyProcess.write(msg.data)
+            } else if (msg.type === 'resize' && msg.cols && msg.rows) {
+              ptyProcess.resize(msg.cols, msg.rows)
+            }
+          } catch {
+            ptyProcess.write(message.toString())
+          }
+        })
+
+        ws.on('close', () => {
+          console.log(`[WS] Yazi chooser disconnected: ${instanceId}`)
+          ptyProcess.kill()
+          this.ptySessions.delete(sessionKey)
+          // Clean up temp file
+          try {
+            if (existsSync(chooserFile)) unlinkSync(chooserFile)
+          } catch { /* ignore */ }
+        })
+
+        ws.on('error', (err) => {
+          console.error(`[WS] Yazi chooser error for ${instanceId}:`, err.message)
+        })
+
+        return
+      }
+
       // Default: tmux session mode
       const sessionKey = url.searchParams.get('session')
       const tmuxSession = url.searchParams.get('tmux')
@@ -3502,6 +3659,30 @@ Rules:
       return ptyProcess
     } catch (err) {
       console.error(`[PTY] Failed to create yazi PTY:`, (err as Error).message)
+      return null
+    }
+  }
+
+  private createYaziChooserPty(repoPath: string, chooserFilePath: string): pty.IPty | null {
+    try {
+      try {
+        execSync('which yazi', { stdio: 'ignore' })
+      } catch {
+        console.error('[PTY] yazi not found in PATH')
+        return null
+      }
+
+      const ptyProcess = pty.spawn('yazi', ['--chooser-file', chooserFilePath, repoPath], {
+        name: 'xterm-256color',
+        cols: 120,
+        rows: 30,
+        cwd: repoPath,
+        env: { ...process.env, TERM: 'xterm-256color' },
+      })
+
+      return ptyProcess
+    } catch (err) {
+      console.error(`[PTY] Failed to create yazi chooser PTY:`, (err as Error).message)
       return null
     }
   }

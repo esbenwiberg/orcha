@@ -484,10 +484,12 @@ async function showPlanMobile(session) {
       <div class="plan-dialog-header-mobile">
         <span class="plan-dialog-title-mobile">Plan: ${escapeHtml(session.customName || session.id)}</span>
         <div style="display:flex;gap:8px;align-items:center;">
+          <button class="plan-browse-btn-mobile" title="Browse files">Browse</button>
           <button class="plan-copy-btn-mobile" style="display:none;">Copy as Markdown</button>
           <button class="plan-dialog-close-mobile">&times;</button>
         </div>
       </div>
+      <div class="plan-file-path-mobile" style="display:none;"></div>
       <div class="plan-dialog-body-mobile">
         <div style="color:var(--text-secondary);padding:20px;text-align:center;">Loading plan...</div>
       </div>
@@ -497,33 +499,154 @@ async function showPlanMobile(session) {
   const body = overlay.querySelector('.plan-dialog-body-mobile')
   const closeBtn = overlay.querySelector('.plan-dialog-close-mobile')
   const copyBtn = overlay.querySelector('.plan-copy-btn-mobile')
+  const browseBtn = overlay.querySelector('.plan-browse-btn-mobile')
+  const filePathEl = overlay.querySelector('.plan-file-path-mobile')
 
-  closeBtn.addEventListener('click', () => overlay.remove())
+  let yaziWs = null, yaziTerm = null, yaziResizeObserver = null
+  let currentMarkdown = null
+  let yaziActive = false
+
+  const cleanupYazi = () => {
+    yaziActive = false
+    if (yaziWs) { try { yaziWs.close() } catch {} yaziWs = null }
+    if (yaziTerm) { yaziTerm.dispose(); yaziTerm = null }
+    if (yaziResizeObserver) { yaziResizeObserver.disconnect(); yaziResizeObserver = null }
+    body.classList.remove('plan-yazi-active-mobile')
+  }
+
+  const closeDialog = () => {
+    cleanupYazi()
+    overlay.remove()
+  }
+
+  closeBtn.addEventListener('click', closeDialog)
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove()
+    if (e.target === overlay) closeDialog()
   })
 
   document.body.appendChild(overlay)
   requestAnimationFrame(() => overlay.classList.add('visible'))
 
+  const renderPlan = async (markdown, filePath) => {
+    currentMarkdown = markdown
+    body.innerHTML = `<div class="plan-markdown">${marked.parse(markdown)}</div>`
+    copyBtn.style.display = ''
+    if (filePath) {
+      filePathEl.textContent = filePath
+      filePathEl.style.display = ''
+    }
+  }
+
+  copyBtn.addEventListener('click', async () => {
+    if (!currentMarkdown) return
+    try {
+      await navigator.clipboard.writeText(currentMarkdown)
+      showToast('Plan copied as markdown', 'success')
+    } catch (err) {
+      showToast('Failed to copy: ' + err.message, 'error')
+    }
+  })
+
+  // Browse button handler — launch yazi chooser
+  browseBtn.addEventListener('click', () => {
+    const savedContent = body.innerHTML
+    yaziActive = true
+
+    body.classList.add('plan-yazi-active-mobile')
+    body.innerHTML = '<div class="plan-yazi-terminal-mobile"></div>'
+    const termContainer = body.querySelector('.plan-yazi-terminal-mobile')
+
+    yaziTerm = new Terminal({
+      cursorBlink: true,
+      fontSize: 13,
+      theme: { background: '#1a1a2e' },
+      allowProposedApi: true,
+    })
+    const fitAddon = new FitAddon.FitAddon()
+    yaziTerm.loadAddon(fitAddon)
+    yaziTerm.open(termContainer)
+    fitAddon.fit()
+
+    yaziResizeObserver = new ResizeObserver(() => {
+      try { fitAddon.fit() } catch {}
+      if (yaziWs && yaziWs.readyState === WebSocket.OPEN) {
+        yaziWs.send(JSON.stringify({ type: 'resize', cols: yaziTerm.cols, rows: yaziTerm.rows }))
+      }
+    })
+    yaziResizeObserver.observe(termContainer)
+
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    yaziWs = new WebSocket(`${wsProtocol}//${location.host}?mode=yazi-chooser&instanceId=${session.instanceId}&sessionId=${session.id}`)
+
+    yaziWs.onopen = () => {
+      yaziWs.send(JSON.stringify({ type: 'resize', cols: yaziTerm.cols, rows: yaziTerm.rows }))
+    }
+
+    yaziWs.onmessage = async (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        if (msg.type === 'output') {
+          yaziTerm.write(msg.data)
+        } else if (msg.type === 'chosen') {
+          cleanupYazi()
+          if (msg.path) {
+            try {
+              await fetch(`/api/sessions/${session.instanceId}/${session.id}/plan-path`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: msg.path }),
+              })
+            } catch (err) {
+              console.warn('Failed to persist plan path:', err)
+            }
+
+            body.innerHTML = '<div style="color:var(--text-secondary);padding:20px;text-align:center;">Loading plan...</div>'
+            try {
+              const res = await fetch(`/api/sessions/${session.instanceId}/${session.id}/plan?path=${encodeURIComponent(msg.path)}`)
+              if (res.ok) {
+                const data = await res.json()
+                await renderPlan(data.content, data.path)
+              } else {
+                body.innerHTML = '<div style="color:var(--state-error);padding:20px;">Failed to load selected file</div>'
+              }
+            } catch (err) {
+              body.innerHTML = `<div style="color:var(--state-error);padding:20px;">Failed to load: ${escapeHtml(err.message)}</div>`
+            }
+          } else {
+            body.innerHTML = savedContent
+          }
+        }
+      } catch {}
+    }
+
+    yaziWs.onerror = () => {
+      cleanupYazi()
+      body.innerHTML = savedContent
+      showToast('File browser connection failed', 'error')
+    }
+
+    yaziWs.onclose = () => {
+      if (yaziActive) {
+        cleanupYazi()
+        body.innerHTML = savedContent
+      }
+    }
+
+    yaziTerm.onData((data) => {
+      if (yaziWs && yaziWs.readyState === WebSocket.OPEN) {
+        yaziWs.send(JSON.stringify({ type: 'input', data }))
+      }
+    })
+  })
+
   try {
     const res = await fetch(`/api/sessions/${session.instanceId}/${session.id}/plan`)
     if (!res.ok) {
-      body.innerHTML = `<div style="color:var(--text-secondary);padding:20px;text-align:center;">No plan found.<br><br><span style="font-size:12px;">Create a plan file at <code>.claude/plan.md</code></span></div>`
+      body.innerHTML = `<div style="color:var(--text-secondary);padding:20px;text-align:center;">No plan found.<br><br><span style="font-size:12px;">Create a plan file at <code>.claude/plan.md</code><br>or click <strong>Browse</strong> to select any file</span></div>`
       return
     }
     const data = await res.json()
-    body.innerHTML = `<div class="plan-markdown">${marked.parse(data.content)}</div>`
-
-    copyBtn.style.display = ''
-    copyBtn.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(data.content)
-        showToast('Plan copied as markdown', 'success')
-      } catch (err) {
-        showToast('Failed to copy: ' + err.message, 'error')
-      }
-    })
+    await renderPlan(data.content, data.path)
   } catch (err) {
     body.innerHTML = `<div style="color:var(--state-error);padding:20px;">Failed to load: ${escapeHtml(err.message)}</div>`
   }

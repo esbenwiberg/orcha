@@ -647,6 +647,16 @@ html, body {
   font-weight: 600;
 }
 
+.plan-browse-btn-mobile {
+  background: #9b59b6;
+  border: none;
+  color: white;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
 .plan-copy-btn-mobile {
   background: #9b59b6;
   border: none;
@@ -655,6 +665,28 @@ html, body {
   padding: 6px 12px;
   border-radius: 4px;
   cursor: pointer;
+}
+
+.plan-file-path-mobile {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-dialog-body-mobile.plan-yazi-active-mobile {
+  padding: 0;
+  overflow: hidden;
+}
+
+.plan-yazi-terminal-mobile {
+  width: 100%;
+  height: 100%;
 }
 
 .plan-dialog-close-mobile {
