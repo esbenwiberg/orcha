@@ -647,6 +647,16 @@ html, body {
   font-weight: 600;
 }
 
+.plan-copy-btn-mobile {
+  background: #9b59b6;
+  border: none;
+  color: white;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
 .plan-dialog-close-mobile {
   background: none;
   border: none;

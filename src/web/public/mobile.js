@@ -483,7 +483,10 @@ async function showPlanMobile(session) {
     <div class="plan-dialog-mobile">
       <div class="plan-dialog-header-mobile">
         <span class="plan-dialog-title-mobile">Plan: ${escapeHtml(session.customName || session.id)}</span>
-        <button class="plan-dialog-close-mobile">&times;</button>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="plan-copy-btn-mobile" style="display:none;">Copy as Markdown</button>
+          <button class="plan-dialog-close-mobile">&times;</button>
+        </div>
       </div>
       <div class="plan-dialog-body-mobile">
         <div style="color:var(--text-secondary);padding:20px;text-align:center;">Loading plan...</div>
@@ -493,6 +496,7 @@ async function showPlanMobile(session) {
 
   const body = overlay.querySelector('.plan-dialog-body-mobile')
   const closeBtn = overlay.querySelector('.plan-dialog-close-mobile')
+  const copyBtn = overlay.querySelector('.plan-copy-btn-mobile')
 
   closeBtn.addEventListener('click', () => overlay.remove())
   overlay.addEventListener('click', (e) => {
@@ -510,6 +514,16 @@ async function showPlanMobile(session) {
     }
     const data = await res.json()
     body.innerHTML = `<div class="plan-markdown">${marked.parse(data.content)}</div>`
+
+    copyBtn.style.display = ''
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(data.content)
+        showToast('Plan copied as markdown', 'success')
+      } catch (err) {
+        showToast('Failed to copy: ' + err.message, 'error')
+      }
+    })
   } catch (err) {
     body.innerHTML = `<div style="color:var(--state-error);padding:20px;">Failed to load: ${escapeHtml(err.message)}</div>`
   }
