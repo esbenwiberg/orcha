@@ -3649,7 +3649,7 @@ Rules:
     }
 
     // 2. Default location
-    const defaultPath = join(basePath, '.claude', 'plan.md')
+    const defaultPath = join(basePath, 'plans', 'currentplan.md')
     if (existsSync(defaultPath)) return defaultPath
 
     return null
