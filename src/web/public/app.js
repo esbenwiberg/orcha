@@ -16,6 +16,7 @@ const state = {
   usage: null, // { date, tokens, messages, sessions } or null
   gridLayout: { cols: 1, rows: 1 }, // Current grid layout for 2D navigation
   actions: [], // Custom action buttons
+  profiles: [], // Provider profiles
   pipelines: [], // Pipeline runs
   selectedPipeline: null, // Currently selected pipeline ID
   pipelineLogs: {}, // pipelineId -> accumulated log text
@@ -1251,6 +1252,196 @@ async function fetchActions() {
 }
 
 /**
+ * Fetch provider profiles from the server
+ */
+async function fetchProfiles() {
+  try {
+    const res = await fetch('/api/profiles');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error('Failed to fetch profiles:', err);
+    return [];
+  }
+}
+
+/**
+ * Show profile manager dialog (list + create/edit/delete)
+ */
+function showProfileManagerDialog() {
+  const existingDialog = document.querySelector('.profile-manager-overlay');
+  if (existingDialog) { existingDialog.remove(); return; }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'profile-manager-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;';
+
+  const renderList = () => {
+    const profiles = state.profiles;
+    const rows = profiles.length === 0
+      ? '<div style="color:#666;font-size:0.8rem;padding:8px 0;">No profiles yet.</div>'
+      : profiles.map(p => `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #2a2a2a;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:0.85rem;color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(p.name)}</div>
+            <div style="font-size:0.75rem;color:#888;">${escapeHtml(p.model)}${p.baseUrl ? ' · ' + escapeHtml(p.baseUrl) : ''}</div>
+          </div>
+          <button onclick="showProfileEditorDialog('${p.id}')" style="padding:4px 10px;background:#333;border:1px solid #555;color:#ccc;border-radius:4px;cursor:pointer;font-size:0.75rem;">Edit</button>
+        </div>
+      `).join('');
+
+    return rows;
+  };
+
+  overlay.innerHTML = `
+    <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:360px;max-width:480px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+      <h3 style="margin:0 0 16px;font-size:1rem;color:#e0e0e0;">Provider Profiles</h3>
+      <div class="profile-list" style="max-height:300px;overflow-y:auto;margin-bottom:16px;">${renderList()}</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="cancel-btn" style="padding:6px 14px;background:#333;border:1px solid #555;color:#ccc;border-radius:4px;cursor:pointer;">Close</button>
+        <button class="new-profile-btn" style="padding:6px 14px;background:#9b59b6;border:none;color:white;border-radius:4px;cursor:pointer;">+ New Profile</button>
+      </div>
+    </div>
+  `;
+
+  overlay.querySelector('.cancel-btn').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('.new-profile-btn').addEventListener('click', () => {
+    overlay.remove();
+    showProfileEditorDialog(null);
+  });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+  document.body.appendChild(overlay);
+}
+
+/**
+ * Show profile editor dialog (create or edit)
+ */
+function showProfileEditorDialog(profileId = null) {
+  const existingDialog = document.querySelector('.profile-editor-overlay');
+  if (existingDialog) existingDialog.remove();
+
+  const profile = profileId ? state.profiles.find(p => p.id === profileId) : null;
+  const isEdit = !!profile;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'profile-editor-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1001;';
+
+  overlay.innerHTML = `
+    <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;min-width:340px;max-width:440px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+      <h3 style="margin:0 0 16px;font-size:1rem;color:#e0e0e0;">${isEdit ? 'Edit Profile' : 'New Profile'}</h3>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Name *</label>
+          <input class="profile-name" type="text" placeholder="Qwen via Azure" value="${isEdit ? escapeHtml(profile.name) : ''}" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+        </div>
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Model *</label>
+          <input class="profile-model" type="text" placeholder="claude-opus-4-6" value="${isEdit ? escapeHtml(profile.model) : ''}" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+        </div>
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Base URL (optional)</label>
+          <input class="profile-baseurl" type="text" placeholder="https://..." value="${isEdit && profile.baseUrl ? escapeHtml(profile.baseUrl) : ''}" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+        </div>
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">API Key (optional)</label>
+          <input class="profile-apikey" type="password" placeholder="sk-..." value="${isEdit && profile.apiKey ? escapeHtml(profile.apiKey) : ''}" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
+        </div>
+        <div style="display:flex;gap:8px;justify-content:space-between;margin-top:4px;">
+          <div>
+            ${isEdit ? `<button class="profile-delete-btn" style="padding:6px 14px;background:#5c2020;border:1px solid #8b3030;color:#e0e0e0;border-radius:4px;cursor:pointer;">Delete</button>` : '<span></span>'}
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button class="profile-cancel-btn" style="padding:6px 14px;background:#333;border:1px solid #555;color:#ccc;border-radius:4px;cursor:pointer;">Cancel</button>
+            <button class="profile-save-btn" style="padding:6px 14px;background:#9b59b6;border:none;color:white;border-radius:4px;cursor:pointer;">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const nameInput = overlay.querySelector('.profile-name');
+  const modelInput = overlay.querySelector('.profile-model');
+  const baseUrlInput = overlay.querySelector('.profile-baseurl');
+  const apiKeyInput = overlay.querySelector('.profile-apikey');
+  const saveBtn = overlay.querySelector('.profile-save-btn');
+  const cancelBtn = overlay.querySelector('.profile-cancel-btn');
+  const deleteBtn = overlay.querySelector('.profile-delete-btn');
+
+  saveBtn.addEventListener('click', () => saveProfile(overlay, profileId, nameInput, modelInput, baseUrlInput, apiKeyInput));
+  cancelBtn.addEventListener('click', () => { overlay.remove(); showProfileManagerDialog(); });
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', () => deleteProfile(profileId, overlay));
+  }
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); showProfileManagerDialog(); } });
+
+  document.body.appendChild(overlay);
+  setTimeout(() => nameInput.focus(), 50);
+}
+
+/**
+ * Save (create or update) a profile
+ */
+async function saveProfile(overlay, profileId, nameInput, modelInput, baseUrlInput, apiKeyInput) {
+  const name = nameInput.value.trim();
+  const model = modelInput.value.trim();
+  const baseUrl = baseUrlInput.value.trim();
+  const apiKey = apiKeyInput.value.trim();
+
+  if (!name || !model) {
+    showToast('Name and model are required', 'error');
+    return;
+  }
+
+  try {
+    const url = profileId ? `/api/profiles/${profileId}` : '/api/profiles';
+    const method = profileId ? 'PUT' : 'POST';
+
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, model, baseUrl: baseUrl || undefined, apiKey: apiKey || undefined }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to save profile');
+    }
+
+    showToast(`Profile ${profileId ? 'updated' : 'created'}`, 'success');
+    state.profiles = await fetchProfiles();
+    overlay.remove();
+    showProfileManagerDialog();
+  } catch (err) {
+    showToast(`Failed to save profile: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Delete a profile
+ */
+async function deleteProfile(profileId, overlay) {
+  if (!confirm('Delete this profile?')) return;
+
+  try {
+    const res = await fetch(`/api/profiles/${profileId}`, { method: 'DELETE' });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to delete profile');
+    }
+
+    showToast('Profile deleted', 'success');
+    state.profiles = await fetchProfiles();
+    overlay.remove();
+    showProfileManagerDialog();
+  } catch (err) {
+    showToast(`Failed to delete profile: ${err.message}`, 'error');
+  }
+}
+
+/**
  * Show cleanup dialog with dry-run preview
  */
 async function showCleanupDialog() {
@@ -1959,7 +2150,10 @@ function renderActionBar(actions) {
     actionBarEl.innerHTML = `
       <div class="action-bar-empty">
         <button class="action-add-btn" onclick="showActionEditorDialog()">+ Add Action</button>
-        <button class="action-btn cleanup-btn" onclick="showCleanupDialog()" title="Cleanup dead sessions &amp; worktrees" style="margin-left:auto;">
+        <button class="action-btn" onclick="showProfileManagerDialog()" title="Manage provider profiles" style="margin-left:auto;">
+          <span class="action-icon">&#x2699;&#xfe0f;</span>
+        </button>
+        <button class="action-btn cleanup-btn" onclick="showCleanupDialog()" title="Cleanup dead sessions &amp; worktrees">
           <span class="action-icon">&#x1f9f9;</span>
         </button>
       </div>
@@ -1980,6 +2174,9 @@ function renderActionBar(actions) {
       `).join('')}
       <button class="action-btn action-add-btn-inline" onclick="showActionEditorDialog()" title="Add action">
         <span class="action-icon">+</span>
+      </button>
+      <button class="action-btn" onclick="showProfileManagerDialog()" title="Manage provider profiles">
+        <span class="action-icon">&#x2699;&#xfe0f;</span>
       </button>
       <button class="action-btn cleanup-btn" onclick="showCleanupDialog()" title="Cleanup dead sessions &amp; worktrees">
         <span class="action-icon">&#x1f9f9;</span>
@@ -2552,6 +2749,13 @@ function showNewSessionDialog(instanceId) {
             <option value="shell">Shell</option>
           </select>
         </div>
+        <div>
+          <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">Profile (optional)</label>
+          <select class="new-session-profile" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;">
+            <option value="">Default (no profile)</option>
+            ${(state.profiles || []).map(p => `<option value="${p.id}">${escapeHtml(p.name)} — ${escapeHtml(p.model)}</option>`).join('')}
+          </select>
+        </div>
         <div class="new-session-buttons" style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end;">
           <button class="new-session-cancel" style="background:transparent;border:1px solid #333;color:#888;font-size:0.85rem;padding:8px 16px;border-radius:4px;cursor:pointer;">Cancel</button>
           <button class="new-session-create" style="background:#9b59b6;border:none;color:white;font-size:0.85rem;padding:8px 16px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:8px;">Create</button>
@@ -2566,6 +2770,7 @@ function showNewSessionDialog(instanceId) {
   const sourceBranchContainer = overlay.querySelector('.source-branch-container');
   const sourceBranchInput = overlay.querySelector('.new-session-source-branch');
   const modeSelect = overlay.querySelector('.new-session-mode');
+  const profileSelect = overlay.querySelector('.new-session-profile');
   const createBtn = overlay.querySelector('.new-session-create');
   const cancelBtn = overlay.querySelector('.new-session-cancel');
 
@@ -2605,7 +2810,7 @@ function showNewSessionDialog(instanceId) {
     }
 
     try {
-      await createSession(instanceId, branchInput.value, modeSelect.value, useWorktreeCheckbox.checked, sourceBranchInput.value);
+      await createSession(instanceId, branchInput.value, modeSelect.value, useWorktreeCheckbox.checked, sourceBranchInput.value, profileSelect.value || undefined);
       closeDialog();
       // Trigger refresh to show new session
       await render();
@@ -3430,7 +3635,7 @@ async function cloneAndCreateInstance(githubUrl) {
 /**
  * Create a new session via API
  */
-async function createSession(instanceId, branch, mode, useWorktree = true, sourceBranch = '') {
+async function createSession(instanceId, branch, mode, useWorktree = true, sourceBranch = '', profileId = undefined) {
   const res = await fetch('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -3440,6 +3645,7 @@ async function createSession(instanceId, branch, mode, useWorktree = true, sourc
       mode: mode || 'claude',
       useWorktree,
       sourceBranch: sourceBranch || undefined,
+      profileId: profileId || undefined,
     }),
   });
 
@@ -4508,12 +4714,13 @@ function applyGridLayout(count) {
  * Main render function
  */
 async function render() {
-  // Fetch sessions, instances, usage, actions, health, and pipelines in parallel
-  const [{ sessions, summary }, instances, usage, actions, health, pipelines, presets] = await Promise.all([
+  // Fetch sessions, instances, usage, actions, profiles, health, and pipelines in parallel
+  const [{ sessions, summary }, instances, usage, actions, profiles, health, pipelines, presets] = await Promise.all([
     fetchSessions(),
     fetchInstances(),
     fetchUsage(),
     fetchActions(),
+    fetchProfiles(),
     fetchHealth(),
     fetchPipelines(),
     fetchPresets(),
@@ -4524,6 +4731,7 @@ async function render() {
   state.instances = instances;
   state.usage = usage;
   state.actions = actions;
+  state.profiles = profiles;
   state.pipelines = pipelines;
   state.presets = presets;
 

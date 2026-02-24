@@ -25,6 +25,7 @@ import { TmuxRenderer } from '../cli/tmux-renderer.js'
 import { getProvider, parseRemoteUrl, detectProvider } from '../core/vcs-provider.js'
 import type { RepoInfo, BranchSyncInfo } from '../core/types.js'
 import { getActions, getAction, createAction, updateAction, deleteAction, executeAction } from '../core/actions-manager.js'
+import { getProfiles, getProfile, createProfile, updateProfile, deleteProfile } from '../core/profiles-manager.js'
 import { listTemplates, loadTemplate, saveTemplate, resetTemplate, validateTemplate } from '../pipeline/template-loader.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -286,6 +287,73 @@ export class WebDashboardServer {
         const result = await executeAction(id)
 
         res.json(result)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: List all profiles
+    this.app.get('/api/profiles', async (_req, res) => {
+      try {
+        const profiles = await getProfiles()
+        res.json(profiles)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Create a new profile
+    this.app.post('/api/profiles', async (req, res) => {
+      try {
+        const { name, model, baseUrl, apiKey } = req.body as {
+          name: string
+          model: string
+          baseUrl?: string
+          apiKey?: string
+        }
+
+        if (!name || !model) {
+          res.status(400).json({ error: 'name and model are required' })
+          return
+        }
+
+        const profile = await createProfile(name, model, baseUrl, apiKey)
+        res.json(profile)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Update a profile
+    this.app.put('/api/profiles/:id', async (req, res) => {
+      try {
+        const { id } = req.params
+        const updates = req.body as Partial<{ name: string; model: string; baseUrl: string; apiKey: string }>
+
+        const profile = await updateProfile(id, updates)
+        if (!profile) {
+          res.status(404).json({ error: 'Profile not found' })
+          return
+        }
+
+        res.json(profile)
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message })
+      }
+    })
+
+    // API: Delete a profile
+    this.app.delete('/api/profiles/:id', async (req, res) => {
+      try {
+        const { id } = req.params
+        const deleted = await deleteProfile(id)
+
+        if (!deleted) {
+          res.status(404).json({ error: 'Profile not found' })
+          return
+        }
+
+        res.json({ success: true })
       } catch (err) {
         res.status(500).json({ error: (err as Error).message })
       }
@@ -636,12 +704,26 @@ export class WebDashboardServer {
     // API: Create a new session
     this.app.post('/api/sessions', async (req, res) => {
       try {
-        const { instanceId, branch, mode, useWorktree, sourceBranch } = req.body as {
+        const { instanceId, branch, mode, useWorktree, sourceBranch, profileId } = req.body as {
           instanceId: string
           branch?: string
           mode?: 'claude' | 'gemini' | 'codex' | 'shell'
           useWorktree?: boolean
           sourceBranch?: string
+          profileId?: string
+        }
+
+        // Resolve profile config if a profileId was supplied
+        let profileModel: string | undefined
+        let profileApiKey: string | undefined
+        let profileBaseUrl: string | undefined
+        if (profileId) {
+          const profile = await getProfile(profileId)
+          if (profile) {
+            profileModel = profile.model || undefined
+            profileApiKey = profile.apiKey || undefined
+            profileBaseUrl = profile.baseUrl || undefined
+          }
         }
 
         if (!instanceId) {
@@ -707,6 +789,10 @@ export class WebDashboardServer {
           workingDirectory: instance.repoPath,
           repoPath: instance.repoPath,
           existingWorktreePath,
+          profileId,
+          model: profileModel,
+          apiKey: profileApiKey,
+          baseUrl: profileBaseUrl,
         })
 
         // Write status file
@@ -775,7 +861,13 @@ export class WebDashboardServer {
         if (cmd) {
           // Use inline env var syntax: VAR=val command (sets vars just for that command)
           // Note: --dangerously-skip-permissions is only used for batch issue processing, not regular sessions
-          const envCmd = `ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmd}`
+          const profileEnvPrefix = [
+            profileApiKey ? `ANTHROPIC_API_KEY='${profileApiKey.replace(/'/g, "'\\''")}'` : '',
+            profileBaseUrl ? `ANTHROPIC_BASE_URL='${profileBaseUrl.replace(/'/g, "'\\''")}'` : '',
+          ].filter(Boolean).join(' ')
+          const modelFlag = profileModel ? ` --model '${profileModel.replace(/'/g, "'\\''")}'` : ''
+          const envPrefix = profileEnvPrefix ? `${profileEnvPrefix} ` : ''
+          const envCmd = `${envPrefix}ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmd}${modelFlag}`
           sessionTmux.runInPane(session.id, envCmd)
         }
 
@@ -790,6 +882,7 @@ export class WebDashboardServer {
           worktreePath: session.worktreePath,
           createdAt: session.createdAt.toISOString(),
           tmuxSession: sessionTmuxName, // Store its own tmux session
+          ...(profileId && { profileId }),
         }
         existingMetadata.push(newMetadata)
         await saveSessionStore(instanceId, existingMetadata)

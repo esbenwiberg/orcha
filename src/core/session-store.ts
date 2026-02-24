@@ -21,6 +21,7 @@ export interface SessionMetadata {
   tmuxSession?: string // Optional: tmux session name
   customName?: string // Optional: user-defined display name
   planPath?: string // Optional: user-selected plan file path
+  profileId?: string // Optional: provider profile ID used for this session
 }
 
 export interface SessionStoreData {

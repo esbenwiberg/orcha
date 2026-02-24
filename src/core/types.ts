@@ -44,6 +44,10 @@ export interface SessionConfig {
   repoPath: string
   existingWorktreePath?: string // Reuse an existing worktree instead of creating one
   ephemeral?: boolean // If true, session and worktree are cleaned up automatically when done
+  profileId?: string // Optional: provider profile ID
+  model?: string // Optional: AI model override (e.g. "claude-opus-4-6")
+  apiKey?: string // Optional: ANTHROPIC_API_KEY override
+  baseUrl?: string // Optional: ANTHROPIC_BASE_URL override
 }
 
 // ============================================================================
@@ -260,4 +264,23 @@ export interface Action {
 export interface ActionsStore {
   version: number // Schema version
   actions: Action[]
+}
+
+// ============================================================================
+// Provider Profile Types (Per-Session Provider Config)
+// ============================================================================
+
+export interface ProviderProfile {
+  id: string // UUID
+  name: string // Display name (e.g., "Qwen via Azure", "Claude Work")
+  model: string // Model identifier (e.g., "claude-opus-4-6", "qwen2.5-coder-32b-instruct")
+  baseUrl?: string // ANTHROPIC_BASE_URL override
+  apiKey?: string // ANTHROPIC_API_KEY (stored plaintext, file chmod 0o600)
+  createdAt: string // ISO 8601 timestamp
+  updatedAt: string // ISO 8601 timestamp
+}
+
+export interface ProfilesStore {
+  version: number // Schema version
+  profiles: ProviderProfile[]
 }

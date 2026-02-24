@@ -114,11 +114,15 @@ export class SessionManager extends EventEmitter {
       session.status.message = `Starting ${session.mode}...`
       const workDir = session.worktreePath || config.workingDirectory
       const { command, args } = MODE_COMMANDS[session.mode]
+      const sessionArgs = [...args]
+      if (config.model) sessionArgs.push('--model', config.model)
 
-      const proc = this.processes.spawn(id, command, args, {
+      const proc = this.processes.spawn(id, command, sessionArgs, {
         cwd: workDir,
         env: {
           ...process.env,
+          ...(config.apiKey && { ANTHROPIC_API_KEY: config.apiKey }),
+          ...(config.baseUrl && { ANTHROPIC_BASE_URL: config.baseUrl }),
           ORCHA_SESSION_ID: id,
           ORCHA_DISPLAY_ID: String(displayId),
           ...(this.statusDir && { ORCHA_STATUS_DIR: this.statusDir }),
