@@ -76,7 +76,8 @@ export async function createProfile(
   name: string,
   model: string,
   baseUrl?: string,
-  apiKey?: string
+  apiKey?: string,
+  useLogin?: boolean
 ): Promise<ProviderProfile> {
   const profiles = await loadProfiles()
 
@@ -86,7 +87,8 @@ export async function createProfile(
     name: name.trim(),
     model: model.trim(),
     ...(baseUrl && { baseUrl: baseUrl.trim() }),
-    ...(apiKey && { apiKey: apiKey.trim() }),
+    ...(apiKey && !useLogin && { apiKey: apiKey.trim() }),
+    ...(useLogin && { useLogin: true }),
     createdAt: now,
     updatedAt: now,
   }
@@ -102,7 +104,7 @@ export async function createProfile(
  */
 export async function updateProfile(
   id: string,
-  updates: Partial<Pick<ProviderProfile, 'name' | 'model' | 'baseUrl' | 'apiKey'>>
+  updates: Partial<Pick<ProviderProfile, 'name' | 'model' | 'baseUrl' | 'apiKey' | 'useLogin'>>
 ): Promise<ProviderProfile | null> {
   const profiles = await loadProfiles()
   const index = profiles.findIndex(p => p.id === id)
@@ -116,7 +118,11 @@ export async function updateProfile(
   if (updates.name !== undefined) profile.name = updates.name.trim()
   if (updates.model !== undefined) profile.model = updates.model.trim()
   if (updates.baseUrl !== undefined) profile.baseUrl = updates.baseUrl.trim() || undefined
-  if (updates.apiKey !== undefined) profile.apiKey = updates.apiKey.trim() || undefined
+  if (updates.useLogin !== undefined) {
+    profile.useLogin = updates.useLogin || undefined
+    if (updates.useLogin) profile.apiKey = undefined // clear apiKey when switching to login
+  }
+  if (updates.apiKey !== undefined && !profile.useLogin) profile.apiKey = updates.apiKey.trim() || undefined
   profile.updatedAt = new Date().toISOString()
 
   await saveProfiles(profiles)

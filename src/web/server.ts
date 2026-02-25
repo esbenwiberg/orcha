@@ -305,11 +305,12 @@ export class WebDashboardServer {
     // API: Create a new profile
     this.app.post('/api/profiles', async (req, res) => {
       try {
-        const { name, model, baseUrl, apiKey } = req.body as {
+        const { name, model, baseUrl, apiKey, useLogin } = req.body as {
           name: string
           model: string
           baseUrl?: string
           apiKey?: string
+          useLogin?: boolean
         }
 
         if (!name || !model) {
@@ -317,7 +318,7 @@ export class WebDashboardServer {
           return
         }
 
-        const profile = await createProfile(name, model, baseUrl, apiKey)
+        const profile = await createProfile(name, model, baseUrl, apiKey, useLogin)
         res.json(profile)
       } catch (err) {
         res.status(500).json({ error: (err as Error).message })
@@ -328,7 +329,7 @@ export class WebDashboardServer {
     this.app.put('/api/profiles/:id', async (req, res) => {
       try {
         const { id } = req.params
-        const updates = req.body as Partial<{ name: string; model: string; baseUrl: string; apiKey: string }>
+        const updates = req.body as Partial<{ name: string; model: string; baseUrl: string; apiKey: string; useLogin: boolean }>
 
         const profile = await updateProfile(id, updates)
         if (!profile) {
@@ -717,12 +718,14 @@ export class WebDashboardServer {
         let profileModel: string | undefined
         let profileApiKey: string | undefined
         let profileBaseUrl: string | undefined
+        let profileUseLogin: boolean | undefined
         if (profileId) {
           const profile = await getProfile(profileId)
           if (profile) {
             profileModel = profile.model || undefined
-            profileApiKey = profile.apiKey || undefined
+            profileApiKey = profile.useLogin ? undefined : profile.apiKey || undefined
             profileBaseUrl = profile.baseUrl || undefined
+            profileUseLogin = profile.useLogin || undefined
           }
         }
 
@@ -793,6 +796,7 @@ export class WebDashboardServer {
           model: profileModel,
           apiKey: profileApiKey,
           baseUrl: profileBaseUrl,
+          useLogin: profileUseLogin,
         })
 
         // Write status file
@@ -866,8 +870,9 @@ export class WebDashboardServer {
             profileBaseUrl ? `ANTHROPIC_BASE_URL='${profileBaseUrl.replace(/'/g, "'\\''")}'` : '',
           ].filter(Boolean).join(' ')
           const modelFlag = profileModel ? ` --model '${profileModel.replace(/'/g, "'\\''")}'` : ''
+          const unsetPrefix = profileUseLogin ? 'unset ANTHROPIC_API_KEY; ' : ''
           const envPrefix = profileEnvPrefix ? `${profileEnvPrefix} ` : ''
-          const envCmd = `${envPrefix}ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmd}${modelFlag}`
+          const envCmd = `${unsetPrefix}${envPrefix}ORCHA_SESSION_ID='${session.id}' ORCHA_STATUS_DIR='${statusDir}' ${cmd}${modelFlag}`
           sessionTmux.runInPane(session.id, envCmd)
         }
 

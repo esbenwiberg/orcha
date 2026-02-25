@@ -117,16 +117,22 @@ export class SessionManager extends EventEmitter {
       const sessionArgs = [...args]
       if (config.model) sessionArgs.push('--model', config.model)
 
+      const sessionEnv: Record<string, string | undefined> = {
+        ...process.env,
+        ORCHA_SESSION_ID: id,
+        ORCHA_DISPLAY_ID: String(displayId),
+        ...(this.statusDir && { ORCHA_STATUS_DIR: this.statusDir }),
+      }
+      if (config.useLogin) {
+        delete sessionEnv.ANTHROPIC_API_KEY
+      } else if (config.apiKey) {
+        sessionEnv.ANTHROPIC_API_KEY = config.apiKey
+      }
+      if (config.baseUrl) sessionEnv.ANTHROPIC_BASE_URL = config.baseUrl
+
       const proc = this.processes.spawn(id, command, sessionArgs, {
         cwd: workDir,
-        env: {
-          ...process.env,
-          ...(config.apiKey && { ANTHROPIC_API_KEY: config.apiKey }),
-          ...(config.baseUrl && { ANTHROPIC_BASE_URL: config.baseUrl }),
-          ORCHA_SESSION_ID: id,
-          ORCHA_DISPLAY_ID: String(displayId),
-          ...(this.statusDir && { ORCHA_STATUS_DIR: this.statusDir }),
-        },
+        env: sessionEnv,
       })
 
       session.pid = proc.pid || null

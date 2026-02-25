@@ -1284,7 +1284,7 @@ function showProfileManagerDialog() {
         <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #2a2a2a;">
           <div style="flex:1;min-width:0;">
             <div style="font-size:0.85rem;color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(p.name)}</div>
-            <div style="font-size:0.75rem;color:#888;">${escapeHtml(p.model)}${p.baseUrl ? ' · ' + escapeHtml(p.baseUrl) : ''}</div>
+            <div style="font-size:0.75rem;color:#888;">${escapeHtml(p.model)}${p.baseUrl ? ' · ' + escapeHtml(p.baseUrl) : ''}${p.useLogin ? ' · <span style="color:#9b59b6;">login</span>' : ''}</div>
           </div>
           <button onclick="showProfileEditorDialog('${p.id}')" style="padding:4px 10px;background:#333;border:1px solid #555;color:#ccc;border-radius:4px;cursor:pointer;font-size:0.75rem;">Edit</button>
         </div>
@@ -1345,6 +1345,13 @@ function showProfileEditorDialog(profileId = null) {
           <input class="profile-baseurl" type="text" placeholder="https://..." value="${isEdit && profile.baseUrl ? escapeHtml(profile.baseUrl) : ''}" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
         </div>
         <div>
+          <label style="font-size:0.75rem;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input class="profile-use-login" type="checkbox" ${isEdit && profile.useLogin ? 'checked' : ''} style="accent-color:#9b59b6;">
+            Use login credentials (claude max / claude.ai)
+          </label>
+          <div style="font-size:0.7rem;color:#666;margin-top:3px;">Unsets ANTHROPIC_API_KEY so Claude CLI uses its own saved login</div>
+        </div>
+        <div class="profile-apikey-row">
           <label style="font-size:0.75rem;color:#888;display:block;margin-bottom:4px;">API Key (optional)</label>
           <input class="profile-apikey" type="password" placeholder="sk-..." value="${isEdit && profile.apiKey ? escapeHtml(profile.apiKey) : ''}" style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;font-size:0.85rem;padding:8px 12px;border-radius:4px;box-sizing:border-box;">
         </div>
@@ -1365,11 +1372,19 @@ function showProfileEditorDialog(profileId = null) {
   const modelInput = overlay.querySelector('.profile-model');
   const baseUrlInput = overlay.querySelector('.profile-baseurl');
   const apiKeyInput = overlay.querySelector('.profile-apikey');
+  const useLoginCheckbox = overlay.querySelector('.profile-use-login');
+  const apiKeyRow = overlay.querySelector('.profile-apikey-row');
   const saveBtn = overlay.querySelector('.profile-save-btn');
   const cancelBtn = overlay.querySelector('.profile-cancel-btn');
   const deleteBtn = overlay.querySelector('.profile-delete-btn');
 
-  saveBtn.addEventListener('click', () => saveProfile(overlay, profileId, nameInput, modelInput, baseUrlInput, apiKeyInput));
+  const toggleApiKeyRow = () => {
+    apiKeyRow.style.display = useLoginCheckbox.checked ? 'none' : '';
+  };
+  toggleApiKeyRow();
+  useLoginCheckbox.addEventListener('change', toggleApiKeyRow);
+
+  saveBtn.addEventListener('click', () => saveProfile(overlay, profileId, nameInput, modelInput, baseUrlInput, apiKeyInput, useLoginCheckbox));
   cancelBtn.addEventListener('click', () => { overlay.remove(); showProfileManagerDialog(); });
   if (deleteBtn) {
     deleteBtn.addEventListener('click', () => deleteProfile(profileId, overlay));
@@ -1383,11 +1398,12 @@ function showProfileEditorDialog(profileId = null) {
 /**
  * Save (create or update) a profile
  */
-async function saveProfile(overlay, profileId, nameInput, modelInput, baseUrlInput, apiKeyInput) {
+async function saveProfile(overlay, profileId, nameInput, modelInput, baseUrlInput, apiKeyInput, useLoginCheckbox) {
   const name = nameInput.value.trim();
   const model = modelInput.value.trim();
   const baseUrl = baseUrlInput.value.trim();
   const apiKey = apiKeyInput.value.trim();
+  const useLogin = useLoginCheckbox?.checked || false;
 
   if (!name || !model) {
     showToast('Name and model are required', 'error');
@@ -1401,7 +1417,7 @@ async function saveProfile(overlay, profileId, nameInput, modelInput, baseUrlInp
     const res = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, model, baseUrl: baseUrl || undefined, apiKey: apiKey || undefined }),
+      body: JSON.stringify({ name, model, baseUrl: baseUrl || undefined, apiKey: useLogin ? undefined : apiKey || undefined, useLogin: useLogin || undefined }),
     });
 
     if (!res.ok) {

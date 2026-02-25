@@ -48,6 +48,7 @@ export interface SessionConfig {
   model?: string // Optional: AI model override (e.g. "claude-opus-4-6")
   apiKey?: string // Optional: ANTHROPIC_API_KEY override
   baseUrl?: string // Optional: ANTHROPIC_BASE_URL override
+  useLogin?: boolean // Optional: use claude login credentials (unsets ANTHROPIC_API_KEY)
 }
 
 // ============================================================================
@@ -276,6 +277,7 @@ export interface ProviderProfile {
   model: string // Model identifier (e.g., "claude-opus-4-6", "qwen2.5-coder-32b-instruct")
   baseUrl?: string // ANTHROPIC_BASE_URL override
   apiKey?: string // ANTHROPIC_API_KEY (stored plaintext, file chmod 0o600)
+  useLogin?: boolean // Use claude login credentials instead of an API key
   createdAt: string // ISO 8601 timestamp
   updatedAt: string // ISO 8601 timestamp
 }
